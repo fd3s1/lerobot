@@ -1,0 +1,37 @@
+输入位置 速度 
+输出x y 轴加速度
+
+输入的位置
+消息名"/drone6/vision_pose/pose"
+类型：geometry_msgs::PoseStamped
+    包括std_msgs/Header header
+        geometry_msgs/Pose pose
+            包括geometry_msgs/Point position
+                geometry_msgs/Quaternion orientation
+
+输入的速度消息名"<tracker name>/twist"
+类型geometry_msgs/TwistStamped
+
+输出的quadrotor_msgs/positionCommand长这样 消息名"/drone6/position_cmd"
+Header header
+geometry_msgs/Point position
+geometry_msgs/Vector3 velocity
+geometry_msgs/Vector3 acceleration
+geometry_msgs/Vector3 jerk
+float64 yaw
+float64 yaw_dot
+float64[3] kx
+float64[3] kv 
+
+uint32 trajectory_id
+
+uint8 TRAJECTORY_STATUS_EMPTY = 0
+uint8 TRAJECTORY_STATUS_READY = 1
+uint8 TRAJECTORY_STATUS_COMPLETED = 3
+uint8 TRAJECTROY_STATUS_ABORT = 4
+uint8 TRAJECTORY_STATUS_ILLEGAL_START = 5
+uint8 TRAJECTORY_STATUS_ILLEGAL_FINAL = 6
+uint8 TRAJECTORY_STATUS_IMPOSSIBLE = 7
+
+# Its ID number will start from 1, allowing you comparing it with 0.
+uint8 trajectory_flag

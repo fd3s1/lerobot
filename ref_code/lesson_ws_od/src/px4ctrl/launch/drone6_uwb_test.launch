@@ -1,0 +1,5 @@
+<launch>
+	<node pkg="px4ctrl" type="uwb_cal" name="uwb_cal" output="screen">
+	<rosparam command="load" file="$(find px4ctrl)/config/number.yaml" />
+	</node>
+</launch>

@@ -1,0 +1,9 @@
+<!-- 实际上罗栋的检测靠python节点yolov5TRT完成，c++节点只是发布检测话题消息 -->
+<launch>
+    <node name="drone0_detect_human" pkg="yolov5_trt" type="yolov8_d435_openpose.py" >
+    </node>
+    <!-- <node pkg="yolov5_trt" type="detect_human_realsense.py" name="detect_human_realsense" output="screen">
+    </node> -->
+    <node pkg="yolov5_trt" type="human_info_pub" name="drone0_human_info_pub" output="screen">
+    </node> 
+</launch>

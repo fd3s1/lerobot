@@ -1,0 +1,9 @@
+<launch>
+    <node pkg="target_ekf" name="drone0_target_ekf_node" type="target_ekf_node" output="screen">
+      <rosparam command="load" file="$(find target_ekf)/config/camera.yaml" />
+      <param name="pitch_thr" value="37"/>
+      <remap from="~yolo" to="/drone0/detection_status/human"/>
+      <remap from="~odom" to="/drone0/vins_fusion/imu_propagate"/>
+      <remap from="~target_odom" to="/drone0/target_ekf_odom"/>
+    </node>
+</launch>

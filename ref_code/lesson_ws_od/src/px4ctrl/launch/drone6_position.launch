@@ -1,0 +1,9 @@
+<launch>
+	<include file="$(find mavros)/launch/swarm6_px4.launch" />
+    <node pkg="px4ctrl" type="px4ctrl_node" name="px4ctrl" ns="/drone6" output="screen">
+        	<!-- <remap from="~odom" to="/vicon_imu_ekf_odom" /> -->	
+		<remap from="~odom" to="/drone6/mavros/local_position/pose" />
+		<remap from="~cmd" to="/drone6/position_cmd" />
+        <rosparam command="load" file="$(find px4ctrl)/config/ctrl_param_fpv.yaml" />
+	</node>
+</launch>
