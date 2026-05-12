@@ -1,0 +1,68 @@
+px4ctrl:
+  ros__parameters:
+    ctrl_freq_max: 100.0
+    max_manual_vel: 1.0
+    frame_id: map
+    use_bodyrate_ctrl: false
+
+    topics:
+      rc: /drone6/mavros/rc/in
+      odom: /drone6/mavros/vision_pose/pose
+      cmd: /drone6/position_cmd
+      takeoff_land: /drone6/px4ctrl/takeoff_land
+      setpoint: /drone6/mavros/setpoint_raw/local
+      gripper_command: /drone6/gripper/command
+      traj_start_trigger: /drone6/traj_start_trigger
+      state: /drone6/mavros/state
+      extended_state: /drone6/mavros/extended_state
+      battery: /drone6/mavros/battery
+    services:
+      set_mode: /drone6/mavros/set_mode
+      arming: /drone6/mavros/cmd/arming
+      command: /drone6/mavros/cmd/command
+
+    msg_timeout:
+      odom: 0.5
+      rc: 0.5
+      cmd: 0.5
+      bat: 0.5
+
+    rc_reverse:
+      roll: false
+      pitch: true
+      yaw: false
+      throttle: true
+
+    auto_takeoff_land:
+      enable: true
+      enable_auto_arm: true
+      no_RC: false
+      takeoff_height: 1.0
+      takeoff_land_speed: 0.2
+
+    limits:
+      x_min: -6.5
+      x_max: 8.0
+      y_min: -3.5
+      y_max: 3.5
+      z_min: -0.3
+      z_max: 3.0
+
+    gripper:
+      rc_channel: 10
+      pwm_open: 1300
+      pwm_close: 1700
+      open_position: 100.0
+      closed_position: 0.0
+
+feetech_gripper_node:
+  ros__parameters:
+    command_topic: /drone6/gripper/command
+    port: /dev/ttyACM0
+    left_id: 1
+    right_id: 2
+    left_inverted: false
+    right_inverted: false
+    no_configure: false
+    dry_run: false
+    lerobot_src: /home/user/vla_drone/lerobot/src

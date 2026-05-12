@@ -1,0 +1,8 @@
+/build/
+/install/
+/log/
+__pycache__/
+*.py[cod]
+!src/px4ctrl/package.xml
+!src/quadrotor_msgs/package.xml
+!src/uav_utils/package.xml
