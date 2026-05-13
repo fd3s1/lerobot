@@ -42,6 +42,13 @@ echo "[vla-dev-push] repo: $repo_root"
 echo "[vla-dev-push] branch: $branch"
 echo "[vla-dev-push] remote: $remote"
 
+echo "[vla-dev-push] working tree changes before staging:"
+if git status --short | grep -q .; then
+  git status --short
+else
+  echo "  (none)"
+fi
+
 git add -A -- .
 
 # Keep known local-only reference/build paths out of this sync commit.
@@ -54,8 +61,20 @@ git reset -q -- \
 if git diff --cached --quiet; then
   echo "[vla-dev-push] no staged changes; pushing any existing local commits."
 else
-  git status --short
+  echo "[vla-dev-push] files to commit:"
+  git diff --cached --name-status
   git commit -m "$commit_msg"
+fi
+
+echo "[vla-dev-push] local commits not yet on $remote/$branch:"
+if git rev-parse --verify --quiet "$remote/$branch" >/dev/null; then
+  if git log --oneline "$remote/$branch..HEAD" | grep -q .; then
+    git log --oneline "$remote/$branch..HEAD"
+  else
+    echo "  (none)"
+  fi
+else
+  echo "  remote tracking ref $remote/$branch is not available locally yet"
 fi
 
 git push "$remote" "$branch"

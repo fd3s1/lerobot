@@ -56,6 +56,13 @@ echo "[vla-nx-pull] repo: $repo_root"
 echo "[vla-nx-pull] branch: $branch"
 echo "[vla-nx-pull] remote: $remote"
 
+echo "[vla-nx-pull] local working tree changes before pull:"
+if git status --short | grep -q .; then
+  git status --short
+else
+  echo "  (none)"
+fi
+
 stash_created=false
 if ! git diff --quiet || ! git diff --cached --quiet || [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
   stash_name="vla-nx-auto-stash $(date '+%Y-%m-%d %H:%M:%S')"
@@ -65,6 +72,18 @@ if ! git diff --quiet || ! git diff --cached --quiet || [[ -n "$(git ls-files --
 fi
 
 git fetch "$remote" "$branch"
+local_head="$(git rev-parse HEAD)"
+remote_head="$(git rev-parse FETCH_HEAD)"
+
+if [[ "$local_head" == "$remote_head" ]]; then
+  echo "[vla-nx-pull] remote branch has no new commits."
+else
+  echo "[vla-nx-pull] commits to pull:"
+  git log --oneline "$local_head..FETCH_HEAD"
+  echo "[vla-nx-pull] files changed by incoming commits:"
+  git diff --name-status "$local_head..FETCH_HEAD"
+fi
+
 git checkout "$branch"
 git pull --ff-only "$remote" "$branch"
 
@@ -74,6 +93,13 @@ if [[ "$stash_created" == true ]]; then
     echo "ERROR: stash pop had conflicts. Resolve them on the NX, then run git status." >&2
     exit 1
   fi
+fi
+
+echo "[vla-nx-pull] local working tree changes after pull:"
+if git status --short | grep -q .; then
+  git status --short
+else
+  echo "  (none)"
 fi
 
 if [[ "$build_after_pull" == true ]]; then
