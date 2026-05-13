@@ -177,3 +177,9 @@ outputs/
 *.urdf
 *.xml
 *.part
+
+# Local credentials; never commit GitHub tokens or passwords.
+gitpsw.txt
+gitpassword
+gitpassword.txt
+*.token
