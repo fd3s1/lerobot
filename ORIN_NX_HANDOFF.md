@@ -230,6 +230,65 @@ git checkout drone-smolvla
 git pull origin drone-smolvla
 ```
 
+## Two-Machine Sync Scripts
+
+Use these scripts when development stays on this desktop and deployment/testing happens on the Orin NX.
+
+### On this development machine
+
+After modifying code here:
+
+```bash
+cd /home/user/vla_drone/lerobot
+scripts/vla_dev_push.sh "Describe the fix"
+```
+
+This script:
+
+- stages changes,
+- commits them,
+- pushes the current branch to `origin`,
+- excludes the old YOLO nested-git reference folders,
+- excludes `ref_code/vla_px4ctrl_ros2/build`, `install`, and `log`.
+
+If no files changed, it only pushes existing local commits.
+
+### On the Orin NX
+
+To pull the latest code:
+
+```bash
+cd ~/lerobot
+scripts/vla_nx_pull.sh
+```
+
+To pull and rebuild the ROS2 px4ctrl workspace:
+
+```bash
+cd ~/lerobot
+scripts/vla_nx_pull.sh --build
+```
+
+This script:
+
+- stashes local uncommitted changes on the NX,
+- pulls the current branch with fast-forward only,
+- re-applies the stash,
+- optionally runs:
+
+```bash
+cd ~/lerobot/ref_code/vla_px4ctrl_ros2
+source /opt/ros/humble/setup.bash
+colcon build --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3 -DPYTHON_EXECUTABLE=/usr/bin/python3
+```
+
+Environment overrides:
+
+```bash
+VLA_SYNC_REMOTE=origin VLA_SYNC_BRANCH=drone-smolvla scripts/vla_dev_push.sh "message"
+VLA_SYNC_REMOTE=origin VLA_SYNC_BRANCH=drone-smolvla scripts/vla_nx_pull.sh --build
+```
+
 ## Build ROS2 PX4Ctrl Workspace On Orin NX
 
 ```bash
@@ -307,4 +366,3 @@ ros2 topic info /Tracker0/pose
 - Feetech gripper test passed independently.
 - `ctrl_param_fpv.yaml` bounds match the flight area.
 - For the 7 m test, `limits.x_max` is at least `7.0`.
-
