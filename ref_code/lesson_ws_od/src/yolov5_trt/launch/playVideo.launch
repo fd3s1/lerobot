@@ -1,4 +1,0 @@
-<launch>
-	<node pkg="yolov5_trt" type="playvideo" name="playvideo" output="screen">
-	</node>	
-</launch>

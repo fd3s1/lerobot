@@ -1,7 +1,0 @@
-<!-- 实际上罗栋的检测靠python节点yolov5TRT完成，c++节点只是发布检测话题消息 -->
-<launch>
-    <node pkg="yolov5_trt" type="tensorrt_yolo_thread_realsense.py" name="tensorrt_yolo_thread_realsense" output="screen">
-    </node>
-    <node pkg="yolov5_trt" type="human_info_pub" name="human_info_pub" output="screen">
-    </node> 
-</launch>

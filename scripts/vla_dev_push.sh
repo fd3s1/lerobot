@@ -73,8 +73,8 @@ echo "[vla-dev-push] remote: $remote"
 echo "[vla-dev-push] include lesson_ws_od: $include_lesson_ws"
 
 echo "[vla-dev-push] working tree changes before staging:"
-if git status --short | grep -q .; then
-  git status --short
+if git --no-pager status --short | grep -q .; then
+  git --no-pager status --short
 else
   echo "  (none)"
 fi
@@ -95,14 +95,14 @@ if git diff --cached --quiet; then
   echo "[vla-dev-push] no staged changes; pushing any existing local commits."
 else
   echo "[vla-dev-push] files to commit:"
-  git diff --cached --name-status
+  git --no-pager diff --cached --name-status
   git commit -m "$commit_msg"
 fi
 
 echo "[vla-dev-push] local commits not yet on $remote/$branch:"
 if git rev-parse --verify --quiet "$remote/$branch" >/dev/null; then
-  if git log --oneline "$remote/$branch..HEAD" | grep -q .; then
-    git log --oneline "$remote/$branch..HEAD"
+  if git --no-pager log --oneline "$remote/$branch..HEAD" | grep -q .; then
+    git --no-pager log --oneline "$remote/$branch..HEAD"
   else
     echo "  (none)"
   fi

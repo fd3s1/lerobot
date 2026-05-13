@@ -57,8 +57,8 @@ echo "[vla-nx-pull] branch: $branch"
 echo "[vla-nx-pull] remote: $remote"
 
 echo "[vla-nx-pull] local working tree changes before pull:"
-if git status --short | grep -q .; then
-  git status --short
+if git --no-pager status --short | grep -q .; then
+  git --no-pager status --short
 else
   echo "  (none)"
 fi
@@ -79,9 +79,9 @@ if [[ "$local_head" == "$remote_head" ]]; then
   echo "[vla-nx-pull] remote branch has no new commits."
 else
   echo "[vla-nx-pull] commits to pull:"
-  git log --oneline "$local_head..FETCH_HEAD"
+  git --no-pager log --oneline "$local_head..FETCH_HEAD"
   echo "[vla-nx-pull] files changed by incoming commits:"
-  git diff --name-status "$local_head..FETCH_HEAD"
+  git --no-pager diff --name-status "$local_head..FETCH_HEAD"
 fi
 
 git checkout "$branch"
@@ -96,8 +96,8 @@ if [[ "$stash_created" == true ]]; then
 fi
 
 echo "[vla-nx-pull] local working tree changes after pull:"
-if git status --short | grep -q .; then
-  git status --short
+if git --no-pager status --short | grep -q .; then
+  git --no-pager status --short
 else
   echo "  (none)"
 fi

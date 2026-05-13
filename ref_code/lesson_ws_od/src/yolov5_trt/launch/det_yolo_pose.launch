@@ -1,6 +1,0 @@
-<launch>
-    <!-- <node pkg="yolov5_trt" type="tensorrt_yolo_openpose_thread_realsense.py" name="tensorrt_yolo_openpose_thread_realsense" output="screen">
-    </node> -->
-    <node pkg="yolov5_trt" type="human_pose_pub" name="human_pose_pub" output="screen">
-    </node>
-</launch>

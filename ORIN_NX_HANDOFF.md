@@ -248,7 +248,7 @@ This script:
 - stages changes,
 - commits them,
 - pushes the current branch to `origin`,
-- excludes the old YOLO nested-git reference folders,
+- excludes `ref_code/lesson_ws_od` by default,
 - excludes `ref_code/vla_px4ctrl_ros2/build`, `install`, and `log`.
 
 If no files changed, it only pushes existing local commits.
