@@ -253,6 +253,14 @@ This script:
 
 If no files changed, it only pushes existing local commits.
 
+By default, `ref_code/lesson_ws_od` is excluded because it is old reference code
+and can contain large local-only changes. If you intentionally want to sync
+changes or deletions under that folder, run:
+
+```bash
+scripts/vla_dev_push.sh --include-lesson-ws "Describe the reference-code change"
+```
+
 ### On the Orin NX
 
 To pull the latest code:
