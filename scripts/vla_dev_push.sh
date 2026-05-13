@@ -42,12 +42,14 @@ echo "[vla-dev-push] repo: $repo_root"
 echo "[vla-dev-push] branch: $branch"
 echo "[vla-dev-push] remote: $remote"
 
-git add -A -- . \
-  ':(exclude)ref_code/lesson_ws_od/src/yolov5_trt/pynodes/yolov5' \
-  ':(exclude)ref_code/lesson_ws_od/src/yolov5_trt/pynodes/yolov5_d435i_detection' \
-  ':(exclude)ref_code/vla_px4ctrl_ros2/build' \
-  ':(exclude)ref_code/vla_px4ctrl_ros2/install' \
-  ':(exclude)ref_code/vla_px4ctrl_ros2/log'
+git add -A -- .
+
+# Keep known local-only reference/build paths out of this sync commit.
+git reset -q -- \
+  ref_code/lesson_ws_od \
+  ref_code/vla_px4ctrl_ros2/build \
+  ref_code/vla_px4ctrl_ros2/install \
+  ref_code/vla_px4ctrl_ros2/log || true
 
 if git diff --cached --quiet; then
   echo "[vla-dev-push] no staged changes; pushing any existing local commits."
