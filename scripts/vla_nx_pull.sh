@@ -115,7 +115,17 @@ if [[ "$build_after_pull" == true ]]; then
 
   echo "[vla-nx-pull] building ROS2 workspace."
   # shellcheck disable=SC1091
+  had_nounset=false
+  case "$-" in
+    *u*)
+      had_nounset=true
+      set +u
+      ;;
+  esac
   source "$ros_setup"
+  if [[ "$had_nounset" == true ]]; then
+    set -u
+  fi
   cd "$repo_root/ref_code/vla_px4ctrl_ros2"
   colcon build --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3 -DPYTHON_EXECUTABLE=/usr/bin/python3
 fi
