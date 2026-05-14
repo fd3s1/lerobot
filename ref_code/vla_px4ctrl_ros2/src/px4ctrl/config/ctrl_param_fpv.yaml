@@ -11,6 +11,7 @@ px4ctrl:
       cmd: /position_cmd
       takeoff_land: /px4ctrl/takeoff_land
       setpoint: /mavros/setpoint_raw/local
+      expert_pose: /px4ctrl/expert_pose
       gripper_command: /gripper/command
       traj_start_trigger: /traj_start_trigger
       state: /mavros/state

@@ -15,6 +15,7 @@
 - MAVROS RC 输入：`/mavros/rc/in`
 - MAVROS vision pose：`/mavros/vision_pose/pose`
 - px4ctrl 位置指令：`/position_cmd`
+- px4ctrl 专家动作：`/px4ctrl/expert_pose`
 - px4ctrl 起降指令：`/px4ctrl/takeoff_land`
 - 夹爪命令：`/gripper/command`
 - 夹爪定义：`100 = 全开`，`0 = 全关`
@@ -28,11 +29,6 @@
 - 每一步只验证一条链路，确认无误后再进入下一步。
 
 ## 1. 同步代码并构建 ROS2 workspace
-
-服务器上传代码：
-cd /home/user/vla_drone/lerobot
-scripts/vla_dev_push.sh "Add Chinese VLADrone test procedure"
-
 
 作用：确保 NX 上是 GitHub 最新代码，并重新安装 ROS2 节点到 `install/`。
 
@@ -251,7 +247,44 @@ ros2 topic hz /mavros/vision_pose/pose
 
 如果这里没有数据，说明 Nokov 到 MAVROS 的 vision pose 桥接还没有启动或 topic 名不一致。先修这一步，不要继续飞行测试。
 
-## 7. 单独测试 RC 第 10 通道到夹爪命令 topic
+## 7. 检查 px4ctrl 专家动作 topic
+
+作用：确认手动飞行时，px4ctrl 已经把内部 `hover_pose` 发布成可供 LeRobot 记录的专家 action。
+
+终端 A：启动 MAVROS，并确认 `/mavros/vision_pose/pose` 和 `/mavros/rc/in` 有数据。
+
+终端 B：启动 px4ctrl：
+
+```bash
+cd ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 run px4ctrl px4ctrl_node --ros-args --params-file install/px4ctrl/share/px4ctrl/config/ctrl_param_fpv.yaml
+```
+
+终端 C：监听专家动作：
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2/install/setup.bash
+ros2 topic echo /px4ctrl/expert_pose
+```
+
+在 `AUTO_HOVER` 手动飞行时，`/px4ctrl/expert_pose` 应持续发布 `PoseStamped`：
+
+- `pose.position.x/y/z` 是 px4ctrl 当前目标位置，不是 mocap 当前测量位置。
+- `pose.orientation` 中的 yaw 是 px4ctrl 当前目标 yaw。
+- `header.stamp` 与同一控制周期发给 `/mavros/setpoint_raw/local` 的 setpoint 使用同一时间戳。
+
+检查频率：
+
+```bash
+ros2 topic hz /px4ctrl/expert_pose
+```
+
+期望频率接近 `ctrl_freq_max`，默认约 `100 Hz`。
+
+## 8. 单独测试 RC 第 10 通道到夹爪命令 topic
 
 作用：暂时不接舵机，只确认遥控器 CH10 会被 px4ctrl 转成 `/gripper/command`。
 
@@ -301,7 +334,7 @@ ros2 topic echo /mavros/rc/in
 
 确认 `channels[9]` 是否真的变化。
 
-## 8. 测试 RC 第 10 通道真实控制夹爪
+## 9. 测试 RC 第 10 通道真实控制夹爪
 
 作用：测试完整链路：遥控器 CH10 -> MAVROS -> px4ctrl -> gripper topic -> Feetech 舵机。
 
@@ -341,7 +374,7 @@ ros2 run px4ctrl feetech_gripper_node.py --ros-args \
   -p right_inverted:=true
 ```
 
-## 9. 用 launch 同时启动 px4ctrl 和夹爪节点
+## 10. 用 launch 同时启动 px4ctrl 和夹爪节点
 
 作用：确认正式启动方式可用。`run_ctrl.launch.py` 会同时启动：
 
@@ -359,7 +392,7 @@ ros2 launch px4ctrl run_ctrl.launch.py
 
 此时再拨动遥控器第 10 通道，夹爪应能开合。
 
-## 10. 起飞和降落脚本测试
+## 11. 起飞和降落脚本测试
 
 作用：确认 px4ctrl 能收到起飞/降落命令。
 
@@ -393,7 +426,7 @@ ros2 topic pub --once /px4ctrl/takeoff_land quadrotor_msgs/msg/TakeoffLand "{tak
 - `1`：takeoff
 - `2`：land
 
-## 11. 最后测试 fly_x_gripper_test.py
+## 12. 最后测试 fly_x_gripper_test.py
 
 作用：在已经完成 MAVROS、Nokov、px4ctrl、夹爪节点测试后，执行整机自动测试。
 
@@ -455,7 +488,66 @@ ros2 run px4ctrl fly_x_gripper_test.py \
 ros2 run px4ctrl fly_x_gripper_test.py --no-land
 ```
 
-## 12. 常用排错命令
+## 13. LeRobot 手动飞行数据采集
+
+作用：手动飞行时，LeRobot 记录 `/px4ctrl/expert_pose` 作为专家 action，同时记录 mocap 状态、夹爪状态和两路相机。
+
+重要：手动飞行采集时不要让 LeRobot 把 pose action 反写到 `/position_cmd`，否则会干扰 px4ctrl 的 RC hover 控制。因此录制命令需要：
+
+```text
+--robot.send_pose_actions=false
+```
+
+同时不要启动 `feetech_gripper_node.py`，因为 `vla_drone` robot 会直接打开 `/dev/ttyACM0` 控制 Feetech 夹爪。
+
+终端 A：启动 MAVROS。
+
+终端 B：启动 px4ctrl：
+
+```bash
+cd ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 run px4ctrl px4ctrl_node --ros-args --params-file install/px4ctrl/share/px4ctrl/config/ctrl_param_fpv.yaml
+```
+
+终端 C：启动 LeRobot 录制：
+
+```bash
+conda activate vla-drone-v044
+cd ~/vla_drone/lerobot
+
+lerobot-record \
+  --robot.type=vla_drone \
+  --robot.nokov_pose_topic=/mavros/vision_pose/pose \
+  --robot.mavros_setpoint_topic=/position_cmd \
+  --robot.send_pose_actions=false \
+  --robot.gripper_port=/dev/ttyACM0 \
+  --robot.cameras='{
+    front: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30},
+    down: {type: opencv, index_or_path: 1, width: 640, height: 480, fps: 30}
+  }' \
+  --teleop.type=ros_expert_pose \
+  --teleop.expert_pose_topic=/px4ctrl/expert_pose \
+  --teleop.gripper_topic=/gripper/command \
+  --teleop.max_pose_age_s=0.2 \
+  --dataset.repo_id=fd3s1/vla_drone_grasp_v001 \
+  --dataset.root=~/vla_drone/data/vla_drone_grasp_v001 \
+  --dataset.num_episodes=10 \
+  --dataset.episode_time_s=30 \
+  --dataset.reset_time_s=10 \
+  --dataset.single_task="Fly to the target and operate the gripper" \
+  --dataset.push_to_hub=false
+```
+
+时间戳对齐规则：
+
+- `/px4ctrl/expert_pose.header.stamp` 来自 px4ctrl 控制周期，和 `/mavros/setpoint_raw/local` 同步。
+- `ros_expert_pose` teleop 每帧读取最新 `/px4ctrl/expert_pose`，如果 age 超过 `--teleop.max_pose_age_s` 就停止记录并报错。
+- `vla_drone` robot 在一次 `get_observation()` 中先读相机和夹爪，最后读 mocap pose，减少 `observation.state` 和随后 action 之间的时间差。
+- `/gripper/command` 是保持型目标命令，不是连续流；teleop 会记录最后一次夹爪目标。没有收到夹爪命令时默认记录 `100.0`，即全开。
+
+## 14. 常用排错命令
 
 查看所有相关 topic：
 
@@ -488,6 +580,13 @@ ros2 topic hz /mavros/vision_pose/pose
 ros2 topic echo /gripper/command
 ```
 
+检查专家动作：
+
+```bash
+ros2 topic echo /px4ctrl/expert_pose
+ros2 topic hz /px4ctrl/expert_pose
+```
+
 手动打开夹爪：
 
 ```bash
@@ -509,7 +608,7 @@ ros2 param get /px4ctrl gripper.pwm_open
 ros2 param get /px4ctrl gripper.pwm_close
 ```
 
-## 13. 测试通过标准
+## 15. 测试通过标准
 
 夹爪单独测试通过：
 
@@ -534,6 +633,12 @@ RC 夹爪测试通过：
 - `/mavros/vision_pose/pose` 有稳定数据
 - 位置单位为米
 - yaw / orientation 随机体转动变化
+
+专家动作测试通过：
+
+- `/px4ctrl/expert_pose` 持续发布。
+- 手动拨杆时，`/px4ctrl/expert_pose.pose.position` 按目标位置变化。
+- `/px4ctrl/expert_pose` 频率稳定，采集时不会超过 `max_pose_age_s`。
 
 整机测试通过：
 

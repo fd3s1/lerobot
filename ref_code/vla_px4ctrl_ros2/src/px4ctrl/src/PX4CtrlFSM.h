@@ -54,6 +54,7 @@ public:
   LinearControl &controller;
 
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr traj_start_trigger_pub;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr expert_pose_pub;
   rclcpp::Publisher<mavros_msgs::msg::PositionTarget>::SharedPtr ctrl_FCU_pub;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr gripper_cmd_pub;
   rclcpp::Client<mavros_msgs::srv::SetMode>::SharedPtr set_FCU_mode_srv;
@@ -93,6 +94,7 @@ private:
   void set_hov_with_odom();
   void set_hov_with_rc();
   void publish_position_ctrl(const Controller_Output_t &u, const rclcpp::Time &stamp);
+  void publish_expert_pose(const Desired_State_t &des, const rclcpp::Time &stamp);
   void publish_trigger(const geometry_msgs::msg::PoseStamped &odom_msg);
   void publish_gripper_from_rc();
 

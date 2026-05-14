@@ -46,7 +46,6 @@ class ROS2PoseBridge:
         self._publisher = None
         self._pose_msg_cls = None
         self._spin_thread: threading.Thread | None = None
-        self._owns_rclpy_context = False
 
     @property
     def is_connected(self) -> bool:
@@ -62,7 +61,6 @@ class ROS2PoseBridge:
 
         if not rclpy.ok():
             rclpy.init(args=None)
-            self._owns_rclpy_context = True
 
         self._node = rclpy.create_node(self.node_name)
         self._publisher = self._node.create_publisher(PoseStamped, self.setpoint_topic, 10)
@@ -126,5 +124,6 @@ class ROS2PoseBridge:
             self._spin_thread.join(timeout=1.0)
         if self._node is not None:
             self._node.destroy_node()
-        if self._owns_rclpy_context and self._rclpy is not None and self._rclpy.ok():
-            self._rclpy.shutdown()
+        # Do not call global rclpy.shutdown() here. LeRobot may run another ROS2
+        # device, such as the ros_expert_pose teleoperator, in the same process.
+        # Destroying this node is enough; the process exit will release rclpy.

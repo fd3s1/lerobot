@@ -201,8 +201,10 @@ void PX4CtrlFSM::process()
   }
 
   if (odom_is_received(now_time)) {
-    const Controller_Output_t u = controller.calculateControl(clamp_desired(des), odom_data);
+    const Desired_State_t safe_des = clamp_desired(des);
+    const Controller_Output_t u = controller.calculateControl(safe_des, odom_data);
     publish_position_ctrl(u, now_time);
+    publish_expert_pose(safe_des, now_time);
   }
 
   land_detector(state, des, odom_data);
@@ -398,6 +400,28 @@ void PX4CtrlFSM::publish_position_ctrl(const Controller_Output_t &u, const rclcp
   msg.position.z = u.position.z();
   msg.yaw = static_cast<float>(uav_utils::normalize_angle(u.yaw));
   ctrl_FCU_pub->publish(msg);
+}
+
+void PX4CtrlFSM::publish_expert_pose(const Desired_State_t &des, const rclcpp::Time &stamp)
+{
+  if (!expert_pose_pub) {
+    return;
+  }
+
+  geometry_msgs::msg::PoseStamped msg;
+  msg.header.stamp = stamp;
+  msg.header.frame_id = param.frame_id;
+  msg.pose.position.x = des.p.x();
+  msg.pose.position.y = des.p.y();
+  msg.pose.position.z = des.p.z();
+
+  const Eigen::Quaterniond q = uav_utils::yaw_to_quaternion(uav_utils::normalize_angle(des.yaw));
+  msg.pose.orientation.x = q.x();
+  msg.pose.orientation.y = q.y();
+  msg.pose.orientation.z = q.z();
+  msg.pose.orientation.w = q.w();
+
+  expert_pose_pub->publish(msg);
 }
 
 void PX4CtrlFSM::publish_trigger(const geometry_msgs::msg::PoseStamped &odom_msg)

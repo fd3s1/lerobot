@@ -161,6 +161,14 @@ class VLADrone(Robot):
 
     @check_if_not_connected
     def get_observation(self) -> RobotObservation:
+        camera_observation: RobotObservation = {}
+        for name, camera in self.cameras.items():
+            camera_observation[name] = camera.read_latest()
+
+        gripper_pos = self.bus.sync_read("Present_Position", [GRIPPER_LEFT, GRIPPER_RIGHT])
+
+        # Read pose last so observation.state is as close as possible to the action sample
+        # taken immediately after this method returns in the LeRobot record loop.
         pose = self.pose_bridge.get_latest_pose(self.config.max_pose_age_s)
         if pose is None:
             raise DeviceNotConnectedError(
@@ -168,7 +176,6 @@ class VLADrone(Robot):
                 f"within {self.config.max_pose_age_s:.3f}s."
             )
 
-        gripper_pos = self.bus.sync_read("Present_Position", [GRIPPER_LEFT, GRIPPER_RIGHT])
         observation: RobotObservation = {
             ACTION_X: pose.x,
             ACTION_Y: pose.y,
@@ -177,9 +184,7 @@ class VLADrone(Robot):
             GRIPPER_LEFT_POS: float(gripper_pos[GRIPPER_LEFT]),
             GRIPPER_RIGHT_POS: float(gripper_pos[GRIPPER_RIGHT]),
         }
-
-        for name, camera in self.cameras.items():
-            observation[name] = camera.read_latest()
+        observation.update(camera_observation)
 
         return observation
 
@@ -194,12 +199,13 @@ class VLADrone(Robot):
             GRIPPER_RIGHT_POS: clamp(float(action.get(GRIPPER_RIGHT_POS, 0.0)), (0.0, 100.0)),
         }
 
-        self.pose_bridge.publish_setpoint(
-            safe_action[ACTION_X],
-            safe_action[ACTION_Y],
-            safe_action[ACTION_Z],
-            safe_action[ACTION_YAW],
-        )
+        if self.config.send_pose_actions:
+            self.pose_bridge.publish_setpoint(
+                safe_action[ACTION_X],
+                safe_action[ACTION_Y],
+                safe_action[ACTION_Z],
+                safe_action[ACTION_YAW],
+            )
         self.bus.sync_write(
             "Goal_Position",
             {

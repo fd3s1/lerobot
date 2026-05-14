@@ -19,11 +19,12 @@ class VLADroneConfig(RobotConfig):
     disable_torque_on_disconnect: bool = True
     configure_gripper_motors: bool = True
 
-    nokov_pose_topic: str = "/nokov/drone/pose"
-    mavros_setpoint_topic: str = "/mavros/setpoint_position/local"
+    nokov_pose_topic: str = "/mavros/vision_pose/pose"
+    mavros_setpoint_topic: str = "/position_cmd"
     ros_node_name: str = "lerobot_vla_drone"
     ros_frame_id: str = "map"
     max_pose_age_s: float = 0.5
+    send_pose_actions: bool = True
 
     x_bounds: tuple[float, float] = (-5.0, 5.0)
     y_bounds: tuple[float, float] = (-5.0, 5.0)

@@ -40,6 +40,7 @@ public:
     std::string cmd{"/position_cmd"};
     std::string takeoff_land{"/px4ctrl/takeoff_land"};
     std::string setpoint{"/mavros/setpoint_raw/local"};
+    std::string expert_pose{"/px4ctrl/expert_pose"};
     std::string gripper_command{"/gripper/command"};
     std::string traj_start_trigger{"/traj_start_trigger"};
     std::string state{"/mavros/state"};
