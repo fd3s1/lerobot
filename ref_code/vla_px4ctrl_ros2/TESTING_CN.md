@@ -5,19 +5,18 @@
 ```text
 遥控器 / Nokov / 测试程序
   -> MAVROS / px4ctrl
-  -> /drone6/gripper/command
+  -> /gripper/command
   -> feetech_gripper_node.py
   -> 两个 Feetech STS3215 夹爪舵机
 ```
 
 当前约定：
 
-- 飞控命名空间：`/drone6`
-- MAVROS RC 输入：`/drone6/mavros/rc/in`
-- MAVROS vision pose：`/drone6/mavros/vision_pose/pose`
-- px4ctrl 位置指令：`/drone6/position_cmd`
-- px4ctrl 起降指令：`/drone6/px4ctrl/takeoff_land`
-- 夹爪命令：`/drone6/gripper/command`
+- MAVROS RC 输入：`/mavros/rc/in`
+- MAVROS vision pose：`/mavros/vision_pose/pose`
+- px4ctrl 位置指令：`/position_cmd`
+- px4ctrl 起降指令：`/px4ctrl/takeoff_land`
+- 夹爪命令：`/gripper/command`
 - 夹爪定义：`100 = 全开`，`0 = 全关`
 - 遥控器第 10 通道：低位打开，高位关闭
 
@@ -109,8 +108,8 @@ ros2 run px4ctrl feetech_gripper_node.py --ros-args -p dry_run:=true
 source /opt/ros/humble/setup.bash
 source ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2/install/setup.bash
 
-ros2 topic pub --once /drone6/gripper/command std_msgs/msg/Float64 "{data: 100.0}"
-ros2 topic pub --once /drone6/gripper/command std_msgs/msg/Float64 "{data: 0.0}"
+ros2 topic pub --once /gripper/command std_msgs/msg/Float64 "{data: 100.0}"
+ros2 topic pub --once /gripper/command std_msgs/msg/Float64 "{data: 0.0}"
 ```
 
 终端 A 期望看到：
@@ -138,7 +137,7 @@ ros2 run px4ctrl feetech_gripper_node.py --ros-args -p port:=/dev/ttyACM0
 ```text
 gripper_left: id=1, min=..., max=..., homing_offset=..., direction=normal
 gripper_right: id=2, min=..., max=..., homing_offset=..., direction=normal
-Listening for gripper commands on /drone6/gripper/command
+Listening for gripper commands on /gripper/command
 ```
 
 终端 B：
@@ -147,8 +146,8 @@ Listening for gripper commands on /drone6/gripper/command
 source /opt/ros/humble/setup.bash
 source ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2/install/setup.bash
 
-ros2 topic pub --once /drone6/gripper/command std_msgs/msg/Float64 "{data: 100.0}"
-ros2 topic pub --once /drone6/gripper/command std_msgs/msg/Float64 "{data: 0.0}"
+ros2 topic pub --once /gripper/command std_msgs/msg/Float64 "{data: 100.0}"
+ros2 topic pub --once /gripper/command std_msgs/msg/Float64 "{data: 0.0}"
 ```
 
 期望结果：
@@ -184,29 +183,29 @@ USB 串口示例：
 
 ```bash
 source /opt/ros/humble/setup.bash
-ros2 launch mavros px4.launch fcu_url:=/dev/ttyACM0:57600 namespace:=drone6
+ros2 launch mavros px4.launch fcu_url:=/dev/ttyACM0:57600
 ```
 
 TELEM 串口示例：
 
 ```bash
 source /opt/ros/humble/setup.bash
-ros2 launch mavros px4.launch fcu_url:=/dev/ttyTHS1:921600 namespace:=drone6
+ros2 launch mavros px4.launch fcu_url:=/dev/ttyTHS1:921600
 ```
 
 UDP 示例：
 
 ```bash
 source /opt/ros/humble/setup.bash
-ros2 launch mavros px4.launch fcu_url:=udp://:14540@127.0.0.1:14557 namespace:=drone6
+ros2 launch mavros px4.launch fcu_url:=udp://:14540@127.0.0.1:14557
 ```
 
-如果你的 MAVROS launch 文件不支持 `namespace:=drone6`，先按 `--show-args` 里显示的参数名启动。最终必须确认 topic 是 `/drone6/mavros/...`。如果实际 topic 是 `/mavros/...`，要么调整 MAVROS namespace，要么修改 `ctrl_param_fpv.yaml` 中的 topic。
+当前 MAVROS 不使用额外 namespace，topic 应该是 `/mavros/...`。如果你的启动方式生成了其他 namespace，需要同步修改 `ctrl_param_fpv.yaml` 中的 MAVROS topic。
 
 检查 MAVROS 是否连接：
 
 ```bash
-ros2 topic echo /drone6/mavros/state
+ros2 topic echo /mavros/state
 ```
 
 期望看到：
@@ -218,7 +217,7 @@ connected: true
 检查 RC 输入：
 
 ```bash
-ros2 topic echo /drone6/mavros/rc/in
+ros2 topic echo /mavros/rc/in
 ```
 
 拨动遥控器第 10 通道，观察 `channels` 数组第 10 个值，也就是 `channels[9]`。
@@ -230,12 +229,12 @@ ros2 topic echo /drone6/mavros/rc/in
 
 ## 6. 检查 Nokov / mocap vision pose
 
-作用：确认 PX4/MAVROS 能收到外部定位。px4ctrl 默认从 `/drone6/mavros/vision_pose/pose` 读取当前位置。
+作用：确认 PX4/MAVROS 能收到外部定位。px4ctrl 默认从 `/mavros/vision_pose/pose` 读取当前位置。
 
 检查 vision pose：
 
 ```bash
-ros2 topic echo /drone6/mavros/vision_pose/pose
+ros2 topic echo /mavros/vision_pose/pose
 ```
 
 期望：
@@ -247,23 +246,23 @@ ros2 topic echo /drone6/mavros/vision_pose/pose
 查看频率：
 
 ```bash
-ros2 topic hz /drone6/mavros/vision_pose/pose
+ros2 topic hz /mavros/vision_pose/pose
 ```
 
 如果这里没有数据，说明 Nokov 到 MAVROS 的 vision pose 桥接还没有启动或 topic 名不一致。先修这一步，不要继续飞行测试。
 
 ## 7. 单独测试 RC 第 10 通道到夹爪命令 topic
 
-作用：暂时不接舵机，只确认遥控器 CH10 会被 px4ctrl 转成 `/drone6/gripper/command`。
+作用：暂时不接舵机，只确认遥控器 CH10 会被 px4ctrl 转成 `/gripper/command`。
 
-终端 A：启动 MAVROS，并确认 `/drone6/mavros/rc/in` 有数据。
+终端 A：启动 MAVROS，并确认 `/mavros/rc/in` 有数据。
 
 终端 B：监听夹爪命令：
 
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2/install/setup.bash
-ros2 topic echo /drone6/gripper/command
+ros2 topic echo /gripper/command
 ```
 
 终端 C：启动 px4ctrl，不启动真实夹爪节点：
@@ -290,14 +289,14 @@ gripper:
 
 期望：
 
-- CH10 低位：`/drone6/gripper/command` 输出 `100.0`
-- CH10 高位：`/drone6/gripper/command` 输出 `0.0`
+- CH10 低位：`/gripper/command` 输出 `100.0`
+- CH10 高位：`/gripper/command` 输出 `0.0`
 - CH10 中间：不发布新命令
 
 如果没有输出，检查：
 
 ```bash
-ros2 topic echo /drone6/mavros/rc/in
+ros2 topic echo /mavros/rc/in
 ```
 
 确认 `channels[9]` 是否真的变化。
@@ -385,8 +384,8 @@ bash shflies/land.sh
 也可以直接发布：
 
 ```bash
-ros2 topic pub --once /drone6/px4ctrl/takeoff_land quadrotor_msgs/msg/TakeoffLand "{takeoff_land_cmd: 1}"
-ros2 topic pub --once /drone6/px4ctrl/takeoff_land quadrotor_msgs/msg/TakeoffLand "{takeoff_land_cmd: 2}"
+ros2 topic pub --once /px4ctrl/takeoff_land quadrotor_msgs/msg/TakeoffLand "{takeoff_land_cmd: 1}"
+ros2 topic pub --once /px4ctrl/takeoff_land quadrotor_msgs/msg/TakeoffLand "{takeoff_land_cmd: 2}"
 ```
 
 含义：
@@ -461,44 +460,44 @@ ros2 run px4ctrl fly_x_gripper_test.py --no-land
 查看所有相关 topic：
 
 ```bash
-ros2 topic list | grep -E "drone6|mavros|gripper|px4ctrl|vision"
+ros2 topic list | grep -E "mavros|gripper|px4ctrl|vision"
 ```
 
 检查 RC：
 
 ```bash
-ros2 topic echo /drone6/mavros/rc/in
+ros2 topic echo /mavros/rc/in
 ```
 
 检查飞控连接：
 
 ```bash
-ros2 topic echo /drone6/mavros/state
+ros2 topic echo /mavros/state
 ```
 
 检查定位：
 
 ```bash
-ros2 topic echo /drone6/mavros/vision_pose/pose
-ros2 topic hz /drone6/mavros/vision_pose/pose
+ros2 topic echo /mavros/vision_pose/pose
+ros2 topic hz /mavros/vision_pose/pose
 ```
 
 检查夹爪命令：
 
 ```bash
-ros2 topic echo /drone6/gripper/command
+ros2 topic echo /gripper/command
 ```
 
 手动打开夹爪：
 
 ```bash
-ros2 topic pub --once /drone6/gripper/command std_msgs/msg/Float64 "{data: 100.0}"
+ros2 topic pub --once /gripper/command std_msgs/msg/Float64 "{data: 100.0}"
 ```
 
 手动关闭夹爪：
 
 ```bash
-ros2 topic pub --once /drone6/gripper/command std_msgs/msg/Float64 "{data: 0.0}"
+ros2 topic pub --once /gripper/command std_msgs/msg/Float64 "{data: 0.0}"
 ```
 
 检查 px4ctrl 参数：
@@ -520,8 +519,8 @@ ros2 param get /px4ctrl gripper.pwm_close
 
 MAVROS 测试通过：
 
-- `/drone6/mavros/state` 中 `connected: true`
-- `/drone6/mavros/rc/in` 有 RC 通道数据
+- `/mavros/state` 中 `connected: true`
+- `/mavros/rc/in` 有 RC 通道数据
 - 第 10 通道拨动时 `channels[9]` 明显变化
 
 RC 夹爪测试通过：
@@ -532,7 +531,7 @@ RC 夹爪测试通过：
 
 定位测试通过：
 
-- `/drone6/mavros/vision_pose/pose` 有稳定数据
+- `/mavros/vision_pose/pose` 有稳定数据
 - 位置单位为米
 - yaw / orientation 随机体转动变化
 

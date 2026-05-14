@@ -6,20 +6,20 @@ px4ctrl:
     use_bodyrate_ctrl: false
 
     topics:
-      rc: /drone6/mavros/rc/in
-      odom: /drone6/mavros/vision_pose/pose
-      cmd: /drone6/position_cmd
-      takeoff_land: /drone6/px4ctrl/takeoff_land
-      setpoint: /drone6/mavros/setpoint_raw/local
-      gripper_command: /drone6/gripper/command
-      traj_start_trigger: /drone6/traj_start_trigger
-      state: /drone6/mavros/state
-      extended_state: /drone6/mavros/extended_state
-      battery: /drone6/mavros/battery
+      rc: /mavros/rc/in
+      odom: /mavros/vision_pose/pose
+      cmd: /position_cmd
+      takeoff_land: /px4ctrl/takeoff_land
+      setpoint: /mavros/setpoint_raw/local
+      gripper_command: /gripper/command
+      traj_start_trigger: /traj_start_trigger
+      state: /mavros/state
+      extended_state: /mavros/extended_state
+      battery: /mavros/battery
     services:
-      set_mode: /drone6/mavros/set_mode
-      arming: /drone6/mavros/cmd/arming
-      command: /drone6/mavros/cmd/command
+      set_mode: /mavros/set_mode
+      arming: /mavros/cmd/arming
+      command: /mavros/cmd/command
 
     msg_timeout:
       odom: 0.5
@@ -57,7 +57,7 @@ px4ctrl:
 
 feetech_gripper_node:
   ros__parameters:
-    command_topic: /drone6/gripper/command
+    command_topic: /gripper/command
     port: /dev/ttyACM0
     left_id: 1
     right_id: 2

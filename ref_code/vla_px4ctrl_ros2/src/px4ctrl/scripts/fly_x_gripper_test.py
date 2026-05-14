@@ -187,7 +187,7 @@ class FlyXGripperTest(Node):
         excluded_topics = {
             self.config.cmd_topic,
             self.config.trigger_topic,
-            "/drone6/mavros/vision_pose/pose",
+            "/mavros/vision_pose/pose",
         }
 
         for topic, types in self.get_topic_names_and_types():
@@ -478,10 +478,10 @@ def parse_args() -> TestConfig:
     )
     parser.add_argument("--mocap-msg-type", choices=("auto", "pose", "odometry"), default="auto")
     parser.add_argument("--mocap-discovery-timeout", type=float, default=5.0)
-    parser.add_argument("--cmd-topic", default="/drone6/position_cmd")
-    parser.add_argument("--gripper-topic", default="/drone6/gripper/command")
-    parser.add_argument("--takeoff-land-topic", default="/drone6/px4ctrl/takeoff_land")
-    parser.add_argument("--trigger-topic", default="/drone6/traj_start_trigger")
+    parser.add_argument("--cmd-topic", default="/position_cmd")
+    parser.add_argument("--gripper-topic", default="/gripper/command")
+    parser.add_argument("--takeoff-land-topic", default="/px4ctrl/takeoff_land")
+    parser.add_argument("--trigger-topic", default="/traj_start_trigger")
     parser.add_argument("--frame-id", default="map")
     parser.add_argument("--distance", type=float, default=7.0)
     parser.add_argument(

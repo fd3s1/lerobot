@@ -83,7 +83,7 @@ int main(int argc, char *argv[])
     });
 
   auto manual_flag_sub = node->create_subscription<std_msgs::msg::UInt8>(
-    "/drone6_pub_trigger_flag",
+    "/pub_trigger_flag",
     1,
     [&fsm](const std_msgs::msg::UInt8::SharedPtr msg) {
       fsm.manual_flag_cb(msg);

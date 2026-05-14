@@ -35,23 +35,23 @@ public:
 
   struct Topics
   {
-    std::string rc{"/drone6/mavros/rc/in"};
-    std::string odom{"/drone6/mavros/vision_pose/pose"};
-    std::string cmd{"/drone6/position_cmd"};
-    std::string takeoff_land{"/drone6/px4ctrl/takeoff_land"};
-    std::string setpoint{"/drone6/mavros/setpoint_raw/local"};
-    std::string gripper_command{"/drone6/gripper/command"};
-    std::string traj_start_trigger{"/drone6/traj_start_trigger"};
-    std::string state{"/drone6/mavros/state"};
-    std::string extended_state{"/drone6/mavros/extended_state"};
-    std::string battery{"/drone6/mavros/battery"};
+    std::string rc{"/mavros/rc/in"};
+    std::string odom{"/mavros/vision_pose/pose"};
+    std::string cmd{"/position_cmd"};
+    std::string takeoff_land{"/px4ctrl/takeoff_land"};
+    std::string setpoint{"/mavros/setpoint_raw/local"};
+    std::string gripper_command{"/gripper/command"};
+    std::string traj_start_trigger{"/traj_start_trigger"};
+    std::string state{"/mavros/state"};
+    std::string extended_state{"/mavros/extended_state"};
+    std::string battery{"/mavros/battery"};
   };
 
   struct Services
   {
-    std::string set_mode{"/drone6/mavros/set_mode"};
-    std::string arming{"/drone6/mavros/cmd/arming"};
-    std::string command{"/drone6/mavros/cmd/command"};
+    std::string set_mode{"/mavros/set_mode"};
+    std::string arming{"/mavros/cmd/arming"};
+    std::string command{"/mavros/cmd/command"};
   };
 
   struct Limits
