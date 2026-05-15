@@ -45,6 +45,7 @@ install(TARGETS px4ctrl_node
 install(PROGRAMS
   scripts/feetech_gripper_node.py
   scripts/fly_x_gripper_test.py
+  scripts/vrpn_to_mavros_vision_bridge.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

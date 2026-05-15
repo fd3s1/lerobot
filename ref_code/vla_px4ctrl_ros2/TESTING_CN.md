@@ -227,6 +227,55 @@ ros2 topic echo /mavros/rc/in
 
 作用：确认 PX4/MAVROS 能收到外部定位。px4ctrl 默认从 `/mavros/vision_pose/pose` 读取当前位置。
 
+如果 Nokov/VRPN 的原始 topic 是 `/vla_drone1/pose`，不要直接把它 remap 到 `/mavros/vision_pose/pose`。当前 `vrpn_mocap` 发布端通常是 `BEST_EFFORT` QoS，而 MAVROS `vision_pose` 订阅端是 `RELIABLE` QoS，二者可能不兼容。使用桥接节点转换 QoS：
+
+终端 A：启动 VRPN client，保留原始 topic。
+
+```bash
+source /opt/ros/humble/setup.bash
+ros2 run vrpn_mocap client_node --ros-args \
+  -p server:=10.1.1.198 \
+  -p port:=3883
+```
+
+终端 B：启动 QoS 桥接节点。
+
+```bash
+cd ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 run px4ctrl vrpn_to_mavros_vision_bridge.py --ros-args \
+  -p source_topic:=/vla_drone1/pose \
+  -p target_topic:=/mavros/vision_pose/pose
+```
+
+桥接节点默认：
+
+- 订阅 `/vla_drone1/pose`：`BEST_EFFORT`
+- 发布 `/mavros/vision_pose/pose`：`RELIABLE`
+- 保留 VRPN 输入消息的 `header.stamp`
+- 保留输入消息的 `frame_id`
+
+时间戳注意事项：
+
+- 默认不要设置 `restamp:=true`，因为 EKF 应该看到 mocap pose 的原始产生时间。
+- 如果桥接节点提示 `Input header.stamp is zero`，或者 stamp age 明显异常，才临时测试：
+
+```bash
+ros2 run px4ctrl vrpn_to_mavros_vision_bridge.py --ros-args \
+  -p source_topic:=/vla_drone1/pose \
+  -p target_topic:=/mavros/vision_pose/pose \
+  -p restamp:=true
+```
+
+检查 QoS 是否正确：
+
+```bash
+ros2 topic info /mavros/vision_pose/pose -v
+```
+
+期望 `/mavros/vision_pose/pose` 的 publisher 端是桥接节点且为 `RELIABLE`，subscriber 端是 `/mavros/vision_pose` 且为 `RELIABLE`。
+
 检查 vision pose：
 
 ```bash
