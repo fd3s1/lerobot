@@ -28,6 +28,7 @@ VRPN_PORT=3883
 VRPN_SOURCE_TOPIC=/vla_drone1/pose
 MAVROS_VISION_TOPIC=/mavros/vision_pose/pose
 FCU_URL=/dev/ttyACM1:921600
+GCS_URL=udp://@10.1.1.198:14550
 BRIDGE_RESTAMP=false
 PX4CTRL_PARAMS_FILE=install/px4ctrl/share/px4ctrl/config/ctrl_param_fpv.yaml
 START_PX4CTRL=true
@@ -35,7 +36,8 @@ START_PX4CTRL=true
 
 Set `START_PX4CTRL=false` if you only want the mocap/MAVROS chain. The script
 does not start `feetech_gripper_node.py`, so LeRobot can own the Feetech serial
-port during data collection.
+port during data collection. `GCS_URL` forwards MAVLink from MAVROS to QGC on
+the Windows mocap computer.
 
 Start px4ctrl and the Feetech gripper node for standalone gripper testing:
 

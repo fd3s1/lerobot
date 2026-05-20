@@ -9,6 +9,7 @@ VRPN_PORT="${VRPN_PORT:-3883}"
 VRPN_SOURCE_TOPIC="${VRPN_SOURCE_TOPIC:-/vla_drone1/pose}"
 MAVROS_VISION_TOPIC="${MAVROS_VISION_TOPIC:-/mavros/vision_pose/pose}"
 FCU_URL="${FCU_URL:-/dev/ttyACM1:921600}"
+GCS_URL="${GCS_URL:-udp://@10.1.1.198:14550}"
 BRIDGE_RESTAMP="${BRIDGE_RESTAMP:-false}"
 PX4CTRL_PARAMS_FILE="${PX4CTRL_PARAMS_FILE:-${WORKSPACE_DIR}/install/px4ctrl/share/px4ctrl/config/ctrl_param_fpv.yaml}"
 START_PX4CTRL="${START_PX4CTRL:-true}"
@@ -35,6 +36,7 @@ echo "[run-mocap-mavros] workspace: ${WORKSPACE_DIR}"
 echo "[run-mocap-mavros] vrpn server: ${VRPN_SERVER}:${VRPN_PORT}"
 echo "[run-mocap-mavros] bridge: ${VRPN_SOURCE_TOPIC} -> ${MAVROS_VISION_TOPIC}"
 echo "[run-mocap-mavros] fcu_url: ${FCU_URL}"
+echo "[run-mocap-mavros] gcs_url: ${GCS_URL}"
 echo "[run-mocap-mavros] bridge restamp: ${BRIDGE_RESTAMP}"
 echo "[run-mocap-mavros] start px4ctrl: ${START_PX4CTRL}"
 echo "[run-mocap-mavros] px4ctrl params: ${PX4CTRL_PARAMS_FILE}"
@@ -46,7 +48,7 @@ PIDS+=("$!")
 
 sleep 1
 
-ros2 launch mavros px4.launch fcu_url:="${FCU_URL}" &
+ros2 launch mavros px4.launch fcu_url:="${FCU_URL}" gcs_url:="${GCS_URL}" &
 PIDS+=("$!")
 
 sleep 2

@@ -244,6 +244,7 @@ VRPN_PORT=3883
 VRPN_SOURCE_TOPIC=/vla_drone1/pose
 MAVROS_VISION_TOPIC=/mavros/vision_pose/pose
 FCU_URL=/dev/ttyACM1:921600
+GCS_URL=udp://@10.1.1.198:14550
 BRIDGE_RESTAMP=false
 PX4CTRL_PARAMS_FILE=install/px4ctrl/share/px4ctrl/config/ctrl_param_fpv.yaml
 START_PX4CTRL=true
@@ -254,6 +255,8 @@ START_PX4CTRL=true
 ```bash
 FCU_URL=/dev/ttyACM0:921600 bash shflies/run_mocap_mavros.sh
 ```
+
+脚本会通过 `GCS_URL` 把 MAVLink 转发给 QGC。当前默认 QGC 在 Windows/mocap 主机 `10.1.1.198`，端口 `14550`。如果 QGC 不显示连接，检查 Windows 防火墙是否允许 QGC 接收 UDP 14550。
 
 如果只想启动定位链路，不启动 `px4ctrl_node`：
 
