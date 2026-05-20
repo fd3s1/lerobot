@@ -15,17 +15,36 @@ PX4CTRL_PARAMS_FILE="${PX4CTRL_PARAMS_FILE:-${WORKSPACE_DIR}/install/px4ctrl/sha
 START_PX4CTRL="${START_PX4CTRL:-true}"
 
 PIDS=()
+CLEANED_UP=false
+
+start_process() {
+  echo "[run-mocap-mavros] starting: $*"
+  setsid "$@" &
+  PIDS+=("$!")
+}
 
 cleanup() {
-  echo "[run-mocap-mavros] stopping child processes"
+  if [[ "${CLEANED_UP}" == "true" ]]; then
+    return
+  fi
+  CLEANED_UP=true
+  echo "[run-mocap-mavros] stopping child process groups"
   for pid in "${PIDS[@]:-}"; do
     if kill -0 "${pid}" 2>/dev/null; then
-      kill "${pid}" 2>/dev/null || true
+      kill -TERM -- "-${pid}" 2>/dev/null || kill -TERM "${pid}" 2>/dev/null || true
+    fi
+  done
+  sleep 1
+  for pid in "${PIDS[@]:-}"; do
+    if kill -0 "${pid}" 2>/dev/null; then
+      kill -KILL -- "-${pid}" 2>/dev/null || kill -KILL "${pid}" 2>/dev/null || true
     fi
   done
   wait 2>/dev/null || true
 }
-trap cleanup EXIT INT TERM
+
+trap 'cleanup; exit 130' INT TERM
+trap cleanup EXIT
 
 set +u
 source /opt/ros/humble/setup.bash
@@ -41,32 +60,29 @@ echo "[run-mocap-mavros] bridge restamp: ${BRIDGE_RESTAMP}"
 echo "[run-mocap-mavros] start px4ctrl: ${START_PX4CTRL}"
 echo "[run-mocap-mavros] px4ctrl params: ${PX4CTRL_PARAMS_FILE}"
 
-ros2 run vrpn_mocap client_node --ros-args \
+start_process ros2 run vrpn_mocap client_node --ros-args \
   -p server:="${VRPN_SERVER}" \
-  -p port:="${VRPN_PORT}" &
-PIDS+=("$!")
+  -p port:="${VRPN_PORT}"
 
 sleep 1
 
-ros2 launch mavros px4.launch fcu_url:="${FCU_URL}" gcs_url:="${GCS_URL}" &
-PIDS+=("$!")
+start_process ros2 launch mavros px4.launch fcu_url:="${FCU_URL}" gcs_url:="${GCS_URL}"
 
 sleep 2
 
-ros2 run px4ctrl vrpn_to_mavros_vision_bridge.py --ros-args \
+start_process ros2 run px4ctrl vrpn_to_mavros_vision_bridge.py --ros-args \
   -p source_topic:="${VRPN_SOURCE_TOPIC}" \
   -p target_topic:="${MAVROS_VISION_TOPIC}" \
-  -p restamp:="${BRIDGE_RESTAMP}" &
-PIDS+=("$!")
+  -p restamp:="${BRIDGE_RESTAMP}"
 
 sleep 1
 
 if [[ "${START_PX4CTRL}" == "true" ]]; then
-  ros2 run px4ctrl px4ctrl_node --ros-args --params-file "${PX4CTRL_PARAMS_FILE}" &
-  PIDS+=("$!")
+  start_process ros2 run px4ctrl px4ctrl_node --ros-args --params-file "${PX4CTRL_PARAMS_FILE}"
 else
   echo "[run-mocap-mavros] skipping px4ctrl_node because START_PX4CTRL=${START_PX4CTRL}"
 fi
 
 echo "[run-mocap-mavros] all processes started. Press Ctrl+C to stop."
-wait -n "${PIDS[@]}"
+wait -n "${PIDS[@]}" || true
+cleanup
