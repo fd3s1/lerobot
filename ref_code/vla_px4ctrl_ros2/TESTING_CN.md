@@ -229,6 +229,42 @@ ros2 topic echo /mavros/rc/in
 
 如果 Nokov/VRPN 的原始 topic 是 `/vla_drone1/pose`，不要直接把它 remap 到 `/mavros/vision_pose/pose`。当前 `vrpn_mocap` 发布端通常是 `BEST_EFFORT` QoS，而 MAVROS `vision_pose` 订阅端是 `RELIABLE` QoS，二者可能不兼容。使用桥接节点转换 QoS：
 
+推荐启动方式：一个脚本同时启动 VRPN client、MAVROS 和 QoS 桥接节点。
+
+```bash
+cd ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
+bash shflies/run_mocap_mavros.sh
+```
+
+脚本默认参数：
+
+```text
+VRPN_SERVER=10.1.1.198
+VRPN_PORT=3883
+VRPN_SOURCE_TOPIC=/vla_drone1/pose
+MAVROS_VISION_TOPIC=/mavros/vision_pose/pose
+FCU_URL=/dev/ttyACM1:921600
+BRIDGE_RESTAMP=false
+PX4CTRL_PARAMS_FILE=install/px4ctrl/share/px4ctrl/config/ctrl_param_fpv.yaml
+START_PX4CTRL=true
+```
+
+如果要临时覆盖参数，例如飞控串口变化：
+
+```bash
+FCU_URL=/dev/ttyACM0:921600 bash shflies/run_mocap_mavros.sh
+```
+
+如果只想启动定位链路，不启动 `px4ctrl_node`：
+
+```bash
+START_PX4CTRL=false bash shflies/run_mocap_mavros.sh
+```
+
+脚本只启动 `px4ctrl_node`，不会启动 `feetech_gripper_node.py`。这样 LeRobot 采集时可以自己打开 Feetech 串口，不会和 ROS 夹爪节点抢 `/dev/ttyACM0`。
+
+如果只想手动分终端启动，使用下面的命令。
+
 终端 A：启动 VRPN client，保留原始 topic。
 
 ```bash
@@ -549,18 +585,14 @@ ros2 run px4ctrl fly_x_gripper_test.py --no-land
 
 同时不要启动 `feetech_gripper_node.py`，因为 `vla_drone` robot 会直接打开 `/dev/ttyACM0` 控制 Feetech 夹爪。
 
-终端 A：启动 MAVROS。
-
-终端 B：启动 px4ctrl：
+终端 A：启动 VRPN、MAVROS、vision bridge 和 px4ctrl：
 
 ```bash
 cd ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-ros2 run px4ctrl px4ctrl_node --ros-args --params-file install/px4ctrl/share/px4ctrl/config/ctrl_param_fpv.yaml
+bash shflies/run_mocap_mavros.sh
 ```
 
-终端 C：启动 LeRobot 录制：
+终端 B：启动 LeRobot 录制：
 
 ```bash
 conda activate vla-drone-v044

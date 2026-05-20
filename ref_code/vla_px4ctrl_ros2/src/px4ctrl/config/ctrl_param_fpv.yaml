@@ -1,6 +1,6 @@
 px4ctrl:
   ros__parameters:
-    ctrl_freq_max: 100.0
+    ctrl_freq_max: 60.0
     max_manual_vel: 1.0
     frame_id: map
     use_bodyrate_ctrl: false
