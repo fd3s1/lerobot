@@ -11,7 +11,7 @@ from lerobot.robots.config import RobotConfig
 class VLADroneConfig(RobotConfig):
     """Configuration for a VLA-controlled drone with a two-motor Feetech gripper."""
 
-    gripper_port: str = "/dev/ttyACM0"
+    gripper_port: str = "/dev/ttyACM1"
     gripper_left_id: int = 1
     gripper_right_id: int = 2
     gripper_left_inverted: bool = False

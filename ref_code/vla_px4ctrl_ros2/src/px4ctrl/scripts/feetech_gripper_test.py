@@ -31,7 +31,7 @@ from lerobot.motors.feetech import FeetechMotorsBus, MODEL_RESOLUTION
 LEFT_MOTOR = "gripper_left"
 RIGHT_MOTOR = "gripper_right"
 MOTOR_MODEL = "sts3215"
-DEFAULT_PORT = "/dev/ttyACM0"
+DEFAULT_PORT = "/dev/ttyACM1"
 
 
 def parse_args() -> argparse.Namespace:

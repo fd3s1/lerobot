@@ -183,7 +183,7 @@ class FeetechGripperNode(Node):
         super().__init__("feetech_gripper_node")
 
         self.command_topic = self.declare_parameter("command_topic", "/gripper/command").value
-        self.port = self.declare_parameter("port", "/dev/ttyACM0").value
+        self.port = self.declare_parameter("port", "/dev/ttyACM1").value
         self.left_id = int(self.declare_parameter("left_id", 1).value)
         self.right_id = int(self.declare_parameter("right_id", 2).value)
         self.left_inverted = bool(self.declare_parameter("left_inverted", False).value)
@@ -252,12 +252,12 @@ Subscribes to std_msgs/msg/Float64 commands in normalized 0-100 gripper units.
 
 Examples:
   ros2 run px4ctrl feetech_gripper_node.py
-  ros2 run px4ctrl feetech_gripper_node.py --ros-args -p port:=/dev/ttyACM0
+  ros2 run px4ctrl feetech_gripper_node.py --ros-args -p port:=/dev/ttyACM1
   ros2 run px4ctrl feetech_gripper_node.py --ros-args -p dry_run:=true
 
 Parameters:
   command_topic   default /gripper/command
-  port            default /dev/ttyACM0
+  port            default /dev/ttyACM1
   left_id         default 1
   right_id        default 2
   left_inverted   default false

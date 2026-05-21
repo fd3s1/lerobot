@@ -59,7 +59,7 @@ px4ctrl:
 feetech_gripper_node:
   ros__parameters:
     command_topic: /gripper/command
-    port: /dev/ttyACM0
+    port: /dev/ttyACM1
     left_id: 1
     right_id: 2
     left_inverted: false
