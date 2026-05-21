@@ -647,86 +647,81 @@ ros2 topic echo /gripper/command
 
 ### 13.2 启动 LeRobot 录制
 
-终端 B：每次采集自动用当前时间生成一个新的数据集名字。
+终端 B：使用采集脚本。脚本会自动 source ROS2 环境、进入 LeRobot 仓库、以当前时间生成数据集名字，并启动 `lerobot-record`。
 
 ```bash
-conda activate vla-drone-v044
-source /opt/ros/humble/setup.bash
-source ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2/install/setup.bash
-cd ~/vla_drone/lerobot
-
-RUN_ID="$(date +%Y%m%d_%H%M%S)"
-DATASET_NAME="vla_drone_grasp_${RUN_ID}"
-DATASET_ROOT="${HOME}/vla_drone/data/${DATASET_NAME}"
-REPO_ID="fd3s1/${DATASET_NAME}"
-
-echo "DATASET_NAME=${DATASET_NAME}"
-echo "DATASET_ROOT=${DATASET_ROOT}"
-echo "REPO_ID=${REPO_ID}"
-
-lerobot-record \
-  --robot.type=vla_drone \
-  --robot.nokov_pose_topic=/mavros/vision_pose/pose \
-  --robot.max_pose_age_s=2.0 \
-  --robot.mavros_setpoint_topic=/position_cmd \
-  --robot.send_pose_actions=false \
-  --robot.gripper_port=/dev/ttyACM1 \
-  --robot.cameras='{
-    front: {type: opencv, index_or_path: "/dev/video0", width: 640, height: 480, fps: 30},
-    down: {type: opencv, index_or_path: "/dev/video2", width: 640, height: 480, fps: 30}
-  }' \
-  --teleop.type=ros_expert_pose \
-  --teleop.expert_pose_topic=/px4ctrl/expert_pose \
-  --teleop.gripper_topic=/gripper/command \
-  --teleop.max_pose_age_s=0.2 \
-  --dataset.repo_id="${REPO_ID}" \
-  --dataset.root="${DATASET_ROOT}" \
-  --dataset.fps=30 \
-  --dataset.num_episodes=1 \
-  --dataset.episode_time_s=30 \
-  --dataset.reset_time_s=10 \
-  --dataset.single_task="Fly to the target and operate the gripper" \
-  --dataset.push_to_hub=false
+cd ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
+bash shflies/record_vla_dataset.sh
 ```
 
-### 13.3 录制命令参数解释
+默认行为：
+
+- 数据集名：`vla_drone_grasp_YYYYmmdd_HHMMSS`
+- 保存位置：`~/vla_drone/data/vla_drone_grasp_YYYYmmdd_HHMMSS`
+- episode 数量：`1`
+- 每条 episode 时长：`30 s`
+- reset 时长：`10 s`
+- 图像保存：开启，两路相机 `/dev/video0` 和 `/dev/video2`
+- 上传 Hugging Face Hub：关闭
+
+常用覆盖示例：
+
+```bash
+cd ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
+
+# 录 3 条，每条 30 秒
+NUM_EPISODES=3 EPISODE_TIME_S=30 bash shflies/record_vla_dataset.sh
+
+# 只做 10 秒调试，并关闭视频
+DATASET_PREFIX=debug_vla_drone EPISODE_TIME_S=10 RESET_TIME_S=1 DATASET_VIDEO=false \
+  bash shflies/record_vla_dataset.sh
+
+# 临时修改任务描述
+TASK="Fly to the target cube and close the gripper" bash shflies/record_vla_dataset.sh
+```
+
+### 13.3 录制脚本参数解释
 
 自动命名相关参数：
 
-- `RUN_ID="$(date +%Y%m%d_%H%M%S)"`：用当前时间生成唯一编号，例如 `20260521_143012`。
-- `DATASET_NAME="vla_drone_grasp_${RUN_ID}"`：本次采集的数据集名，每次运行都会不同。
-- `DATASET_ROOT="${HOME}/vla_drone/data/${DATASET_NAME}"`：本地保存路径。
-- `REPO_ID="fd3s1/${DATASET_NAME}"`：数据集 ID。即使 `push_to_hub=false`，LeRobot 仍需要一个 repo_id 作为数据集标识。
-- `source /opt/ros/humble/setup.bash`：让 conda 终端能 import ROS2 的 `rclpy`。
-- `source ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2/install/setup.bash`：让 conda 终端能找到本 workspace 里的 ROS2 消息和节点环境。
+- `RUN_ID`：默认使用当前时间，例如 `20260521_143012`。
+- `DATASET_PREFIX`：数据集名前缀，默认 `vla_drone_grasp`。
+- `DATASET_NAME`：完整数据集名，默认 `${DATASET_PREFIX}_${RUN_ID}`。
+- `DATASET_ROOT`：本地保存路径，默认 `${HOME}/vla_drone/data/${DATASET_NAME}`。
+- `REPO_OWNER`：repo_id 的用户名前缀，默认 `fd3s1`。
+- `REPO_ID`：数据集 ID，默认 `${REPO_OWNER}/${DATASET_NAME}`。即使 `PUSH_TO_HUB=false`，LeRobot 仍需要一个 repo_id 作为数据集标识。
+- `CONDA_ENV`：要激活的 conda 环境，默认 `vla-drone-v044`。
+- `CONDA_SH`：conda 初始化脚本，默认 `${HOME}/miniforge3/etc/profile.d/conda.sh`。
+- 脚本内部会执行 `source /opt/ros/humble/setup.bash`，让 conda Python 能 import ROS2 的 `rclpy`。
+- 脚本内部会执行 `source install/setup.bash`，让当前 ROS2 workspace 的消息和节点环境生效。
 
 Robot 参数：
 
-- `--robot.type=vla_drone`：使用我们自定义的无人机 robot。
-- `--robot.nokov_pose_topic=/mavros/vision_pose/pose`：从 MAVROS vision pose 读取当前 mocap 位姿，作为 observation state 的 `x, y, z, yaw` 来源。
-- `--robot.max_pose_age_s=2.0`：允许 LeRobot 在采集过程中短暂等待最新 mocap pose。NX 同时读两路相机和写数据时偶发调度延迟，`0.5 s` 容易误判为 pose 超时。
-- `--robot.mavros_setpoint_topic=/position_cmd`：推理阶段向 px4ctrl 发送目标位置的 topic。手动采集时保留该配置，但不会发送。
-- `--robot.send_pose_actions=false`：手动采集时禁止 LeRobot 把专家 action 发回 `/position_cmd`。这是防止采集过程干扰人工飞行的关键参数。
-- `--robot.gripper_port=/dev/ttyACM1`：Feetech 舵机总线串口。
-- `--robot.cameras=...`：定义两路相机。`front` 使用 `/dev/video0`，`down` 使用 `/dev/video2`，分辨率 `640x480`，采集频率 `30 fps`。
+- `NOKOV_POSE_TOPIC`：默认 `/mavros/vision_pose/pose`。从 MAVROS vision pose 读取当前 mocap 位姿，作为 observation state 的 `x, y, z, yaw` 来源。
+- `ROBOT_MAX_POSE_AGE_S`：默认 `2.0`。允许 LeRobot 在采集过程中短暂等待最新 mocap pose。NX 同时读两路相机和写数据时偶发调度延迟，`0.5 s` 容易误判为 pose 超时。
+- `MAVROS_SETPOINT_TOPIC`：默认 `/position_cmd`。推理阶段向 px4ctrl 发送目标位置的 topic。手动采集时保留该配置，但脚本固定使用 `--robot.send_pose_actions=false`，不会发送 pose action。
+- `GRIPPER_PORT`：默认 `/dev/ttyACM1`。Feetech 舵机总线串口。
+- `FRONT_CAMERA`：默认 `/dev/video0`，前视相机。
+- `DOWN_CAMERA`：默认 `/dev/video2`，夹爪/下视相机。
+- `CAMERA_WIDTH`、`CAMERA_HEIGHT`、`CAMERA_FPS`：默认 `640`、`480`、`30`。
 
 Teleop 参数：
 
-- `--teleop.type=ros_expert_pose`：使用 ROS topic 作为专家动作来源，而不是 SO-ARM leader 臂。
-- `--teleop.expert_pose_topic=/px4ctrl/expert_pose`：读取 px4ctrl 发布的专家目标位姿，保存为 action 的 `x, y, z, yaw`。
-- `--teleop.gripper_topic=/gripper/command`：读取 CH10 产生的夹爪命令，保存为 action 的 `gripper_left.pos, gripper_right.pos`。
-- `--teleop.max_pose_age_s=0.2`：允许专家 pose 的最大年龄。如果 `/px4ctrl/expert_pose` 超过 `0.2 s` 没更新，录制会报错，避免保存动作和图像严重错位的数据。
+- `EXPERT_POSE_TOPIC`：默认 `/px4ctrl/expert_pose`。读取 px4ctrl 发布的专家目标位姿，保存为 action 的 `x, y, z, yaw`。
+- `GRIPPER_TOPIC`：默认 `/gripper/command`。读取 CH10 产生的夹爪命令，保存为 action 的 `gripper_left.pos, gripper_right.pos`。
+- `TELEOP_STARTUP_TIMEOUT_S`：默认 `2.0`。录制刚开始时等待第一帧 `/px4ctrl/expert_pose` 的最长时间。
+- `TELEOP_MAX_POSE_AGE_S`：默认 `0.2`。允许专家 pose 的最大年龄。如果 `/px4ctrl/expert_pose` 超过该时间没更新，录制会报错，避免保存动作和图像严重错位的数据。
 
 Dataset 参数：
 
-- `--dataset.repo_id="${REPO_ID}"`：数据集逻辑名称，自动包含当前时间。
-- `--dataset.root="${DATASET_ROOT}"`：数据集本地保存目录，自动包含当前时间。
-- `--dataset.fps=30`：LeRobot 保存数据的目标频率。这里和两路相机 `30 fps` 对齐。
-- `--dataset.num_episodes=10`：本次连续采集 10 条 episode。
-- `--dataset.episode_time_s=30`：每条 episode 最长 30 秒。
-- `--dataset.reset_time_s=10`：两条 episode 之间留 10 秒复位时间。
-- `--dataset.single_task="Fly to the target and operate the gripper"`：本批数据的任务描述。
-- `--dataset.push_to_hub=false`：采集后只保存到本地，不自动上传 Hugging Face Hub。
+- `DATASET_FPS`：默认 `30`。LeRobot 保存数据的目标频率。这里和两路相机 `30 fps` 对齐。
+- `NUM_EPISODES`：默认 `1`。本次连续采集的 episode 数量。
+- `EPISODE_TIME_S`：默认 `30`。每条 episode 最长 30 秒。
+- `RESET_TIME_S`：默认 `10`。两条 episode 之间留 10 秒复位时间。
+- `TASK`：默认 `Fly to the target and operate the gripper`。本批数据的任务描述。
+- `PUSH_TO_HUB`：默认 `false`。采集后只保存到本地，不自动上传 Hugging Face Hub。
+- `DATASET_VIDEO`：默认 `true`。正式训练 SmolVLA 时必须保留图像；调试时可以临时设置为 `false`。
+- `PLAY_SOUNDS`：默认 `false`。关闭录制提示音，避免 NX 环境缺少音频设备时报错。
 
 ### 13.4 时间戳对齐规则
 
