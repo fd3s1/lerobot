@@ -12,6 +12,7 @@
 #include <mavros_msgs/srv/set_mode.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/u_int8.hpp>
 
 #include "controller.h"
@@ -57,6 +58,7 @@ public:
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr expert_pose_pub;
   rclcpp::Publisher<mavros_msgs::msg::PositionTarget>::SharedPtr ctrl_FCU_pub;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr gripper_cmd_pub;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr fsm_state_pub;
   rclcpp::Client<mavros_msgs::srv::SetMode>::SharedPtr set_FCU_mode_srv;
   rclcpp::Client<mavros_msgs::srv::CommandBool>::SharedPtr arming_client_srv;
   rclcpp::Client<mavros_msgs::srv::CommandLong>::SharedPtr reboot_FCU_srv;
@@ -96,6 +98,7 @@ private:
   void publish_position_ctrl(const Controller_Output_t &u, const rclcpp::Time &stamp);
   void publish_expert_pose(const Desired_State_t &des, const rclcpp::Time &stamp);
   void publish_trigger(const geometry_msgs::msg::PoseStamped &odom_msg);
+  void publish_fsm_state();
   void publish_gripper_safety();
   void publish_gripper_from_rc();
   void publish_gripper_target(double target, bool force = false);
@@ -107,6 +110,7 @@ private:
   void reboot_FCU();
   double clamp(double value, double low, double high) const;
   Desired_State_t clamp_desired(const Desired_State_t &des) const;
+  const char *state_to_string(State_t state) const;
 };
 
 #endif

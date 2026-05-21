@@ -15,6 +15,7 @@ PX4CtrlFSM::PX4CtrlFSM(Parameter_t &param_, LinearControl &controller_, rclcpp::
 {
   state = MANUAL_CTRL;
   hover_pose.setZero();
+  fsm_state_pub = node_->create_publisher<std_msgs::msg::String>("/px4ctrl/state", 10);
 }
 
 void PX4CtrlFSM::process()
@@ -209,6 +210,7 @@ void PX4CtrlFSM::process()
   }
 
   land_detector(state, des, odom_data);
+  publish_fsm_state();
 
   rc_data.enter_hover_mode = false;
   rc_data.enter_command_mode = false;
@@ -433,6 +435,17 @@ void PX4CtrlFSM::publish_trigger(const geometry_msgs::msg::PoseStamped &odom_msg
   traj_start_trigger_pub->publish(odom_msg);
 }
 
+void PX4CtrlFSM::publish_fsm_state()
+{
+  if (!fsm_state_pub) {
+    return;
+  }
+
+  std_msgs::msg::String msg;
+  msg.data = state_to_string(state);
+  fsm_state_pub->publish(msg);
+}
+
 void PX4CtrlFSM::publish_gripper_safety()
 {
   if (should_force_gripper_open()) {
@@ -569,4 +582,21 @@ Desired_State_t PX4CtrlFSM::clamp_desired(const Desired_State_t &des) const
   safe.p.z() = clamp(safe.p.z(), param.limits.z_min, param.limits.z_max);
   safe.yaw = uav_utils::normalize_angle(safe.yaw);
   return safe;
+}
+
+const char *PX4CtrlFSM::state_to_string(State_t state) const
+{
+  switch (state) {
+    case MANUAL_CTRL:
+      return "MANUAL_CTRL";
+    case AUTO_HOVER:
+      return "AUTO_HOVER";
+    case CMD_CTRL:
+      return "CMD_CTRL";
+    case AUTO_TAKEOFF:
+      return "AUTO_TAKEOFF";
+    case AUTO_LAND:
+      return "AUTO_LAND";
+  }
+  return "UNKNOWN";
 }

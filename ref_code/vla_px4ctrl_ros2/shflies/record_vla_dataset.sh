@@ -32,6 +32,10 @@ DATASET_FPS="${DATASET_FPS:-20}"
 NUM_EPISODES="${NUM_EPISODES:-1}"
 EPISODE_TIME_S="${EPISODE_TIME_S:-30}"
 RECORD_PREWARM_STEPS="${RECORD_PREWARM_STEPS:-2}"
+START_GATE_TOPIC="${START_GATE_TOPIC-/px4ctrl/state}"
+START_GATE_VALUE="${START_GATE_VALUE:-AUTO_HOVER}"
+START_GATE_STABLE_S="${START_GATE_STABLE_S:-3.0}"
+START_GATE_TIMEOUT_S="${START_GATE_TIMEOUT_S:-0.0}"
 RESET_TIME_S="${RESET_TIME_S:-10}"
 TASK="${TASK:-Fly to the target and operate the gripper}"
 PUSH_TO_HUB="${PUSH_TO_HUB:-false}"
@@ -82,6 +86,10 @@ echo "[record-vla-dataset] repo id: ${REPO_ID}"
 echo "[record-vla-dataset] episodes: ${NUM_EPISODES}"
 echo "[record-vla-dataset] episode time: ${EPISODE_TIME_S}s"
 echo "[record-vla-dataset] record prewarm steps: ${RECORD_PREWARM_STEPS}"
+echo "[record-vla-dataset] start gate topic: ${START_GATE_TOPIC:-disabled}"
+echo "[record-vla-dataset] start gate value: ${START_GATE_VALUE}"
+echo "[record-vla-dataset] start gate stable time: ${START_GATE_STABLE_S}s"
+echo "[record-vla-dataset] start gate timeout: ${START_GATE_TIMEOUT_S}s"
 echo "[record-vla-dataset] reset time: ${RESET_TIME_S}s"
 echo "[record-vla-dataset] video: ${DATASET_VIDEO}"
 echo "[record-vla-dataset] dataset fps: ${DATASET_FPS}"
@@ -117,6 +125,10 @@ PYTHONUNBUFFERED=1 lerobot-record \
   --dataset.num_episodes="${NUM_EPISODES}" \
   --dataset.episode_time_s="${EPISODE_TIME_S}" \
   --dataset.record_prewarm_steps="${RECORD_PREWARM_STEPS}" \
+  --dataset.start_gate_topic="${START_GATE_TOPIC}" \
+  --dataset.start_gate_value="${START_GATE_VALUE}" \
+  --dataset.start_gate_stable_s="${START_GATE_STABLE_S}" \
+  --dataset.start_gate_timeout_s="${START_GATE_TIMEOUT_S}" \
   --dataset.reset_time_s="${RESET_TIME_S}" \
   --dataset.single_task="${TASK}" \
   --dataset.push_to_hub="${PUSH_TO_HUB}" \

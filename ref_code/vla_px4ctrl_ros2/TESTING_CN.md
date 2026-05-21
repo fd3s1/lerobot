@@ -676,6 +676,7 @@ bash shflies/record_vla_dataset.sh
 - 保存位置：`~/vla_drone/data/vla_drone_grasp_YYYYmmdd_HHMMSS`
 - episode 数量：`1`
 - 每条 episode 时长：`30 s`
+- 开始门控：等待 `/px4ctrl/state` 连续 `AUTO_HOVER` `3.0 s` 后才开始正式录制
 - 正式计时前预热：`2` 轮 observation/action 读取，不发送 action，不写入数据集
 - reset 时长：`10 s`
 - 采集频率：`20 fps`
@@ -691,6 +692,9 @@ cd ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
 
 # 稳定优先：默认 20 fps，录 3 条，每条 30 秒
 NUM_EPISODES=3 EPISODE_TIME_S=30 bash shflies/record_vla_dataset.sh
+
+# 关闭 AUTO_HOVER 开始门控，仅用于地面调试
+START_GATE_TOPIC="" bash shflies/record_vla_dataset.sh
 
 # 质量优先：恢复 30 fps，但对 NX 压力更大
 DATASET_FPS=30 CAMERA_FPS=30 TELEOP_MAX_POSE_AGE_S=0.5 \
@@ -743,6 +747,10 @@ Dataset 参数：
 - `NUM_EPISODES`：默认 `1`。本次连续采集的 episode 数量。
 - `EPISODE_TIME_S`：默认 `30`。每条 episode 最长 30 秒。
 - `RECORD_PREWARM_STEPS`：默认 `2`。每条 episode 正式计时前先读取若干轮 observation 和 teleop action，用来预热相机、ROS pose、专家 pose 和夹爪读取路径。预热阶段不会调用 `robot.send_action()`，不会发布位置 action 或夹爪 action，也不会调用 `dataset.add_frame()`，因此不会污染数据集。
+- `START_GATE_TOPIC`：默认 `/px4ctrl/state`。正式录制前等待的 ROS2 String topic。设为空字符串可关闭门控。
+- `START_GATE_VALUE`：默认 `AUTO_HOVER`。只有 topic 内容等于该值时才开始稳定计时。
+- `START_GATE_STABLE_S`：默认 `3.0`。`/px4ctrl/state` 必须连续保持 `AUTO_HOVER` 的时间。切出 AUTO_HOVER 会清零重新计时。
+- `START_GATE_TIMEOUT_S`：默认 `0.0`。`0.0` 表示无限等待。现场飞行建议保持无限等待，准备好后切入 AUTO_HOVER 即可。
 - `RESET_TIME_S`：默认 `10`。两条 episode 之间留 10 秒复位时间。
 - `TASK`：默认 `Fly to the target and operate the gripper`。本批数据的任务描述。
 - `PUSH_TO_HUB`：默认 `false`。采集后只保存到本地，不自动上传 Hugging Face Hub。
@@ -754,14 +762,40 @@ Dataset 参数：
 - `IMAGE_WRITER_THREADS_PER_CAMERA`：默认 `2`。两路相机共 4 个写图线程。原默认每相机 4 个线程在 NX 上容易和 ROS 回调、相机读取抢 CPU。
 - `PLAY_SOUNDS`：默认 `false`。关闭录制提示音，避免 NX 环境缺少音频设备时报错。
 
-### 13.4 时间戳对齐规则
+### 13.4 飞行中开始采集流程
+
+正式飞行采集时，不需要在地面提前进入 AUTO_HOVER 再等待录制启动。推荐流程：
+
+1. 终端 A 启动 `run_mocap_mavros.sh`。
+2. 终端 B 启动 `record_vla_dataset.sh`。
+3. 录制脚本完成相机、ROS、夹爪连接后，会等待 `/px4ctrl/state == AUTO_HOVER`，此时还没有开始写入 dataset。
+4. 手动使用 POSCTL 起飞到合适位置。
+5. CH5 切入 auto hover。
+6. `/px4ctrl/state` 连续保持 `AUTO_HOVER` `3.0 s` 后，脚本执行 `RECORD_PREWARM_STEPS` 预热，然后正式开始 episode 计时和写入数据。
+
+检查命令：
+
+```bash
+ros2 topic echo /px4ctrl/state
+ros2 topic echo /px4ctrl/expert_pose
+ros2 topic echo /mavros/state
+```
+
+注意：
+
+- AUTO_HOVER 门控依据的是 px4ctrl 内部 FSM 状态 `/px4ctrl/state`，不是 PX4 的 `/mavros/state.mode`。
+- 未进入 AUTO_HOVER 前可以没有 `/px4ctrl/expert_pose`，录制脚本不会在门控通过前读取 expert action。
+- 门控和预热阶段都不会调用 `dataset.add_frame()`，不会污染数据集。
+- 门控和预热阶段都不会调用 `robot.send_action()`，不会发布 `/position_cmd`，也不会主动驱动夹爪。
+
+### 13.5 时间戳对齐规则
 
 - `/px4ctrl/expert_pose.header.stamp` 来自 px4ctrl 控制周期，和同周期控制目标一致。
 - `ros_expert_pose` teleop 每帧读取最新 `/px4ctrl/expert_pose`，如果 age 超过 `--teleop.max_pose_age_s` 就停止记录并报错。
 - `vla_drone` robot 在一次 `get_observation()` 中读取相机、夹爪和 mocap pose，并把它们保存成同一帧 observation。
 - `/gripper/command` 是保持型目标命令，不是连续流；teleop 会记录最后一次夹爪目标。没有收到夹爪命令时默认记录 `100.0`，即全开。
 
-### 13.5 每次采集前检查
+### 13.6 每次采集前检查
 
 ```bash
 ros2 topic hz /mavros/vision_pose/pose

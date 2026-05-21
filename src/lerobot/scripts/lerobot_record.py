@@ -166,6 +166,14 @@ class DatasetRecordConfig:
     # Number of observation/action read cycles to run before starting each recorded episode.
     # These cycles do not send robot actions and do not write dataset frames.
     record_prewarm_steps: int = 0
+    # Optional ROS2 String topic gate checked before each recorded episode.
+    # Recording starts only after start_gate_topic publishes start_gate_value
+    # continuously for start_gate_stable_s seconds. Empty topic disables it.
+    start_gate_topic: str = ""
+    start_gate_value: str = "AUTO_HOVER"
+    start_gate_stable_s: int | float = 3.0
+    # 0 means wait indefinitely.
+    start_gate_timeout_s: int | float = 0.0
     # Number of seconds for resetting the environment after each episode.
     reset_time_s: int | float = 60
     # Number of episodes to record.
@@ -209,6 +217,116 @@ class DatasetRecordConfig:
     def __post_init__(self):
         if self.single_task is None:
             raise ValueError("You need to provide a task as argument in `single_task`.")
+
+
+def wait_for_start_gate(
+    topic: str,
+    value: str,
+    stable_s: int | float,
+    timeout_s: int | float,
+) -> None:
+    if not topic:
+        return
+
+    import rclpy
+    from rclpy.executors import SingleThreadedExecutor
+    from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+    from std_msgs.msg import String
+
+    if not value:
+        raise ValueError("dataset.start_gate_value must be non-empty when start_gate_topic is set.")
+
+    if not rclpy.ok():
+        rclpy.init(args=None)
+
+    node = rclpy.create_node("lerobot_record_start_gate")
+    latest_value: str | None = None
+    latest_received_s: float | None = None
+    stable_since_s: float | None = None
+    start_s = time.monotonic()
+    next_status_log_s = start_s
+    max_message_age_s = 0.5
+    stable_s = max(float(stable_s), 0.0)
+    timeout_s = max(float(timeout_s), 0.0)
+
+    def callback(msg: String) -> None:
+        nonlocal latest_value, latest_received_s
+        latest_value = str(msg.data)
+        latest_received_s = time.monotonic()
+
+    reliable_qos = QoSProfile(
+        reliability=ReliabilityPolicy.RELIABLE,
+        durability=DurabilityPolicy.VOLATILE,
+        history=HistoryPolicy.KEEP_LAST,
+        depth=10,
+    )
+    best_effort_qos = QoSProfile(
+        reliability=ReliabilityPolicy.BEST_EFFORT,
+        durability=DurabilityPolicy.VOLATILE,
+        history=HistoryPolicy.KEEP_LAST,
+        depth=10,
+    )
+    node.create_subscription(String, topic, callback, reliable_qos)
+    node.create_subscription(String, topic, callback, best_effort_qos)
+
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
+
+    logging.info(
+        "Record start gate waiting for %s == %r stable for %.3f s. "
+        "Prepare/take off now; recording has not started.",
+        topic,
+        value,
+        stable_s,
+    )
+
+    try:
+        while True:
+            executor.spin_once(timeout_sec=0.1)
+            now_s = time.monotonic()
+
+            if timeout_s > 0.0 and now_s - start_s > timeout_s:
+                raise TimeoutError(
+                    f"Timed out waiting for start gate {topic} == {value!r} "
+                    f"stable for {stable_s:.3f}s."
+                )
+
+            message_is_fresh = latest_received_s is not None and now_s - latest_received_s <= max_message_age_s
+
+            if latest_value == value and message_is_fresh:
+                if stable_since_s is None:
+                    stable_since_s = now_s
+                    logging.info(
+                        "Record start gate detected %s == %r; waiting %.3f s stability.",
+                        topic,
+                        value,
+                        stable_s,
+                    )
+                elif now_s - stable_since_s >= stable_s:
+                    logging.info("Record start gate passed; recording will start now.")
+                    return
+            else:
+                if stable_since_s is not None:
+                    logging.info(
+                        "Record start gate reset; %s changed from %r to %r.",
+                        topic,
+                        value,
+                        latest_value,
+                    )
+                stable_since_s = None
+
+            if now_s >= next_status_log_s:
+                logging.info(
+                    "Record start gate still waiting: latest %s=%r, target=%r, fresh=%s.",
+                    topic,
+                    latest_value,
+                    value,
+                    message_is_fresh,
+                )
+                next_status_log_s = now_s + 2.0
+    finally:
+        executor.shutdown()
+        node.destroy_node()
 
 
 def prewarm_record_inputs(
@@ -620,6 +738,12 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             recorded_episodes = 0
             while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
                 log_say(f"Recording episode {dataset.num_episodes}", cfg.play_sounds)
+                wait_for_start_gate(
+                    topic=cfg.dataset.start_gate_topic,
+                    value=cfg.dataset.start_gate_value,
+                    stable_s=cfg.dataset.start_gate_stable_s,
+                    timeout_s=cfg.dataset.start_gate_timeout_s,
+                )
                 prewarm_record_inputs(
                     robot=robot,
                     fps=cfg.dataset.fps,
