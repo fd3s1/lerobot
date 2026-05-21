@@ -104,6 +104,7 @@ class ROSExpertPoseTeleop(Teleoperator):
         import rclpy
         from geometry_msgs.msg import PoseStamped
         from rclpy.executors import SingleThreadedExecutor
+        from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
         from std_msgs.msg import Float64
 
         self._rclpy = rclpy
@@ -111,8 +112,22 @@ class ROSExpertPoseTeleop(Teleoperator):
             rclpy.init(args=None)
 
         self._node = rclpy.create_node(self.config.ros_node_name)
-        self._node.create_subscription(PoseStamped, self.config.expert_pose_topic, self._pose_cb, 10)
-        self._node.create_subscription(Float64, self.config.gripper_topic, self._gripper_cb, 10)
+        reliable_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+        best_effort_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+        self._node.create_subscription(PoseStamped, self.config.expert_pose_topic, self._pose_cb, reliable_qos)
+        self._node.create_subscription(PoseStamped, self.config.expert_pose_topic, self._pose_cb, best_effort_qos)
+        self._node.create_subscription(Float64, self.config.gripper_topic, self._gripper_cb, reliable_qos)
+        self._node.create_subscription(Float64, self.config.gripper_topic, self._gripper_cb, best_effort_qos)
 
         self._executor = SingleThreadedExecutor()
         self._executor.add_node(self._node)
@@ -157,13 +172,23 @@ class ROSExpertPoseTeleop(Teleoperator):
         if not self._connected:
             raise RuntimeError("ROS expert pose teleoperator is not connected.")
 
-        now_s = time.monotonic()
-        with self._lock:
-            pose = self._latest_pose
-            gripper = self._latest_gripper
+        deadline_s = time.monotonic() + max(self.config.startup_timeout_s, 0.0)
+        while True:
+            now_s = time.monotonic()
+            with self._lock:
+                pose = self._latest_pose
+                gripper = self._latest_gripper
+
+            if pose is not None or now_s >= deadline_s:
+                break
+
+            time.sleep(0.005)
 
         if pose is None:
-            raise RuntimeError(f"No expert pose received on {self.config.expert_pose_topic}.")
+            raise RuntimeError(
+                f"No expert pose received on {self.config.expert_pose_topic} "
+                f"within {self.config.startup_timeout_s:.3f}s."
+            )
 
         pose_age_s = now_s - pose.received_at_s
         if pose_age_s > self.config.max_pose_age_s:
