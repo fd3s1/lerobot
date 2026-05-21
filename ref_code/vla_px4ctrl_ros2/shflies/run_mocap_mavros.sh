@@ -12,6 +12,10 @@ FCU_URL="${FCU_URL:-/dev/ttyACM0:921600}"
 GCS_URL="${GCS_URL:-udp://@10.1.1.198:14550}"
 BRIDGE_RESTAMP="${BRIDGE_RESTAMP:-false}"
 PX4CTRL_PARAMS_FILE="${PX4CTRL_PARAMS_FILE:-${WORKSPACE_DIR}/install/px4ctrl/share/px4ctrl/config/ctrl_param_fpv.yaml}"
+MAVROS_CONFIG_FILE="${MAVROS_CONFIG_FILE:-/opt/ros/humble/share/mavros/launch/px4_config.yaml}"
+MAVROS_LIGHT="${MAVROS_LIGHT:-true}"
+MAVROS_LIGHT_PLUGINLISTS_FILE="${MAVROS_LIGHT_PLUGINLISTS_FILE:-${WORKSPACE_DIR}/config/mavros_vla_pluginlists.yaml}"
+MAVROS_FULL_PLUGINLISTS_FILE="${MAVROS_FULL_PLUGINLISTS_FILE:-/opt/ros/humble/share/mavros/launch/px4_pluginlists.yaml}"
 START_PX4CTRL="${START_PX4CTRL:-true}"
 
 PIDS=()
@@ -57,8 +61,16 @@ echo "[run-mocap-mavros] bridge: ${VRPN_SOURCE_TOPIC} -> ${MAVROS_VISION_TOPIC}"
 echo "[run-mocap-mavros] fcu_url: ${FCU_URL}"
 echo "[run-mocap-mavros] gcs_url: ${GCS_URL}"
 echo "[run-mocap-mavros] bridge restamp: ${BRIDGE_RESTAMP}"
+echo "[run-mocap-mavros] mavros light mode: ${MAVROS_LIGHT}"
 echo "[run-mocap-mavros] start px4ctrl: ${START_PX4CTRL}"
 echo "[run-mocap-mavros] px4ctrl params: ${PX4CTRL_PARAMS_FILE}"
+
+if [[ "${MAVROS_LIGHT}" == "true" ]]; then
+  MAVROS_PLUGINLISTS_FILE="${MAVROS_LIGHT_PLUGINLISTS_FILE}"
+else
+  MAVROS_PLUGINLISTS_FILE="${MAVROS_FULL_PLUGINLISTS_FILE}"
+fi
+echo "[run-mocap-mavros] mavros plugin list: ${MAVROS_PLUGINLISTS_FILE}"
 
 start_process ros2 run vrpn_mocap client_node --ros-args \
   -p server:="${VRPN_SERVER}" \
@@ -66,7 +78,12 @@ start_process ros2 run vrpn_mocap client_node --ros-args \
 
 sleep 1
 
-start_process ros2 launch mavros px4.launch fcu_url:="${FCU_URL}" gcs_url:="${GCS_URL}"
+start_process ros2 launch mavros node.launch \
+  fcu_url:="${FCU_URL}" \
+  gcs_url:="${GCS_URL}" \
+  pluginlists_yaml:="${MAVROS_PLUGINLISTS_FILE}" \
+  config_yaml:="${MAVROS_CONFIG_FILE}" \
+  namespace:=mavros
 
 sleep 2
 

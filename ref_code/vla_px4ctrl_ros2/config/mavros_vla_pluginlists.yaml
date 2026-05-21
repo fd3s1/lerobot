@@ -1,0 +1,28 @@
+/**:
+  ros__parameters:
+    # Keep only the MAVROS plugins needed by the VLA drone data-collection
+    # stack. This reduces ROS topic count, DDS traffic, and callback load on NX.
+    #
+    # Required by px4ctrl:
+    #   sys_status: /mavros/state, /mavros/extended_state, /mavros/battery,
+    #               /mavros/set_mode
+    #   command:    /mavros/cmd/arming, /mavros/cmd/command
+    #   rc_io:      /mavros/rc/in
+    #   setpoint_raw: /mavros/setpoint_raw/local
+    #   vision_pose: /mavros/vision_pose/pose -> PX4 EV input
+    #   sys_time:   MAVLink time/timesync support
+    #
+    # Kept for diagnostics:
+    #   local_position: /mavros/local_position/*
+    #   imu:            /mavros/imu/*
+    plugin_allowlist:
+      - sys_status
+      - sys_time
+      - command
+      - rc_io
+      - setpoint_raw
+      - vision_pose
+      - local_position
+      - imu
+
+    plugin_denylist: []

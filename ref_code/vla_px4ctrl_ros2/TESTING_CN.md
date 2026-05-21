@@ -627,6 +627,22 @@ cd ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
 bash shflies/run_mocap_mavros.sh
 ```
 
+默认使用轻量 MAVROS 插件列表，只加载采集需要的插件，减少 ROS topic 数量和 NX 负载。保留的 MAVROS 功能包括：
+
+- `/mavros/state`、`/mavros/extended_state`、`/mavros/battery`
+- `/mavros/rc/in`
+- `/mavros/set_mode`、`/mavros/cmd/arming`、`/mavros/cmd/command`
+- `/mavros/setpoint_raw/local`
+- `/mavros/vision_pose/pose`
+- `/mavros/local_position/*` 和 `/mavros/imu/*` 诊断 topic
+
+如果需要临时恢复 MAVROS 原始全插件配置：
+
+```bash
+cd ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
+MAVROS_LIGHT=false bash shflies/run_mocap_mavros.sh
+```
+
 确认以下 topic 正常：
 
 ```bash
@@ -661,7 +677,9 @@ bash shflies/record_vla_dataset.sh
 - episode 数量：`1`
 - 每条 episode 时长：`30 s`
 - reset 时长：`10 s`
+- 采集频率：`20 fps`
 - 图像保存：开启，两路相机 `/dev/video0` 和 `/dev/video2`
+- 视频编码：`h264`
 - 上传 Hugging Face Hub：关闭
 
 常用覆盖示例：
@@ -669,8 +687,12 @@ bash shflies/record_vla_dataset.sh
 ```bash
 cd ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
 
-# 录 3 条，每条 30 秒
+# 稳定优先：默认 20 fps，录 3 条，每条 30 秒
 NUM_EPISODES=3 EPISODE_TIME_S=30 bash shflies/record_vla_dataset.sh
+
+# 质量优先：恢复 30 fps，但对 NX 压力更大
+DATASET_FPS=30 CAMERA_FPS=30 TELEOP_MAX_POSE_AGE_S=0.5 \
+  bash shflies/record_vla_dataset.sh
 
 # 只做 10 秒调试，并关闭视频
 DATASET_PREFIX=debug_vla_drone EPISODE_TIME_S=10 RESET_TIME_S=1 DATASET_VIDEO=false \
@@ -703,24 +725,29 @@ Robot 参数：
 - `GRIPPER_PORT`：默认 `/dev/ttyACM1`。Feetech 舵机总线串口。
 - `FRONT_CAMERA`：默认 `/dev/video0`，前视相机。
 - `DOWN_CAMERA`：默认 `/dev/video2`，夹爪/下视相机。
-- `CAMERA_WIDTH`、`CAMERA_HEIGHT`、`CAMERA_FPS`：默认 `640`、`480`、`30`。
+- `CAMERA_WIDTH`、`CAMERA_HEIGHT`、`CAMERA_FPS`：默认 `640`、`480`、`20`。需要 30fps 时可设置 `CAMERA_FPS=30`。
 
 Teleop 参数：
 
 - `EXPERT_POSE_TOPIC`：默认 `/px4ctrl/expert_pose`。读取 px4ctrl 发布的专家目标位姿，保存为 action 的 `x, y, z, yaw`。
 - `GRIPPER_TOPIC`：默认 `/gripper/command`。读取 CH10 产生的夹爪命令，保存为 action 的 `gripper_left.pos, gripper_right.pos`。
 - `TELEOP_STARTUP_TIMEOUT_S`：默认 `2.0`。录制刚开始时等待第一帧 `/px4ctrl/expert_pose` 的最长时间。
-- `TELEOP_MAX_POSE_AGE_S`：默认 `0.2`。允许专家 pose 的最大年龄。如果 `/px4ctrl/expert_pose` 超过该时间没更新，录制会报错，避免保存动作和图像严重错位的数据。
+- `TELEOP_MAX_POSE_AGE_S`：默认 `0.5`。允许专家 pose 的最大年龄。如果 `/px4ctrl/expert_pose` 超过该时间没更新，录制会报错，避免保存动作和图像严重错位的数据。之前 `0.2 s` 在 NX 高负载时容易因为 ROS 回调线程被抢占而误触发。
 
 Dataset 参数：
 
-- `DATASET_FPS`：默认 `30`。LeRobot 保存数据的目标频率。这里和两路相机 `30 fps` 对齐。
+- `DATASET_FPS`：默认 `20`。LeRobot 保存数据的目标频率。默认降到 20fps 是为了降低 NX 上双相机、写盘和 ROS 回调竞争。需要 30fps 时可设置 `DATASET_FPS=30 CAMERA_FPS=30`。
 - `NUM_EPISODES`：默认 `1`。本次连续采集的 episode 数量。
 - `EPISODE_TIME_S`：默认 `30`。每条 episode 最长 30 秒。
 - `RESET_TIME_S`：默认 `10`。两条 episode 之间留 10 秒复位时间。
 - `TASK`：默认 `Fly to the target and operate the gripper`。本批数据的任务描述。
 - `PUSH_TO_HUB`：默认 `false`。采集后只保存到本地，不自动上传 Hugging Face Hub。
 - `DATASET_VIDEO`：默认 `true`。正式训练 SmolVLA 时必须保留图像；调试时可以临时设置为 `false`。
+- `DATASET_VCODEC`：默认 `h264`。比 `libsvtav1` 编码压力更低，文件会更大一些，但更适合 NX 现场采集。
+- `STREAMING_ENCODING`：默认 `false`。保持先写临时图像、episode 后再编码，避免实时编码抢占飞行采集主循环。
+- `ENCODER_THREADS`：默认 `2`。限制视频编码线程数，减少编码阶段对系统的冲击。
+- `IMAGE_WRITER_PROCESSES`：默认 `0`。使用线程写图，不额外开子进程。
+- `IMAGE_WRITER_THREADS_PER_CAMERA`：默认 `2`。两路相机共 4 个写图线程。原默认每相机 4 个线程在 NX 上容易和 ROS 回调、相机读取抢 CPU。
 - `PLAY_SOUNDS`：默认 `false`。关闭录制提示音，避免 NX 环境缺少音频设备时报错。
 
 ### 13.4 时间戳对齐规则

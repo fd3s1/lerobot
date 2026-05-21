@@ -25,20 +25,25 @@ FRONT_CAMERA="${FRONT_CAMERA:-/dev/video0}"
 DOWN_CAMERA="${DOWN_CAMERA:-/dev/video2}"
 CAMERA_WIDTH="${CAMERA_WIDTH:-640}"
 CAMERA_HEIGHT="${CAMERA_HEIGHT:-480}"
-CAMERA_FPS="${CAMERA_FPS:-30}"
+CAMERA_FPS="${CAMERA_FPS:-20}"
 
-DATASET_FPS="${DATASET_FPS:-30}"
+DATASET_FPS="${DATASET_FPS:-20}"
 NUM_EPISODES="${NUM_EPISODES:-1}"
 EPISODE_TIME_S="${EPISODE_TIME_S:-30}"
 RESET_TIME_S="${RESET_TIME_S:-10}"
 TASK="${TASK:-Fly to the target and operate the gripper}"
 PUSH_TO_HUB="${PUSH_TO_HUB:-false}"
 DATASET_VIDEO="${DATASET_VIDEO:-true}"
+DATASET_VCODEC="${DATASET_VCODEC:-h264}"
+STREAMING_ENCODING="${STREAMING_ENCODING:-false}"
+ENCODER_THREADS="${ENCODER_THREADS:-2}"
+IMAGE_WRITER_PROCESSES="${IMAGE_WRITER_PROCESSES:-0}"
+IMAGE_WRITER_THREADS_PER_CAMERA="${IMAGE_WRITER_THREADS_PER_CAMERA:-2}"
 PLAY_SOUNDS="${PLAY_SOUNDS:-false}"
 
 ROBOT_MAX_POSE_AGE_S="${ROBOT_MAX_POSE_AGE_S:-2.0}"
 TELEOP_STARTUP_TIMEOUT_S="${TELEOP_STARTUP_TIMEOUT_S:-2.0}"
-TELEOP_MAX_POSE_AGE_S="${TELEOP_MAX_POSE_AGE_S:-0.2}"
+TELEOP_MAX_POSE_AGE_S="${TELEOP_MAX_POSE_AGE_S:-0.5}"
 
 if [[ -f "${CONDA_SH}" ]]; then
   set +u
@@ -76,6 +81,12 @@ echo "[record-vla-dataset] episodes: ${NUM_EPISODES}"
 echo "[record-vla-dataset] episode time: ${EPISODE_TIME_S}s"
 echo "[record-vla-dataset] reset time: ${RESET_TIME_S}s"
 echo "[record-vla-dataset] video: ${DATASET_VIDEO}"
+echo "[record-vla-dataset] dataset fps: ${DATASET_FPS}"
+echo "[record-vla-dataset] camera fps: ${CAMERA_FPS}"
+echo "[record-vla-dataset] video codec: ${DATASET_VCODEC}"
+echo "[record-vla-dataset] streaming encoding: ${STREAMING_ENCODING}"
+echo "[record-vla-dataset] image writer processes: ${IMAGE_WRITER_PROCESSES}"
+echo "[record-vla-dataset] image writer threads/camera: ${IMAGE_WRITER_THREADS_PER_CAMERA}"
 echo "[record-vla-dataset] front camera: ${FRONT_CAMERA}"
 echo "[record-vla-dataset] down camera: ${DOWN_CAMERA}"
 echo "[record-vla-dataset] gripper port: ${GRIPPER_PORT}"
@@ -105,4 +116,9 @@ PYTHONUNBUFFERED=1 lerobot-record \
   --dataset.single_task="${TASK}" \
   --dataset.push_to_hub="${PUSH_TO_HUB}" \
   --dataset.video="${DATASET_VIDEO}" \
+  --dataset.vcodec="${DATASET_VCODEC}" \
+  --dataset.streaming_encoding="${STREAMING_ENCODING}" \
+  --dataset.encoder_threads="${ENCODER_THREADS}" \
+  --dataset.num_image_writer_processes="${IMAGE_WRITER_PROCESSES}" \
+  --dataset.num_image_writer_threads_per_camera="${IMAGE_WRITER_THREADS_PER_CAMERA}" \
   --play_sounds="${PLAY_SOUNDS}"
