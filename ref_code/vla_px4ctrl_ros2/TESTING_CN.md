@@ -373,7 +373,23 @@ ros2 topic echo /px4ctrl/expert_pose
 ros2 topic hz /px4ctrl/expert_pose
 ```
 
-期望频率接近 `ctrl_freq_max`，默认约 `100 Hz`。
+期望频率接近 `ctrl_freq_max`，当前默认约 `60 Hz`。
+
+位置限幅检查：
+
+`AUTO_HOVER` 下 `/px4ctrl/expert_pose` 是 px4ctrl 的目标位置，目标位置会被 `ctrl_param_fpv.yaml` 里的 `limits` 限制。当前默认范围：
+
+```yaml
+limits:
+  x_min: -12.0
+  x_max: 8.0
+  y_min: -3.5
+  y_max: 3.5
+  z_min: -0.3
+  z_max: 3.0
+```
+
+如果飞机实际 mocap 位置已经在限幅外，例如 `x < x_min`，切入 `AUTO_HOVER` 后目标点会被夹到边界，表现为某些方向打杆没有反应、只能往场地内部方向移动。飞行前应确认采集区域完全落在 `limits` 内，修改后需要重新 `colcon build --packages-select px4ctrl` 并重启 `run_mocap_mavros.sh`。
 
 ## 8. 单独测试 RC 第 10 通道到夹爪命令 topic
 
@@ -824,6 +840,7 @@ ros2 topic echo /gripper/command
 
 - QGC 没有 `yaw_estimate_error`。
 - Position 模式悬停稳定。
+- 当前 mocap 位置在 `ctrl_param_fpv.yaml` 的 `limits` 范围内，特别是大场地负 X 方向不要小于 `x_min`。
 - `POSCTL/OFFBOARD` 下 CH10 能实际控制夹爪。
 - `ALTCTL/STABILIZED/MANUAL/AUTO_LAND/未解锁/z <= 0.15 m` 下夹爪自动全开。
 - `/dev/video0` 和 `/dev/video2` 都能被 LeRobot 找到。
