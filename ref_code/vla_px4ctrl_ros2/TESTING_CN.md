@@ -637,6 +637,8 @@ ros2 topic echo /gripper/command
 
 ```bash
 conda activate vla-drone-v044
+source /opt/ros/humble/setup.bash
+source ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2/install/setup.bash
 cd ~/vla_drone/lerobot
 
 RUN_ID="$(date +%Y%m%d_%H%M%S)"
@@ -665,7 +667,7 @@ lerobot-record \
   --dataset.repo_id="${REPO_ID}" \
   --dataset.root="${DATASET_ROOT}" \
   --dataset.fps=30 \
-  --dataset.num_episodes=10 \
+  --dataset.num_episodes=1 \
   --dataset.episode_time_s=30 \
   --dataset.reset_time_s=10 \
   --dataset.single_task="Fly to the target and operate the gripper" \
@@ -680,6 +682,8 @@ lerobot-record \
 - `DATASET_NAME="vla_drone_grasp_${RUN_ID}"`：本次采集的数据集名，每次运行都会不同。
 - `DATASET_ROOT="${HOME}/vla_drone/data/${DATASET_NAME}"`：本地保存路径。
 - `REPO_ID="fd3s1/${DATASET_NAME}"`：数据集 ID。即使 `push_to_hub=false`，LeRobot 仍需要一个 repo_id 作为数据集标识。
+- `source /opt/ros/humble/setup.bash`：让 conda 终端能 import ROS2 的 `rclpy`。
+- `source ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2/install/setup.bash`：让 conda 终端能找到本 workspace 里的 ROS2 消息和节点环境。
 
 Robot 参数：
 

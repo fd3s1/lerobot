@@ -55,6 +55,7 @@ class ROS2PoseBridge:
         import rclpy
         from geometry_msgs.msg import PoseStamped
         from rclpy.executors import SingleThreadedExecutor
+        from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 
         self._rclpy = rclpy
         self._pose_msg_cls = PoseStamped
@@ -64,7 +65,13 @@ class ROS2PoseBridge:
 
         self._node = rclpy.create_node(self.node_name)
         self._publisher = self._node.create_publisher(PoseStamped, self.setpoint_topic, 10)
-        self._node.create_subscription(PoseStamped, self.pose_topic, self._pose_callback, 10)
+        pose_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+        self._node.create_subscription(PoseStamped, self.pose_topic, self._pose_callback, pose_qos)
 
         self._executor = SingleThreadedExecutor()
         self._executor.add_node(self._node)
@@ -91,13 +98,19 @@ class ROS2PoseBridge:
             self._latest_pose = pose
 
     def get_latest_pose(self, max_age_s: float) -> DronePose | None:
-        with self._lock:
-            pose = self._latest_pose
-        if pose is None:
-            return None
-        if time.monotonic() - pose.timestamp_s > max_age_s:
-            return None
-        return pose
+        deadline_s = time.monotonic() + max(max_age_s, 0.0)
+        while True:
+            with self._lock:
+                pose = self._latest_pose
+
+            now_s = time.monotonic()
+            if pose is not None and now_s - pose.timestamp_s <= max_age_s:
+                return pose
+
+            if now_s >= deadline_s:
+                return None
+
+            time.sleep(0.005)
 
     def publish_setpoint(self, x: float, y: float, z: float, yaw: float) -> None:
         if not self._connected or self._node is None or self._publisher is None or self._pose_msg_cls is None:
