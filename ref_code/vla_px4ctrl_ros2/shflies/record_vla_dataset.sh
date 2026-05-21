@@ -4,6 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_DIR="$(cd "${WORKSPACE_DIR}/../.." && pwd)"
+CAMERA_PATHS_FILE="${CAMERA_PATHS_FILE:-${SCRIPT_DIR}/record_camera_paths.env}"
+
+if [[ -f "${CAMERA_PATHS_FILE}" ]]; then
+  # shellcheck disable=SC1090
+  source "${CAMERA_PATHS_FILE}"
+fi
 
 CONDA_ENV="${CONDA_ENV:-vla-drone-v044}"
 CONDA_SH="${CONDA_SH:-${HOME}/miniforge3/etc/profile.d/conda.sh}"
@@ -26,8 +32,8 @@ DISCONNECT_GRIPPER_OPEN_POSITION="${DISCONNECT_GRIPPER_OPEN_POSITION:-100.0}"
 DISCONNECT_GRIPPER_REPEATS="${DISCONNECT_GRIPPER_REPEATS:-3}"
 DISCONNECT_GRIPPER_SETTLE_S="${DISCONNECT_GRIPPER_SETTLE_S:-0.5}"
 
-FRONT_CAMERA="${FRONT_CAMERA:-/dev/video0}"
-DOWN_CAMERA="${DOWN_CAMERA:-/dev/video2}"
+FRONT_CAMERA="${FRONT_CAMERA:-/dev/video2}"
+DOWN_CAMERA="${DOWN_CAMERA:-/dev/video0}"
 CAMERA_WIDTH="${CAMERA_WIDTH:-640}"
 CAMERA_HEIGHT="${CAMERA_HEIGHT:-480}"
 CAMERA_FPS="${CAMERA_FPS:-20}"

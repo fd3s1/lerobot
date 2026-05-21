@@ -697,7 +697,7 @@ bash shflies/record_vla_dataset.sh
 - reset 时长：`10 s`
 - 采集频率：`20 fps`
 - 相机 warmup：`3 s`
-- 图像保存：开启，两路相机 `/dev/video0` 和 `/dev/video2`
+- 图像保存：开启，两路相机，当前默认 `front=/dev/video2`、`down=/dev/video0`
 - 视频编码：`h264`
 - 上传 Hugging Face Hub：关闭
 
@@ -705,6 +705,15 @@ bash shflies/record_vla_dataset.sh
 
 ```bash
 cd ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
+
+# 采集前确认相机标签；如果设备号变化，可临时覆盖 FRONT_CAMERA/DOWN_CAMERA
+ffplay /dev/video2   # 应为前视
+ffplay /dev/video0   # 应为夹爪/下视
+
+# 推荐固定相机路径，避免每次上电 /dev/videoN 改变
+ls -l /dev/v4l/by-path/
+cp shflies/record_camera_paths.env.example shflies/record_camera_paths.env
+# 编辑 record_camera_paths.env，把 FRONT_CAMERA 和 DOWN_CAMERA 改成 /dev/v4l/by-path/... 路径
 
 # 稳定优先：默认 20 fps，录 3 条，每条 30 秒
 NUM_EPISODES=3 EPISODE_TIME_S=30 bash shflies/record_vla_dataset.sh
@@ -750,8 +759,9 @@ Robot 参数：
 - `DISCONNECT_GRIPPER_OPEN_POSITION`：默认 `100.0`。disconnect 前写入的夹爪全开目标。保持数据语义 `100 = 全开`。
 - `DISCONNECT_GRIPPER_REPEATS`：默认 `3`。disconnect 前重复写入全开目标的次数，降低单次串口写入失败的风险。
 - `DISCONNECT_GRIPPER_SETTLE_S`：默认 `0.5`。写入全开目标后等待舵机动作完成，再关闭串口和扭矩。
-- `FRONT_CAMERA`：默认 `/dev/video0`，前视相机。
-- `DOWN_CAMERA`：默认 `/dev/video2`，夹爪/下视相机。
+- `FRONT_CAMERA`：默认 `/dev/video2`，前视相机。
+- `DOWN_CAMERA`：默认 `/dev/video0`，夹爪/下视相机。
+- `CAMERA_PATHS_FILE`：默认 `shflies/record_camera_paths.env`。如果该文件存在，脚本会先读取它。建议在里面写 `/dev/v4l/by-path/...` 稳定路径，避免每次上电 `/dev/video0/2` 顺序变化。
 - `CAMERA_WIDTH`、`CAMERA_HEIGHT`、`CAMERA_FPS`：默认 `640`、`480`、`20`。需要 30fps 时可设置 `CAMERA_FPS=30`。
 - `CAMERA_WARMUP_S`：默认 `3`。相机连接后先读取几秒再进入 episode，减少第一次 record loop 因相机预热导致的低频 warning。
 
