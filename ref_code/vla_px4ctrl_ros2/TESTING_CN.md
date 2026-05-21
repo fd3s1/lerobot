@@ -745,6 +745,10 @@ Robot 参数：
 - `ROBOT_MAX_POSE_AGE_S`：默认 `2.0`。允许 LeRobot 在采集过程中短暂等待最新 mocap pose。NX 同时读两路相机和写数据时偶发调度延迟，`0.5 s` 容易误判为 pose 超时。
 - `MAVROS_SETPOINT_TOPIC`：默认 `/position_cmd`。推理阶段向 px4ctrl 发送目标位置的 topic。手动采集时保留该配置，但脚本固定使用 `--robot.send_pose_actions=false`，不会发送 pose action。
 - `GRIPPER_PORT`：默认 `/dev/ttyACM1`。Feetech 舵机总线串口。
+- `SAFE_OPEN_GRIPPER_ON_DISCONNECT`：默认 `true`。录制结束或异常退出进入 robot disconnect 时，在关闭 `/dev/ttyACM1` 前直接向 Feetech 舵机写入全开位置，避免串口关闭后夹爪停在闭合位置。
+- `DISCONNECT_GRIPPER_OPEN_POSITION`：默认 `100.0`。disconnect 前写入的夹爪全开目标。保持数据语义 `100 = 全开`。
+- `DISCONNECT_GRIPPER_REPEATS`：默认 `3`。disconnect 前重复写入全开目标的次数，降低单次串口写入失败的风险。
+- `DISCONNECT_GRIPPER_SETTLE_S`：默认 `0.5`。写入全开目标后等待舵机动作完成，再关闭串口和扭矩。
 - `FRONT_CAMERA`：默认 `/dev/video0`，前视相机。
 - `DOWN_CAMERA`：默认 `/dev/video2`，夹爪/下视相机。
 - `CAMERA_WIDTH`、`CAMERA_HEIGHT`、`CAMERA_FPS`：默认 `640`、`480`、`20`。需要 30fps 时可设置 `CAMERA_FPS=30`。
@@ -826,6 +830,7 @@ Expert pose on /px4ctrl/expert_pose is stale: 0.520s > 0.500s
 - `ros_expert_pose` teleop 每帧读取最新 `/px4ctrl/expert_pose`，如果 age 超过 `--teleop.max_pose_age_s` 就停止记录并报错。
 - `vla_drone` robot 在一次 `get_observation()` 中读取相机、夹爪和 mocap pose，并把它们保存成同一帧 observation。
 - `/gripper/command` 是保持型目标命令，不是连续流；teleop 会记录最后一次夹爪目标。没有收到夹爪命令时默认记录 `100.0`，即全开。
+- LeRobot 录制结束时，`vla_drone` robot 会在释放 `/dev/ttyACM1` 前直接把 Feetech 夹爪打开到 `100.0`。这个动作发生在 disconnect 阶段，不会保存进 dataset，也不会发布 `/position_cmd`。
 
 ### 13.6 每次采集前检查
 

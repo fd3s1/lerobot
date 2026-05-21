@@ -18,6 +18,10 @@ class VLADroneConfig(RobotConfig):
     gripper_right_inverted: bool = True
     disable_torque_on_disconnect: bool = True
     configure_gripper_motors: bool = True
+    safe_open_gripper_on_disconnect: bool = True
+    disconnect_gripper_open_position: float = 100.0
+    disconnect_gripper_repeats: int = 3
+    disconnect_gripper_settle_s: float = 0.5
 
     nokov_pose_topic: str = "/mavros/vision_pose/pose"
     mavros_setpoint_topic: str = "/position_cmd"

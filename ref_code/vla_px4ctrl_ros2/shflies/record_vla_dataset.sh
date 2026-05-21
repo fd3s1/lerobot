@@ -20,6 +20,10 @@ MAVROS_SETPOINT_TOPIC="${MAVROS_SETPOINT_TOPIC:-/position_cmd}"
 EXPERT_POSE_TOPIC="${EXPERT_POSE_TOPIC:-/px4ctrl/expert_pose}"
 GRIPPER_TOPIC="${GRIPPER_TOPIC:-/gripper/command}"
 GRIPPER_PORT="${GRIPPER_PORT:-/dev/ttyACM1}"
+SAFE_OPEN_GRIPPER_ON_DISCONNECT="${SAFE_OPEN_GRIPPER_ON_DISCONNECT:-true}"
+DISCONNECT_GRIPPER_OPEN_POSITION="${DISCONNECT_GRIPPER_OPEN_POSITION:-100.0}"
+DISCONNECT_GRIPPER_REPEATS="${DISCONNECT_GRIPPER_REPEATS:-3}"
+DISCONNECT_GRIPPER_SETTLE_S="${DISCONNECT_GRIPPER_SETTLE_S:-0.5}"
 
 FRONT_CAMERA="${FRONT_CAMERA:-/dev/video0}"
 DOWN_CAMERA="${DOWN_CAMERA:-/dev/video2}"
@@ -102,6 +106,10 @@ echo "[record-vla-dataset] image writer threads/camera: ${IMAGE_WRITER_THREADS_P
 echo "[record-vla-dataset] front camera: ${FRONT_CAMERA}"
 echo "[record-vla-dataset] down camera: ${DOWN_CAMERA}"
 echo "[record-vla-dataset] gripper port: ${GRIPPER_PORT}"
+echo "[record-vla-dataset] safe open gripper on disconnect: ${SAFE_OPEN_GRIPPER_ON_DISCONNECT}"
+echo "[record-vla-dataset] disconnect gripper open position: ${DISCONNECT_GRIPPER_OPEN_POSITION}"
+echo "[record-vla-dataset] disconnect gripper repeats: ${DISCONNECT_GRIPPER_REPEATS}"
+echo "[record-vla-dataset] disconnect gripper settle: ${DISCONNECT_GRIPPER_SETTLE_S}s"
 echo "[record-vla-dataset] pose topic: ${NOKOV_POSE_TOPIC}"
 echo "[record-vla-dataset] expert topic: ${EXPERT_POSE_TOPIC}"
 echo "[record-vla-dataset] gripper topic: ${GRIPPER_TOPIC}"
@@ -113,6 +121,10 @@ PYTHONUNBUFFERED=1 lerobot-record \
   --robot.mavros_setpoint_topic="${MAVROS_SETPOINT_TOPIC}" \
   --robot.send_pose_actions=false \
   --robot.gripper_port="${GRIPPER_PORT}" \
+  --robot.safe_open_gripper_on_disconnect="${SAFE_OPEN_GRIPPER_ON_DISCONNECT}" \
+  --robot.disconnect_gripper_open_position="${DISCONNECT_GRIPPER_OPEN_POSITION}" \
+  --robot.disconnect_gripper_repeats="${DISCONNECT_GRIPPER_REPEATS}" \
+  --robot.disconnect_gripper_settle_s="${DISCONNECT_GRIPPER_SETTLE_S}" \
   --robot.cameras="${CAMERAS_CONFIG}" \
   --teleop.type=ros_expert_pose \
   --teleop.expert_pose_topic="${EXPERT_POSE_TOPIC}" \

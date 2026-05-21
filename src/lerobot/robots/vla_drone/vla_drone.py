@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import replace
 from functools import cached_property
 from typing import Protocol
@@ -159,6 +160,28 @@ class VLADrone(Robot):
             calibration[GRIPPER_RIGHT] = replace(calibration[GRIPPER_RIGHT], drive_mode=1)
         self.bus.calibration = calibration
 
+    def _open_gripper_before_disconnect(self) -> None:
+        if not self.config.safe_open_gripper_on_disconnect or not self.bus.is_connected:
+            return
+
+        open_position = clamp(self.config.disconnect_gripper_open_position, (0.0, 100.0))
+        repeats = max(1, int(self.config.disconnect_gripper_repeats))
+        for _ in range(repeats):
+            self.bus.sync_write(
+                "Goal_Position",
+                {
+                    GRIPPER_LEFT: open_position,
+                    GRIPPER_RIGHT: open_position,
+                },
+                num_retry=1,
+            )
+            if repeats > 1:
+                time.sleep(0.05)
+
+        if self.config.disconnect_gripper_settle_s > 0.0:
+            time.sleep(self.config.disconnect_gripper_settle_s)
+        logger.info("Opened gripper to %.1f before disconnect.", open_position)
+
     @check_if_not_connected
     def get_observation(self) -> RobotObservation:
         camera_observation: RobotObservation = {}
@@ -217,6 +240,11 @@ class VLADrone(Robot):
 
     @check_if_not_connected
     def disconnect(self) -> None:
+        try:
+            self._open_gripper_before_disconnect()
+        except Exception as exc:
+            logger.warning("Failed to open gripper before disconnect: %s", exc)
+
         self.pose_bridge.disconnect()
         for camera in self.cameras.values():
             camera.disconnect()
