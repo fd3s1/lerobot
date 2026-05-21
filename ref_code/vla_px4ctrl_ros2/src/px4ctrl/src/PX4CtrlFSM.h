@@ -96,7 +96,11 @@ private:
   void publish_position_ctrl(const Controller_Output_t &u, const rclcpp::Time &stamp);
   void publish_expert_pose(const Desired_State_t &des, const rclcpp::Time &stamp);
   void publish_trigger(const geometry_msgs::msg::PoseStamped &odom_msg);
+  void publish_gripper_safety();
   void publish_gripper_from_rc();
+  void publish_gripper_target(double target, bool force = false);
+  bool px4_mode_allows_gripper_rc() const;
+  bool should_force_gripper_open() const;
 
   bool toggle_offboard_mode(bool on_off);
   bool toggle_arm_disarm(bool arm);

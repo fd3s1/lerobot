@@ -61,6 +61,8 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
     node.declare_parameter<double>("gripper.open_position", gripper.open_position);
   gripper.closed_position =
     node.declare_parameter<double>("gripper.closed_position", gripper.closed_position);
+  gripper.force_open_below_z =
+    node.declare_parameter<double>("gripper.force_open_below_z", gripper.force_open_below_z);
 
   if (takeoff_land.enable_auto_arm && !takeoff_land.enable) {
     takeoff_land.enable_auto_arm = false;

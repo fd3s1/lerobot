@@ -20,6 +20,9 @@
 - 夹爪命令：`/gripper/command`
 - 夹爪定义：`100 = 全开`，`0 = 全关`
 - 遥控器第 10 通道：低位打开，高位关闭
+- CH10 只在 PX4 模式为 `POSCTL` 或 `OFFBOARD` 时控制夹爪。
+- `ALTCTL`、`STABILIZED`、`MANUAL`、降落、已落地、未解锁或未知模式下，夹爪会自动保持全开。
+- 夹爪比起落架低约 `15 cm`，当前配置会在 mocap 高度 `z <= 0.15 m` 时强制全开，避免接近地面时夹爪触地。
 
 安全前提：
 
@@ -151,7 +154,7 @@ ros2 topic pub --once /gripper/command std_msgs/msg/Float64 "{data: 0.0}"
 - `100.0`：夹爪全开
 - `0.0`：夹爪全关
 
-如果方向反了，不要改 Windows 标定，先用软件反向：
+`feetech_gripper_node.py` 默认保持原始方向。如果单独运行 ROS 夹爪节点时方向反了，不要改 Windows 标定，先用软件反向：
 
 ```bash
 ros2 run px4ctrl feetech_gripper_node.py --ros-args \
@@ -374,9 +377,9 @@ ros2 topic hz /px4ctrl/expert_pose
 
 ## 8. 单独测试 RC 第 10 通道到夹爪命令 topic
 
-作用：暂时不接舵机，只确认遥控器 CH10 会被 px4ctrl 转成 `/gripper/command`。
+作用：暂时不接舵机，只确认遥控器 CH10 会在允许模式下被 px4ctrl 转成 `/gripper/command`。
 
-终端 A：启动 MAVROS，并确认 `/mavros/rc/in` 有数据。
+终端 A：启动 MAVROS，并确认 `/mavros/rc/in` 和 `/mavros/state` 有数据。
 
 终端 B：监听夹爪命令：
 
@@ -395,6 +398,12 @@ source install/setup.bash
 ros2 run px4ctrl px4ctrl_node --ros-args --params-file install/px4ctrl/share/px4ctrl/config/ctrl_param_fpv.yaml
 ```
 
+先确认当前 PX4 模式：
+
+```bash
+ros2 topic echo /mavros/state
+```
+
 拨动遥控器第 10 通道。
 
 当前配置：
@@ -406,21 +415,24 @@ gripper:
   pwm_close: 1700
   open_position: 100.0
   closed_position: 0.0
+  force_open_below_z: 0.15
 ```
 
 期望：
 
-- CH10 低位：`/gripper/command` 输出 `100.0`
-- CH10 高位：`/gripper/command` 输出 `0.0`
-- CH10 中间：不发布新命令
+- 在 `POSCTL` 或 `OFFBOARD` 下，CH10 低位：`/gripper/command` 输出 `100.0`
+- 在 `POSCTL` 或 `OFFBOARD` 下，CH10 高位：`/gripper/command` 输出 `0.0`
+- 在 `POSCTL` 或 `OFFBOARD` 下，CH10 中间：不发布新命令
+- 在 `ALTCTL`、`STABILIZED`、`MANUAL`、降落、未解锁、未知模式或 `z <= 0.15 m` 时，无论 CH10 位置如何，`/gripper/command` 都应发布或保持 `100.0`
 
-如果没有输出，检查：
+如果允许模式下没有 CH10 输出，检查：
 
 ```bash
 ros2 topic echo /mavros/rc/in
+ros2 topic echo /mavros/state
 ```
 
-确认 `channels[9]` 是否真的变化。
+确认 `channels[9]` 是否真的变化，并确认 `mode` 是 `POSCTL` 或 `OFFBOARD`。
 
 ## 9. 测试 RC 第 10 通道真实控制夹爪
 
@@ -446,14 +458,15 @@ source install/setup.bash
 ros2 run px4ctrl feetech_gripper_node.py --ros-args -p port:=/dev/ttyACM1
 ```
 
-拨动遥控器第 10 通道。
+确认 PX4 处于 `POSCTL` 或 `OFFBOARD` 后，拨动遥控器第 10 通道。
 
 期望：
 
-- CH10 低位：夹爪全开
-- CH10 高位：夹爪全关
+- `POSCTL` 或 `OFFBOARD` 下，CH10 低位：夹爪全开
+- `POSCTL` 或 `OFFBOARD` 下，CH10 高位：夹爪全关
+- 切到 `ALTCTL`、`STABILIZED`、`MANUAL`、触发降落或高度低于 `0.15 m` 后，无论 CH10 位置如何，夹爪自动全开
 
-如果方向反了，停止夹爪节点，用反向参数重启：
+如果单独运行 ROS 夹爪节点时方向反了，停止夹爪节点，用反向参数重启：
 
 ```bash
 ros2 run px4ctrl feetech_gripper_node.py --ros-args \
@@ -602,7 +615,7 @@ ros2 run px4ctrl fly_x_gripper_test.py --no-land
 
 - 手动采集时不要让 LeRobot 把 pose action 反写到 `/position_cmd`，否则会干扰 px4ctrl 的 RC hover 控制。因此必须设置 `--robot.send_pose_actions=false`。
 - 手动采集时不要启动 `feetech_gripper_node.py`，因为 `vla_drone` robot 会直接打开 `/dev/ttyACM1` 控制 Feetech 夹爪。
-- 夹爪仍然用遥控器 CH10 控制。LeRobot 会记录 `/gripper/command`，并把该 action 发送给 `vla_drone` robot 执行。
+- 夹爪仍然用遥控器 CH10 控制，但只有 `POSCTL` 或 `OFFBOARD` 下 CH10 生效。其它模式、降落、未解锁或 `z <= 0.15 m` 时 px4ctrl 会强制 `/gripper/command=100.0`。LeRobot 会记录 `/gripper/command`，并把该 action 发送给 `vla_drone` robot 执行。
 - 当前相机约定：`/dev/video0` 是前视相机，`/dev/video2` 是夹爪/下视相机。
 
 ### 13.1 启动飞行和定位链路
@@ -629,7 +642,8 @@ ros2 topic echo /gripper/command
 
 - `/mavros/vision_pose/pose` 有稳定 mocap 数据。
 - `/px4ctrl/expert_pose` 持续发布。
-- 拨动 CH10 时，`/gripper/command` 在 `100.0` 和 `0.0` 之间变化。
+- `POSCTL` 或 `OFFBOARD` 下拨动 CH10 时，`/gripper/command` 在 `100.0` 和 `0.0` 之间变化。
+- `ALTCTL`、`STABILIZED`、`MANUAL`、降落、未解锁或 `z <= 0.15 m` 时，`/gripper/command` 为 `100.0`。
 
 ### 13.2 启动 LeRobot 录制
 
@@ -653,6 +667,7 @@ echo "REPO_ID=${REPO_ID}"
 lerobot-record \
   --robot.type=vla_drone \
   --robot.nokov_pose_topic=/mavros/vision_pose/pose \
+  --robot.max_pose_age_s=2.0 \
   --robot.mavros_setpoint_topic=/position_cmd \
   --robot.send_pose_actions=false \
   --robot.gripper_port=/dev/ttyACM1 \
@@ -689,6 +704,7 @@ Robot 参数：
 
 - `--robot.type=vla_drone`：使用我们自定义的无人机 robot。
 - `--robot.nokov_pose_topic=/mavros/vision_pose/pose`：从 MAVROS vision pose 读取当前 mocap 位姿，作为 observation state 的 `x, y, z, yaw` 来源。
+- `--robot.max_pose_age_s=2.0`：允许 LeRobot 在采集过程中短暂等待最新 mocap pose。NX 同时读两路相机和写数据时偶发调度延迟，`0.5 s` 容易误判为 pose 超时。
 - `--robot.mavros_setpoint_topic=/position_cmd`：推理阶段向 px4ctrl 发送目标位置的 topic。手动采集时保留该配置，但不会发送。
 - `--robot.send_pose_actions=false`：手动采集时禁止 LeRobot 把专家 action 发回 `/position_cmd`。这是防止采集过程干扰人工飞行的关键参数。
 - `--robot.gripper_port=/dev/ttyACM1`：Feetech 舵机总线串口。
@@ -732,7 +748,8 @@ ros2 topic echo /gripper/command
 
 - QGC 没有 `yaw_estimate_error`。
 - Position 模式悬停稳定。
-- CH10 能实际控制夹爪。
+- `POSCTL/OFFBOARD` 下 CH10 能实际控制夹爪。
+- `ALTCTL/STABILIZED/MANUAL/AUTO_LAND/未解锁/z <= 0.15 m` 下夹爪自动全开。
 - `/dev/video0` 和 `/dev/video2` 都能被 LeRobot 找到。
 - 没有单独运行 `feetech_gripper_node.py`。
 
@@ -813,9 +830,10 @@ MAVROS 测试通过：
 
 RC 夹爪测试通过：
 
-- CH10 低位发布 `100.0`
-- CH10 高位发布 `0.0`
-- 真实夹爪跟随开合
+- `POSCTL/OFFBOARD` 下 CH10 低位发布 `100.0`
+- `POSCTL/OFFBOARD` 下 CH10 高位发布 `0.0`
+- `ALTCTL/STABILIZED/MANUAL/AUTO_LAND/未解锁/z <= 0.15 m` 下发布或保持 `100.0`
+- 真实夹爪方向正确：`100.0` 全开，`0.0` 全关
 
 定位测试通过：
 
@@ -836,3 +854,4 @@ RC 夹爪测试通过：
 - `fly_x_gripper_test.py` 能读取 mocap pose
 - 飞行过程中 yaw 和夹爪动作符合预期
 - 降落前夹爪保持全开
+- 降落过程中和落地后夹爪保持全开

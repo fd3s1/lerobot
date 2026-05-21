@@ -14,8 +14,8 @@ class VLADroneConfig(RobotConfig):
     gripper_port: str = "/dev/ttyACM1"
     gripper_left_id: int = 1
     gripper_right_id: int = 2
-    gripper_left_inverted: bool = False
-    gripper_right_inverted: bool = False
+    gripper_left_inverted: bool = True
+    gripper_right_inverted: bool = True
     disable_torque_on_disconnect: bool = True
     configure_gripper_motors: bool = True
 

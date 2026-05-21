@@ -23,7 +23,7 @@ void PX4CtrlFSM::process()
   Desired_State_t des(odom_data);
   bool rotor_low_speed_during_land = false;
 
-  publish_gripper_from_rc();
+  publish_gripper_safety();
 
   switch (state) {
     case MANUAL_CTRL: {
@@ -106,6 +106,7 @@ void PX4CtrlFSM::process()
         takeoff_land_data.takeoff_land_cmd == quadrotor_msgs::msg::TakeoffLand::LAND) {
         state = AUTO_LAND;
         set_start_pose_for_takeoff_land(odom_data);
+        publish_gripper_target(param.gripper.open_position, true);
         RCLCPP_INFO(node_->get_logger(), "[px4ctrl] AUTO_HOVER(L2) --> AUTO_LAND");
       } else {
         set_hov_with_rc();
@@ -432,6 +433,16 @@ void PX4CtrlFSM::publish_trigger(const geometry_msgs::msg::PoseStamped &odom_msg
   traj_start_trigger_pub->publish(odom_msg);
 }
 
+void PX4CtrlFSM::publish_gripper_safety()
+{
+  if (should_force_gripper_open()) {
+    publish_gripper_target(param.gripper.open_position);
+    return;
+  }
+
+  publish_gripper_from_rc();
+}
+
 void PX4CtrlFSM::publish_gripper_from_rc()
 {
   if (!gripper_cmd_pub || !rc_data.received) {
@@ -454,7 +465,17 @@ void PX4CtrlFSM::publish_gripper_from_rc()
     return;
   }
 
-  if (have_gripper_target && std::abs(target - last_gripper_target) < 1e-6) {
+  publish_gripper_target(target);
+}
+
+void PX4CtrlFSM::publish_gripper_target(double target, bool force)
+{
+  if (!gripper_cmd_pub) {
+    return;
+  }
+
+  target = clamp(target, 0.0, 100.0);
+  if (!force && have_gripper_target && std::abs(target - last_gripper_target) < 1e-6) {
     return;
   }
 
@@ -463,6 +484,24 @@ void PX4CtrlFSM::publish_gripper_from_rc()
   gripper_cmd_pub->publish(msg);
   have_gripper_target = true;
   last_gripper_target = target;
+}
+
+bool PX4CtrlFSM::px4_mode_allows_gripper_rc() const
+{
+  const std::string &mode = state_data.current_state.mode;
+  return mode == "POSCTL" || mode == "OFFBOARD";
+}
+
+bool PX4CtrlFSM::should_force_gripper_open() const
+{
+  const bool land_requested =
+    takeoff_land_data.triggered &&
+    takeoff_land_data.takeoff_land_cmd == quadrotor_msgs::msg::TakeoffLand::LAND;
+  const bool below_safe_height =
+    odom_data.received && odom_data.p.z() <= param.gripper.force_open_below_z;
+
+  return land_requested || state == AUTO_TAKEOFF || state == AUTO_LAND ||
+         below_safe_height || !state_data.current_state.armed || !px4_mode_allows_gripper_rc();
 }
 
 bool PX4CtrlFSM::toggle_offboard_mode(bool on_off)

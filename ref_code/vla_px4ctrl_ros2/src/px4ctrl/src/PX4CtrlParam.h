@@ -72,6 +72,7 @@ public:
     int pwm_close{1700};
     double open_position{100.0};
     double closed_position{0.0};
+    double force_open_below_z{0.15};
   };
 
   MsgTimeout msg_timeout;
