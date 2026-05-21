@@ -10,6 +10,9 @@ VRPN_SOURCE_TOPIC="${VRPN_SOURCE_TOPIC:-/vla_drone1/pose}"
 MAVROS_VISION_TOPIC="${MAVROS_VISION_TOPIC:-/mavros/vision_pose/pose}"
 FCU_URL="${FCU_URL:-/dev/ttyACM0:921600}"
 GCS_URL="${GCS_URL:-udp://@10.1.1.198:14550}"
+MAVROS_TGT_SYSTEM="${MAVROS_TGT_SYSTEM:-1}"
+MAVROS_TGT_COMPONENT="${MAVROS_TGT_COMPONENT:-1}"
+MAVROS_FCU_PROTOCOL="${MAVROS_FCU_PROTOCOL:-v2.0}"
 BRIDGE_RESTAMP="${BRIDGE_RESTAMP:-false}"
 PX4CTRL_PARAMS_FILE="${PX4CTRL_PARAMS_FILE:-${WORKSPACE_DIR}/install/px4ctrl/share/px4ctrl/config/ctrl_param_fpv.yaml}"
 MAVROS_CONFIG_FILE="${MAVROS_CONFIG_FILE:-/opt/ros/humble/share/mavros/launch/px4_config.yaml}"
@@ -60,6 +63,7 @@ echo "[run-mocap-mavros] vrpn server: ${VRPN_SERVER}:${VRPN_PORT}"
 echo "[run-mocap-mavros] bridge: ${VRPN_SOURCE_TOPIC} -> ${MAVROS_VISION_TOPIC}"
 echo "[run-mocap-mavros] fcu_url: ${FCU_URL}"
 echo "[run-mocap-mavros] gcs_url: ${GCS_URL}"
+echo "[run-mocap-mavros] target system/component: ${MAVROS_TGT_SYSTEM}/${MAVROS_TGT_COMPONENT}"
 echo "[run-mocap-mavros] bridge restamp: ${BRIDGE_RESTAMP}"
 echo "[run-mocap-mavros] mavros light mode: ${MAVROS_LIGHT}"
 echo "[run-mocap-mavros] start px4ctrl: ${START_PX4CTRL}"
@@ -81,6 +85,9 @@ sleep 1
 start_process ros2 launch mavros node.launch \
   fcu_url:="${FCU_URL}" \
   gcs_url:="${GCS_URL}" \
+  tgt_system:="${MAVROS_TGT_SYSTEM}" \
+  tgt_component:="${MAVROS_TGT_COMPONENT}" \
+  fcu_protocol:="${MAVROS_FCU_PROTOCOL}" \
   pluginlists_yaml:="${MAVROS_PLUGINLISTS_FILE}" \
   config_yaml:="${MAVROS_CONFIG_FILE}" \
   namespace:=mavros
