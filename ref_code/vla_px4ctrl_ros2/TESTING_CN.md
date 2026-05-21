@@ -787,6 +787,22 @@ ros2 topic echo /mavros/state
 - 未进入 AUTO_HOVER 前可以没有 `/px4ctrl/expert_pose`，录制脚本不会在门控通过前读取 expert action。
 - 门控和预热阶段都不会调用 `dataset.add_frame()`，不会污染数据集。
 - 门控和预热阶段都不会调用 `robot.send_action()`，不会发布 `/position_cmd`，也不会主动驱动夹爪。
+- px4ctrl 终端中进入 AUTO_HOVER 的状态切换日志为绿色，离开 AUTO_HOVER 的状态切换日志为红色，便于飞行中快速判断状态变化。
+
+夹爪安全策略：
+
+- PX4 `POSCTL` 和 `OFFBOARD` 模式下允许 CH10 控制夹爪。
+- PX4 掉到 `ALTCTL`、`STABILIZED`、`MANUAL` 等非允许模式时，px4ctrl 会强制发布夹爪全开。
+- RC 超时、mocap/odom 超时、未解锁、降落、自动起飞/降落、低于 `force_open_below_z` 时，px4ctrl 也会强制发布夹爪全开。
+- 强制全开不是只发布一次；安全条件持续存在时会周期性重发全开命令，降低串口或舵机漏掉单次命令的风险。
+
+如果录制中出现：
+
+```text
+Expert pose on /px4ctrl/expert_pose is stale: 0.520s > 0.500s
+```
+
+这通常表示 px4ctrl 超过 `0.5 s` 没有发布 `/px4ctrl/expert_pose`。当前代码只有在 `odom_is_received()` 为真时才发布 expert pose，因此常见根因是 mocap/网络/VRPN/MAVROS vision pose 短时中断。这个报错不是单纯录制阈值过紧；它表示 action 已经不再新鲜，继续保存会污染图像和动作对齐。
 
 ### 13.5 时间戳对齐规则
 

@@ -24,8 +24,6 @@ void PX4CtrlFSM::process()
   Desired_State_t des(odom_data);
   bool rotor_low_speed_during_land = false;
 
-  publish_gripper_safety();
-
   switch (state) {
     case MANUAL_CTRL: {
       if (rc_data.enter_hover_mode) {
@@ -43,7 +41,7 @@ void PX4CtrlFSM::process()
         state = AUTO_HOVER;
         set_hov_with_odom();
         toggle_offboard_mode(true);
-        RCLCPP_INFO(node_->get_logger(), "[px4ctrl] MANUAL_CTRL(L1) --> AUTO_HOVER(L2)");
+        RCLCPP_INFO(node_->get_logger(), "\033[32m[px4ctrl] MANUAL_CTRL(L1) --> AUTO_HOVER(L2)\033[0m");
       } else if (
         param.takeoff_land.enable && takeoff_land_data.triggered &&
         takeoff_land_data.takeoff_land_cmd == quadrotor_msgs::msg::TakeoffLand::TAKEOFF) {
@@ -95,12 +93,13 @@ void PX4CtrlFSM::process()
       if (!rc_data.is_hover_mode || !odom_is_received(now_time)) {
         state = MANUAL_CTRL;
         toggle_offboard_mode(false);
-        RCLCPP_WARN(node_->get_logger(), "[px4ctrl] AUTO_HOVER(L2) --> MANUAL_CTRL(L1)");
+        publish_gripper_force_open(now_time);
+        RCLCPP_WARN(node_->get_logger(), "\033[31m[px4ctrl] AUTO_HOVER(L2) --> MANUAL_CTRL(L1)\033[0m");
       } else if (rc_data.is_command_mode && cmd_is_received(now_time)) {
         if (state_data.current_state.mode == "OFFBOARD") {
           state = CMD_CTRL;
           des = get_cmd_des();
-          RCLCPP_INFO(node_->get_logger(), "[px4ctrl] AUTO_HOVER(L2) --> CMD_CTRL(L3)");
+          RCLCPP_INFO(node_->get_logger(), "\033[31m[px4ctrl] AUTO_HOVER(L2) --> CMD_CTRL(L3)\033[0m");
         }
       } else if (
         takeoff_land_data.triggered &&
@@ -108,7 +107,7 @@ void PX4CtrlFSM::process()
         state = AUTO_LAND;
         set_start_pose_for_takeoff_land(odom_data);
         publish_gripper_target(param.gripper.open_position, true);
-        RCLCPP_INFO(node_->get_logger(), "[px4ctrl] AUTO_HOVER(L2) --> AUTO_LAND");
+        RCLCPP_INFO(node_->get_logger(), "\033[31m[px4ctrl] AUTO_HOVER(L2) --> AUTO_LAND\033[0m");
       } else {
         set_hov_with_rc();
         des = get_hover_des();
@@ -133,7 +132,7 @@ void PX4CtrlFSM::process()
         state = AUTO_HOVER;
         set_hov_with_odom();
         des = get_hover_des();
-        RCLCPP_INFO(node_->get_logger(), "[px4ctrl] CMD_CTRL(L3) --> AUTO_HOVER(L2)");
+        RCLCPP_INFO(node_->get_logger(), "\033[32m[px4ctrl] CMD_CTRL(L3) --> AUTO_HOVER(L2)\033[0m");
       } else {
         des = get_cmd_des();
       }
@@ -163,7 +162,7 @@ void PX4CtrlFSM::process()
         takeoff_land.delay_trigger = true;
         takeoff_land.delay_trigger_time =
           now_time + rclcpp::Duration::from_seconds(AutoTakeoffLand_t::DELAY_TRIGGER_TIME);
-        RCLCPP_INFO(node_->get_logger(), "[px4ctrl] AUTO_TAKEOFF --> AUTO_HOVER(L2)");
+        RCLCPP_INFO(node_->get_logger(), "\033[32m[px4ctrl] AUTO_TAKEOFF --> AUTO_HOVER(L2)\033[0m");
       } else {
         des = get_takeoff_land_des(param.takeoff_land.speed);
       }
@@ -179,7 +178,7 @@ void PX4CtrlFSM::process()
         state = AUTO_HOVER;
         set_hov_with_odom();
         des = get_hover_des();
-        RCLCPP_INFO(node_->get_logger(), "[px4ctrl] AUTO_LAND --> AUTO_HOVER(L2)");
+        RCLCPP_INFO(node_->get_logger(), "\033[32m[px4ctrl] AUTO_LAND --> AUTO_HOVER(L2)\033[0m");
       } else if (!get_landed()) {
         des = get_takeoff_land_des(-param.takeoff_land.speed);
       } else {
@@ -201,6 +200,8 @@ void PX4CtrlFSM::process()
   if (rotor_low_speed_during_land) {
     motors_idling(des);
   }
+
+  publish_gripper_safety(now_time);
 
   if (odom_is_received(now_time)) {
     const Desired_State_t safe_des = clamp_desired(des);
@@ -446,10 +447,10 @@ void PX4CtrlFSM::publish_fsm_state()
   fsm_state_pub->publish(msg);
 }
 
-void PX4CtrlFSM::publish_gripper_safety()
+void PX4CtrlFSM::publish_gripper_safety(const rclcpp::Time &now_time)
 {
-  if (should_force_gripper_open()) {
-    publish_gripper_target(param.gripper.open_position);
+  if (should_force_gripper_open(now_time)) {
+    publish_gripper_force_open(now_time);
     return;
   }
 
@@ -481,6 +482,24 @@ void PX4CtrlFSM::publish_gripper_from_rc()
   publish_gripper_target(target);
 }
 
+void PX4CtrlFSM::publish_gripper_force_open(const rclcpp::Time &now_time)
+{
+  if (!gripper_cmd_pub) {
+    return;
+  }
+
+  const bool first_force_open = last_gripper_force_open_time.nanoseconds() == 0;
+  const bool retry_due =
+    !first_force_open && (now_time - last_gripper_force_open_time).seconds() >= 0.2;
+  const bool target_not_open =
+    !have_gripper_target || std::abs(last_gripper_target - param.gripper.open_position) > 1e-6;
+
+  if (first_force_open || retry_due || target_not_open) {
+    publish_gripper_target(param.gripper.open_position, true);
+    last_gripper_force_open_time = now_time;
+  }
+}
+
 void PX4CtrlFSM::publish_gripper_target(double target, bool force)
 {
   if (!gripper_cmd_pub) {
@@ -505,16 +524,19 @@ bool PX4CtrlFSM::px4_mode_allows_gripper_rc() const
   return mode == "POSCTL" || mode == "OFFBOARD";
 }
 
-bool PX4CtrlFSM::should_force_gripper_open() const
+bool PX4CtrlFSM::should_force_gripper_open(const rclcpp::Time &now_time) const
 {
   const bool land_requested =
     takeoff_land_data.triggered &&
     takeoff_land_data.takeoff_land_cmd == quadrotor_msgs::msg::TakeoffLand::LAND;
+  const bool odom_timeout = !odom_is_received(now_time);
+  const bool rc_timeout = !rc_is_received(now_time);
   const bool below_safe_height =
     odom_data.received && odom_data.p.z() <= param.gripper.force_open_below_z;
 
   return land_requested || state == AUTO_TAKEOFF || state == AUTO_LAND ||
-         below_safe_height || !state_data.current_state.armed || !px4_mode_allows_gripper_rc();
+         odom_timeout || rc_timeout || below_safe_height ||
+         !state_data.current_state.armed || !px4_mode_allows_gripper_rc();
 }
 
 bool PX4CtrlFSM::toggle_offboard_mode(bool on_off)
