@@ -24,5 +24,3 @@
       - vision_pose
       - local_position
       - imu
-
-    plugin_denylist: []
