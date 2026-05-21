@@ -19,6 +19,7 @@ class VLADroneConfig(RobotConfig):
     disable_torque_on_disconnect: bool = True
     configure_gripper_motors: bool = True
     safe_open_gripper_on_disconnect: bool = True
+    safe_open_gripper_after_episode: bool = True
     disconnect_gripper_open_position: float = 100.0
     disconnect_gripper_repeats: int = 3
     disconnect_gripper_settle_s: float = 0.5

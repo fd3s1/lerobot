@@ -21,6 +21,7 @@ EXPERT_POSE_TOPIC="${EXPERT_POSE_TOPIC:-/px4ctrl/expert_pose}"
 GRIPPER_TOPIC="${GRIPPER_TOPIC:-/gripper/command}"
 GRIPPER_PORT="${GRIPPER_PORT:-/dev/ttyACM1}"
 SAFE_OPEN_GRIPPER_ON_DISCONNECT="${SAFE_OPEN_GRIPPER_ON_DISCONNECT:-true}"
+SAFE_OPEN_GRIPPER_AFTER_EPISODE="${SAFE_OPEN_GRIPPER_AFTER_EPISODE:-true}"
 DISCONNECT_GRIPPER_OPEN_POSITION="${DISCONNECT_GRIPPER_OPEN_POSITION:-100.0}"
 DISCONNECT_GRIPPER_REPEATS="${DISCONNECT_GRIPPER_REPEATS:-3}"
 DISCONNECT_GRIPPER_SETTLE_S="${DISCONNECT_GRIPPER_SETTLE_S:-0.5}"
@@ -107,6 +108,7 @@ echo "[record-vla-dataset] front camera: ${FRONT_CAMERA}"
 echo "[record-vla-dataset] down camera: ${DOWN_CAMERA}"
 echo "[record-vla-dataset] gripper port: ${GRIPPER_PORT}"
 echo "[record-vla-dataset] safe open gripper on disconnect: ${SAFE_OPEN_GRIPPER_ON_DISCONNECT}"
+echo "[record-vla-dataset] safe open gripper after episode: ${SAFE_OPEN_GRIPPER_AFTER_EPISODE}"
 echo "[record-vla-dataset] disconnect gripper open position: ${DISCONNECT_GRIPPER_OPEN_POSITION}"
 echo "[record-vla-dataset] disconnect gripper repeats: ${DISCONNECT_GRIPPER_REPEATS}"
 echo "[record-vla-dataset] disconnect gripper settle: ${DISCONNECT_GRIPPER_SETTLE_S}s"
@@ -122,6 +124,7 @@ PYTHONUNBUFFERED=1 lerobot-record \
   --robot.send_pose_actions=false \
   --robot.gripper_port="${GRIPPER_PORT}" \
   --robot.safe_open_gripper_on_disconnect="${SAFE_OPEN_GRIPPER_ON_DISCONNECT}" \
+  --robot.safe_open_gripper_after_episode="${SAFE_OPEN_GRIPPER_AFTER_EPISODE}" \
   --robot.disconnect_gripper_open_position="${DISCONNECT_GRIPPER_OPEN_POSITION}" \
   --robot.disconnect_gripper_repeats="${DISCONNECT_GRIPPER_REPEATS}" \
   --robot.disconnect_gripper_settle_s="${DISCONNECT_GRIPPER_SETTLE_S}" \

@@ -636,6 +636,15 @@ def record_loop(
         timestamp = time.perf_counter() - start_episode_t
 
 
+def run_episode_end_safety(robot: Robot) -> None:
+    if not getattr(getattr(robot, "config", None), "safe_open_gripper_after_episode", False):
+        return
+
+    open_gripper = getattr(robot, "open_gripper_for_safety", None)
+    if callable(open_gripper):
+        open_gripper("episode_end")
+
+
 @parser.wrap()
 def record(cfg: RecordConfig) -> LeRobotDataset:
     init_logging()
@@ -774,6 +783,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     display_data=cfg.display_data,
                     display_compressed_images=display_compressed_images,
                 )
+                run_episode_end_safety(robot)
 
                 # Execute a few seconds without recording to give time to manually reset the environment
                 # Skip reset for the last episode to be recorded
