@@ -31,6 +31,7 @@ CAMERA_WARMUP_S="${CAMERA_WARMUP_S:-3}"
 DATASET_FPS="${DATASET_FPS:-20}"
 NUM_EPISODES="${NUM_EPISODES:-1}"
 EPISODE_TIME_S="${EPISODE_TIME_S:-30}"
+RECORD_PREWARM_STEPS="${RECORD_PREWARM_STEPS:-2}"
 RESET_TIME_S="${RESET_TIME_S:-10}"
 TASK="${TASK:-Fly to the target and operate the gripper}"
 PUSH_TO_HUB="${PUSH_TO_HUB:-false}"
@@ -80,6 +81,7 @@ echo "[record-vla-dataset] dataset root: ${DATASET_ROOT}"
 echo "[record-vla-dataset] repo id: ${REPO_ID}"
 echo "[record-vla-dataset] episodes: ${NUM_EPISODES}"
 echo "[record-vla-dataset] episode time: ${EPISODE_TIME_S}s"
+echo "[record-vla-dataset] record prewarm steps: ${RECORD_PREWARM_STEPS}"
 echo "[record-vla-dataset] reset time: ${RESET_TIME_S}s"
 echo "[record-vla-dataset] video: ${DATASET_VIDEO}"
 echo "[record-vla-dataset] dataset fps: ${DATASET_FPS}"
@@ -114,6 +116,7 @@ PYTHONUNBUFFERED=1 lerobot-record \
   --dataset.fps="${DATASET_FPS}" \
   --dataset.num_episodes="${NUM_EPISODES}" \
   --dataset.episode_time_s="${EPISODE_TIME_S}" \
+  --dataset.record_prewarm_steps="${RECORD_PREWARM_STEPS}" \
   --dataset.reset_time_s="${RESET_TIME_S}" \
   --dataset.single_task="${TASK}" \
   --dataset.push_to_hub="${PUSH_TO_HUB}" \

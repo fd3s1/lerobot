@@ -676,6 +676,7 @@ bash shflies/record_vla_dataset.sh
 - 保存位置：`~/vla_drone/data/vla_drone_grasp_YYYYmmdd_HHMMSS`
 - episode 数量：`1`
 - 每条 episode 时长：`30 s`
+- 正式计时前预热：`2` 轮 observation/action 读取，不发送 action，不写入数据集
 - reset 时长：`10 s`
 - 采集频率：`20 fps`
 - 相机 warmup：`3 s`
@@ -741,6 +742,7 @@ Dataset 参数：
 - `DATASET_FPS`：默认 `20`。LeRobot 保存数据的目标频率。默认降到 20fps 是为了降低 NX 上双相机、写盘和 ROS 回调竞争。需要 30fps 时可设置 `DATASET_FPS=30 CAMERA_FPS=30`。
 - `NUM_EPISODES`：默认 `1`。本次连续采集的 episode 数量。
 - `EPISODE_TIME_S`：默认 `30`。每条 episode 最长 30 秒。
+- `RECORD_PREWARM_STEPS`：默认 `2`。每条 episode 正式计时前先读取若干轮 observation 和 teleop action，用来预热相机、ROS pose、专家 pose 和夹爪读取路径。预热阶段不会调用 `robot.send_action()`，不会发布位置 action 或夹爪 action，也不会调用 `dataset.add_frame()`，因此不会污染数据集。
 - `RESET_TIME_S`：默认 `10`。两条 episode 之间留 10 秒复位时间。
 - `TASK`：默认 `Fly to the target and operate the gripper`。本批数据的任务描述。
 - `PUSH_TO_HUB`：默认 `false`。采集后只保存到本地，不自动上传 Hugging Face Hub。

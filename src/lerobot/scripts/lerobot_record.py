@@ -163,6 +163,9 @@ class DatasetRecordConfig:
     fps: int = 30
     # Number of seconds for data recording for each episode.
     episode_time_s: int | float = 60
+    # Number of observation/action read cycles to run before starting each recorded episode.
+    # These cycles do not send robot actions and do not write dataset frames.
+    record_prewarm_steps: int = 0
     # Number of seconds for resetting the environment after each episode.
     reset_time_s: int | float = 60
     # Number of episodes to record.
@@ -206,6 +209,90 @@ class DatasetRecordConfig:
     def __post_init__(self):
         if self.single_task is None:
             raise ValueError("You need to provide a task as argument in `single_task`.")
+
+
+def prewarm_record_inputs(
+    robot: Robot,
+    fps: int,
+    teleop_action_processor: RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction],
+    robot_observation_processor: RobotProcessorPipeline[RobotObservation, RobotObservation],
+    dataset: LeRobotDataset | None = None,
+    teleop: Teleoperator | list[Teleoperator] | None = None,
+    policy: PreTrainedPolicy | None = None,
+    preprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]] | None = None,
+    postprocessor: PolicyProcessorPipeline[PolicyAction, PolicyAction] | None = None,
+    steps: int = 0,
+    single_task: str | None = None,
+) -> None:
+    """Warm up input paths before episode timing starts.
+
+    This intentionally does not call robot.send_action() and does not call
+    dataset.add_frame(), so it cannot move the robot or contaminate the dataset.
+    """
+    if steps <= 0:
+        return
+
+    logging.info(
+        "Prewarming record inputs for %d cycle(s); no actions will be sent and no frames will be saved.",
+        steps,
+    )
+
+    teleop_arm = teleop_keyboard = None
+    if isinstance(teleop, list):
+        teleop_keyboard = next((t for t in teleop if isinstance(t, KeyboardTeleop)), None)
+        teleop_arm = next(
+            (
+                t
+                for t in teleop
+                if isinstance(
+                    t,
+                    (
+                        so_leader.SO100Leader
+                        | so_leader.SO101Leader
+                        | koch_leader.KochLeader
+                        | omx_leader.OmxLeader
+                    ),
+                )
+            ),
+            None,
+        )
+
+    for step_idx in range(steps):
+        start_loop_t = time.perf_counter()
+
+        obs = robot.get_observation()
+        obs_processed = robot_observation_processor(obs)
+
+        if policy is not None and preprocessor is not None and postprocessor is not None:
+            if dataset is None:
+                raise ValueError("A dataset is required to prewarm policy actions.")
+            observation_frame = build_dataset_frame(dataset.features, obs_processed, prefix=OBS_STR)
+            predict_action(
+                observation=observation_frame,
+                policy=policy,
+                device=get_safe_torch_device(policy.config.device),
+                preprocessor=preprocessor,
+                postprocessor=postprocessor,
+                use_amp=policy.config.use_amp,
+                task=single_task,
+                robot_type=robot.robot_type,
+            )
+        elif policy is None and isinstance(teleop, Teleoperator):
+            act = teleop.get_action()
+            teleop_action_processor((act, obs))
+        elif policy is None and isinstance(teleop, list):
+            if teleop_arm is None or teleop_keyboard is None:
+                raise ValueError("Multi-teleop prewarm requires one arm teleoperator and one keyboard teleop.")
+            arm_action = teleop_arm.get_action()
+            arm_action = {f"arm_{k}": v for k, v in arm_action.items()}
+            keyboard_action = teleop_keyboard.get_action()
+            base_action = robot._from_keyboard_to_base_action(keyboard_action)
+            act = {**arm_action, **base_action} if len(base_action) > 0 else arm_action
+            teleop_action_processor((act, obs))
+
+        dt_s = time.perf_counter() - start_loop_t
+        precise_sleep(max(1 / fps - dt_s, 0.0))
+        logging.debug("Record input prewarm cycle %d/%d took %.3f s.", step_idx + 1, steps, dt_s)
 
 
 @dataclass
@@ -533,6 +620,19 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             recorded_episodes = 0
             while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
                 log_say(f"Recording episode {dataset.num_episodes}", cfg.play_sounds)
+                prewarm_record_inputs(
+                    robot=robot,
+                    fps=cfg.dataset.fps,
+                    teleop_action_processor=teleop_action_processor,
+                    robot_observation_processor=robot_observation_processor,
+                    teleop=teleop,
+                    policy=policy,
+                    preprocessor=preprocessor,
+                    postprocessor=postprocessor,
+                    dataset=dataset,
+                    steps=cfg.dataset.record_prewarm_steps,
+                    single_task=cfg.dataset.single_task,
+                )
                 record_loop(
                     robot=robot,
                     events=events,
