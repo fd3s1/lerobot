@@ -65,13 +65,23 @@ class ROS2PoseBridge:
 
         self._node = rclpy.create_node(self.node_name)
         self._publisher = self._node.create_publisher(PoseStamped, self.setpoint_topic, 10)
-        pose_qos = QoSProfile(
+        reliable_pose_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+        best_effort_pose_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST,
             depth=10,
         )
-        self._node.create_subscription(PoseStamped, self.pose_topic, self._pose_callback, pose_qos)
+        # MAVROS publishes vision_pose as reliable, while some mocap/bridge
+        # publishers use best-effort. Subscribe with both QoS profiles so the
+        # LeRobot recorder can receive either source without changing commands.
+        self._node.create_subscription(PoseStamped, self.pose_topic, self._pose_callback, reliable_pose_qos)
+        self._node.create_subscription(PoseStamped, self.pose_topic, self._pose_callback, best_effort_pose_qos)
 
         self._executor = SingleThreadedExecutor()
         self._executor.add_node(self._node)
