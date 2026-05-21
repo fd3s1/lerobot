@@ -678,6 +678,7 @@ bash shflies/record_vla_dataset.sh
 - 每条 episode 时长：`30 s`
 - reset 时长：`10 s`
 - 采集频率：`20 fps`
+- 相机 warmup：`3 s`
 - 图像保存：开启，两路相机 `/dev/video0` 和 `/dev/video2`
 - 视频编码：`h264`
 - 上传 Hugging Face Hub：关闭
@@ -726,6 +727,7 @@ Robot 参数：
 - `FRONT_CAMERA`：默认 `/dev/video0`，前视相机。
 - `DOWN_CAMERA`：默认 `/dev/video2`，夹爪/下视相机。
 - `CAMERA_WIDTH`、`CAMERA_HEIGHT`、`CAMERA_FPS`：默认 `640`、`480`、`20`。需要 30fps 时可设置 `CAMERA_FPS=30`。
+- `CAMERA_WARMUP_S`：默认 `3`。相机连接后先读取几秒再进入 episode，减少第一次 record loop 因相机预热导致的低频 warning。
 
 Teleop 参数：
 

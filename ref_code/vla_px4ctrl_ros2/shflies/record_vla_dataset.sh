@@ -26,6 +26,7 @@ DOWN_CAMERA="${DOWN_CAMERA:-/dev/video2}"
 CAMERA_WIDTH="${CAMERA_WIDTH:-640}"
 CAMERA_HEIGHT="${CAMERA_HEIGHT:-480}"
 CAMERA_FPS="${CAMERA_FPS:-20}"
+CAMERA_WARMUP_S="${CAMERA_WARMUP_S:-3}"
 
 DATASET_FPS="${DATASET_FPS:-20}"
 NUM_EPISODES="${NUM_EPISODES:-1}"
@@ -66,8 +67,8 @@ cd "${REPO_DIR}"
 
 CAMERAS_CONFIG=$(cat <<EOF
 {
-  front: {type: opencv, index_or_path: "${FRONT_CAMERA}", width: ${CAMERA_WIDTH}, height: ${CAMERA_HEIGHT}, fps: ${CAMERA_FPS}},
-  down: {type: opencv, index_or_path: "${DOWN_CAMERA}", width: ${CAMERA_WIDTH}, height: ${CAMERA_HEIGHT}, fps: ${CAMERA_FPS}}
+  front: {type: opencv, index_or_path: "${FRONT_CAMERA}", width: ${CAMERA_WIDTH}, height: ${CAMERA_HEIGHT}, fps: ${CAMERA_FPS}, warmup_s: ${CAMERA_WARMUP_S}},
+  down: {type: opencv, index_or_path: "${DOWN_CAMERA}", width: ${CAMERA_WIDTH}, height: ${CAMERA_HEIGHT}, fps: ${CAMERA_FPS}, warmup_s: ${CAMERA_WARMUP_S}}
 }
 EOF
 )
@@ -83,6 +84,7 @@ echo "[record-vla-dataset] reset time: ${RESET_TIME_S}s"
 echo "[record-vla-dataset] video: ${DATASET_VIDEO}"
 echo "[record-vla-dataset] dataset fps: ${DATASET_FPS}"
 echo "[record-vla-dataset] camera fps: ${CAMERA_FPS}"
+echo "[record-vla-dataset] camera warmup: ${CAMERA_WARMUP_S}s"
 echo "[record-vla-dataset] video codec: ${DATASET_VCODEC}"
 echo "[record-vla-dataset] streaming encoding: ${STREAMING_ENCODING}"
 echo "[record-vla-dataset] image writer processes: ${IMAGE_WRITER_PROCESSES}"
