@@ -905,6 +905,9 @@ bash shflies/auto_record_grasp_place.sh
 - 周转箱刚体中心默认在箱子上沿平面、XY 为箱体几何中心。自动脚本会把玩具放到箱子中心附近。
 - 夹取高度和放置高度分别计算，不使用同一个飞行高度。放置高度按“箱底 + 目标夹持高度 + 释放余量”换算到无人机中心高度。
 - 脚本会用箱体长宽做中心放置余量检查；默认把目标高度 `0.30 m` 作为保守占地尺寸估计。
+- 可对目标和箱子的规划位置施加 mocap/map 坐标系偏置。偏置单位是米，方向与 mocap 的 `x/y/z` 完全一致，不随无人机 yaw 旋转：
+  - `TARGET_OFFSET_X/Y/Z`
+  - `BOX_OFFSET_X/Y/Z`
 
 如果夹爪下偏不是 `0.25 m`，临时覆盖：
 
@@ -916,6 +919,13 @@ GRIPPER_Z_OFFSET_M=0.22 bash shflies/auto_record_grasp_place.sh
 
 ```bash
 GRIPPER_Z_OFFSET_M=0.0025 bash shflies/auto_record_grasp_place.sh
+```
+
+如果需要手动修正目标或箱子位置，例如抓取点相对草莓熊刚体向 `+x` 偏 `5 cm`、放置点相对箱子中心向 `-y` 偏 `4 cm`：
+
+```bash
+TARGET_OFFSET_X=0.05 BOX_OFFSET_Y=-0.04 \
+bash shflies/auto_record_grasp_place.sh
 ```
 
 自动流程：
@@ -953,7 +963,7 @@ GRIPPER_CLOSE_DURATION_S=2.5 bash shflies/auto_record_grasp_place.sh
 - 然后从放置点上升 `0.3 m`：`RELEASE_RETREAT_UP_M=0.3`。
 - 再沿当前 yaw 的机头前方飞 `2.0 m`：`RELEASE_RETREAT_FORWARD_M=2.0`。
 - 撤离完成后默认不触发 px4ctrl `AUTO_LAND`，而是继续在 `CMD_CTRL` 下用 `/position_cmd` 限速下降。
-- `LANDING_MODE=cmd` 为默认值。CMD 降落目标高度默认使用起飞前无人机刚体 z：`CMD_LAND_Z=起飞前 z + CMD_LAND_Z_OFFSET_M`。
+- `LANDING_MODE=cmd` 为默认值。CMD 降落目标高度默认 `CMD_LAND_Z=-0.3`。
 - `CMD_LAND_SPEED` 默认 `0.25 m/s`。降落过程中持续发布夹爪全开 `100.0`。
 - CMD 降落会进入 dataset，用于记录完整任务收尾；但它不会自动 disarm，落地后需要手动切模式/上锁，或后续再加自动 disarm 策略。
 - `EPISODE_TIME_S` 需要足够覆盖“起飞后任务开始、抓取、放置、撤离、降落”全过程；如果 episode 太短，降落后半段不会被保存。
@@ -968,7 +978,7 @@ bash shflies/auto_record_grasp_place.sh
 如需指定 CMD 降落高度或改回 px4ctrl 自动降落：
 
 ```bash
-CMD_LAND_Z=0.12 CMD_LAND_SPEED=0.2 bash shflies/auto_record_grasp_place.sh
+CMD_LAND_Z=-0.25 CMD_LAND_SPEED=0.2 bash shflies/auto_record_grasp_place.sh
 
 LANDING_MODE=auto bash shflies/auto_record_grasp_place.sh
 ```
@@ -977,7 +987,7 @@ LANDING_MODE=auto bash shflies/auto_record_grasp_place.sh
 
 - 目标和盒子的 mocap 位姿只用于自动脚本规划，不进入 LeRobot dataset features。
 - record 只记录飞机 observation、相机、夹爪状态和 `/px4ctrl/expert_pose` action。
-- 自动脚本会等 `EPISODE_TIME_S` 预计结束后再降落，避免降落过程进入数据集；如果任务提前完成，会在安全高度 hold 到 episode 结束。
+- 默认 CMD 降落会进入 LeRobot dataset；`EPISODE_TIME_S` 应覆盖完整任务，包括降落段。
 
 夹爪安全策略：
 

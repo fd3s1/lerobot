@@ -75,6 +75,12 @@ class AutoConfig:
     box_height_m: float
     box_hover_gripper_clearance_m: float
     box_place_bottom_clearance_m: float
+    target_offset_x: float
+    target_offset_y: float
+    target_offset_z: float
+    box_offset_x: float
+    box_offset_y: float
+    box_offset_z: float
     target_hover_z_offset: float | None
     target_grasp_z_offset: float | None
     box_hover_z_offset: float | None
@@ -347,6 +353,14 @@ class AutoGraspPlaceDataset(Node):
             raise RuntimeError(f"Waypoint z={z:.3f} outside [{self.config.z_min}, {self.config.z_max}].")
         return PoseSample(x=x, y=y, z=z, yaw=yaw, received_s=time.monotonic(), frame_id=self.config.frame_id)
 
+    def offset_pose(self, pose: PoseSample, dx: float, dy: float, dz: float) -> PoseSample:
+        return self.checked_pose(
+            pose.x + dx,
+            pose.y + dy,
+            pose.z + dz,
+            pose.yaw,
+        )
+
     def target_base_z(self, target: PoseSample) -> float:
         if self.config.target_pose_z_reference == "base":
             return target.z
@@ -493,10 +507,35 @@ class AutoGraspPlaceDataset(Node):
         target = self.wait_for_stable_pose("target")
         box = self.wait_for_stable_pose("box")
         drone = self.wait_for_stable_pose("drone")
+        raw_target = target
+        raw_box = box
+        target = self.offset_pose(
+            target,
+            self.config.target_offset_x,
+            self.config.target_offset_y,
+            self.config.target_offset_z,
+        )
+        box = self.offset_pose(
+            box,
+            self.config.box_offset_x,
+            self.config.box_offset_y,
+            self.config.box_offset_z,
+        )
 
         self.get_logger().info(
-            f"Target pose: x={target.x:.3f}, y={target.y:.3f}, z={target.z:.3f}; "
-            f"box pose: x={box.x:.3f}, y={box.y:.3f}, z={box.z:.3f}."
+            f"Raw target pose: x={raw_target.x:.3f}, y={raw_target.y:.3f}, z={raw_target.z:.3f}; "
+            f"raw box pose: x={raw_box.x:.3f}, y={raw_box.y:.3f}, z={raw_box.z:.3f}."
+        )
+        self.get_logger().info(
+            f"Adjusted target pose: x={target.x:.3f}, y={target.y:.3f}, z={target.z:.3f}; "
+            f"adjusted box pose: x={box.x:.3f}, y={box.y:.3f}, z={box.z:.3f}."
+        )
+        self.get_logger().info(
+            "Planning offsets in mocap/map frame: "
+            f"target=({self.config.target_offset_x:.3f}, {self.config.target_offset_y:.3f}, "
+            f"{self.config.target_offset_z:.3f})m, "
+            f"box=({self.config.box_offset_x:.3f}, {self.config.box_offset_y:.3f}, "
+            f"{self.config.box_offset_z:.3f})m."
         )
         self.get_logger().info(
             "Geometry: "
@@ -662,6 +701,12 @@ def parse_args() -> AutoConfig:
         default=0.03,
         help="Clearance between target base and box bottom when releasing.",
     )
+    parser.add_argument("--target-offset-x", type=float, default=0.0)
+    parser.add_argument("--target-offset-y", type=float, default=0.0)
+    parser.add_argument("--target-offset-z", type=float, default=0.0)
+    parser.add_argument("--box-offset-x", type=float, default=0.0)
+    parser.add_argument("--box-offset-y", type=float, default=0.0)
+    parser.add_argument("--box-offset-z", type=float, default=0.0)
     parser.add_argument("--target-hover-z-offset", type=float, default=None)
     parser.add_argument("--target-grasp-z-offset", type=float, default=None)
     parser.add_argument("--box-hover-z-offset", type=float, default=None)
@@ -708,8 +753,8 @@ def parse_args() -> AutoConfig:
     parser.add_argument(
         "--cmd-land-z",
         type=float,
-        default=None,
-        help="Absolute drone-center z for CMD_CTRL landing. If unset, uses pre-takeoff drone z plus --cmd-land-z-offset-m.",
+        default=-0.3,
+        help="Absolute drone-center z for CMD_CTRL landing.",
     )
     parser.add_argument("--cmd-land-z-offset-m", type=float, default=0.0)
     parser.add_argument("--command-stop-before-land-s", type=float, default=1.2)
