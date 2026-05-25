@@ -116,10 +116,11 @@ class AutoGraspPlaceDataset(Node):
         self.poses: dict[str, PoseSample] = {}
         self.px4ctrl_state: str | None = None
         self.record_status: str | None = None
+        self.pose_subscriptions = []
 
-        self.create_subscription(PoseStamped, config.drone_pose_topic, self._pose_cb("drone"), 10)
-        self.create_subscription(PoseStamped, config.target_pose_topic, self._pose_cb("target"), 10)
-        self.create_subscription(PoseStamped, config.box_pose_topic, self._pose_cb("box"), 10)
+        self._create_pose_subscription_pair("drone", config.drone_pose_topic)
+        self._create_pose_subscription_pair("target", config.target_pose_topic)
+        self._create_pose_subscription_pair("box", config.box_pose_topic)
         self.create_subscription(String, config.px4ctrl_state_topic, self._state_cb, 10)
 
         status_qos = QoSProfile(
@@ -135,6 +136,23 @@ class AutoGraspPlaceDataset(Node):
         self.gripper_pub = self.create_publisher(Float64, config.gripper_topic, 10)
         self.takeoff_land_pub = self.create_publisher(TakeoffLand, config.takeoff_land_topic, 10)
         self.record_gate_pub = self.create_publisher(String, config.record_gate_topic, 10)
+
+    def _create_pose_subscription_pair(self, key: str, topic: str) -> None:
+        reliable_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+        best_effort_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+        callback = self._pose_cb(key)
+        self.pose_subscriptions.append(self.create_subscription(PoseStamped, topic, callback, reliable_qos))
+        self.pose_subscriptions.append(self.create_subscription(PoseStamped, topic, callback, best_effort_qos))
 
     def _pose_cb(self, key: str):
         def callback(msg: PoseStamped) -> None:
@@ -199,10 +217,26 @@ class AutoGraspPlaceDataset(Node):
             f"target={self.config.target_pose_topic}, "
             f"box={self.config.box_pose_topic}."
         )
+        last_log_s = 0.0
         while rclpy.ok():
             rclpy.spin_once(self, timeout_sec=0.05)
             if all(self.pose_fresh(key) for key in ("drone", "target", "box")):
                 return
+            now_s = time.monotonic()
+            if now_s - last_log_s >= 2.0:
+                last_log_s = now_s
+                status_parts = []
+                for key, topic in (
+                    ("drone", self.config.drone_pose_topic),
+                    ("target", self.config.target_pose_topic),
+                    ("box", self.config.box_pose_topic),
+                ):
+                    pose = self.poses.get(key)
+                    if pose is None:
+                        status_parts.append(f"{key}({topic})=missing")
+                    else:
+                        status_parts.append(f"{key}({topic}) age={now_s - pose.received_s:.2f}s")
+                self.get_logger().info("Still waiting for fresh poses: " + ", ".join(status_parts))
 
     def wait_for_stable_pose(self, key: str) -> PoseSample:
         reference: PoseSample | None = None

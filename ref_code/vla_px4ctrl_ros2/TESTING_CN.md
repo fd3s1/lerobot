@@ -855,6 +855,15 @@ ros2 topic echo /mavros/vision_pose/pose
 ros2 topic echo /px4ctrl/state
 ```
 
+自动脚本订阅目标、盒子和无人机位姿时同时创建 `RELIABLE` 和 `BEST_EFFORT` 订阅，兼容 MAVROS bridge 和 VRPN 原始刚体 topic。若终端一直显示 `Still waiting for fresh poses`，优先检查 topic 名字和 QoS：
+
+```bash
+ros2 topic info /strawberry_bear/pose -v
+ros2 topic info /box1/pose -v
+ros2 topic echo /strawberry_bear/pose
+ros2 topic echo /box1/pose
+```
+
 自动采集前，把 CH5 和 CH6 都拨到高位，然后运行：
 
 ```bash
