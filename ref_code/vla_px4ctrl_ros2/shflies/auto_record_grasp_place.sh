@@ -50,15 +50,51 @@ bool_is_true() {
 }
 
 record_pid=""
+record_uses_setsid=false
 
 cleanup() {
-  if [[ -n "${record_pid}" ]] && kill -0 "${record_pid}" 2>/dev/null; then
+  if [[ -z "${record_pid}" ]]; then
+    return
+  fi
+
+  if kill -0 "${record_pid}" 2>/dev/null; then
     echo "[auto-record-grasp-place] stopping record process ${record_pid}"
-    kill "${record_pid}" 2>/dev/null || true
+    if [[ "${record_uses_setsid}" == "true" ]]; then
+      kill -TERM -- "-${record_pid}" 2>/dev/null || true
+    else
+      pkill -TERM -P "${record_pid}" 2>/dev/null || true
+      kill -TERM "${record_pid}" 2>/dev/null || true
+    fi
+
+    for _ in {1..20}; do
+      if ! kill -0 "${record_pid}" 2>/dev/null; then
+        break
+      fi
+      sleep 0.1
+    done
+
+    if kill -0 "${record_pid}" 2>/dev/null; then
+      if [[ "${record_uses_setsid}" == "true" ]]; then
+        kill -KILL -- "-${record_pid}" 2>/dev/null || true
+      else
+        pkill -KILL -P "${record_pid}" 2>/dev/null || true
+        kill -KILL "${record_pid}" 2>/dev/null || true
+      fi
+    fi
+
     wait "${record_pid}" 2>/dev/null || true
   fi
+
+  record_pid=""
 }
-trap cleanup INT TERM
+
+on_signal() {
+  cleanup
+  exit 130
+}
+
+trap cleanup EXIT
+trap on_signal INT TERM HUP
 
 echo "[auto-record-grasp-place] target topic: ${TARGET_POSE_TOPIC}"
 echo "[auto-record-grasp-place] box topic: ${BOX_POSE_TOPIC}"
@@ -79,8 +115,9 @@ RECORD_PREWARM_STEPS=0 \
 DATASET_STATUS_TOPIC="${RECORD_STATUS_TOPIC}" \
 EPISODE_TIME_S="${EPISODE_TIME_S}" \
 TASK="${TASK:-Auto grasp target and place into box}" \
-bash "${SCRIPT_DIR}/record_vla_dataset.sh" &
+setsid bash "${SCRIPT_DIR}/record_vla_dataset.sh" &
 record_pid="$!"
+record_uses_setsid=true
 
 set +u
 source /opt/ros/humble/setup.bash

@@ -172,10 +172,8 @@ elif ! command -v lerobot-record >/dev/null 2>&1; then
 fi
 
 set +u
-set +u
 source /opt/ros/humble/setup.bash
 source "${WORKSPACE_DIR}/install/setup.bash"
-set -u
 set -u
 
 cd "${REPO_DIR}"
