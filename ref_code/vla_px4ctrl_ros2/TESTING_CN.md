@@ -942,10 +942,35 @@ bash shflies/auto_record_grasp_place.sh
 轨迹速度：
 
 - `/position_cmd` 是位置目标，但自动脚本按 `20 Hz` 逐点插值发布，不直接跳到目标点。
+- 默认开启 `SMOOTH_TRAJECTORY=true`，轨迹采用平滑起停，避免段起点/终点速度突变激发草莓熊摆动。
 - `MAX_SPEED` 默认 `0.6 m/s`，建议范围 `0.5-1.0 m/s`。
 - `APPROACH_SPEED` 默认 `0.3 m/s`，用于下降接近目标和盒子。
 - `LIFT_SPEED` 默认 `0.4 m/s`，用于抓取后抬升和释放后抬升。
+- `PAYLOAD_LIFT_SPEED` 默认 `0.18 m/s`，用于夹住草莓熊后的带载抬升。
+- `PAYLOAD_TRANSFER_SPEED` 默认 `0.25 m/s`，用于带载飞向箱子。
+- `POST_GRASP_SETTLE_S` 默认 `1.0 s`，夹住后原地等待，让负载先稳定。
+- `POST_LIFT_SETTLE_S` 默认 `1.0 s`，抬升后原地等待，降低摆振后再横移。
+- `TAKEOFF_FORWARD_COMP_M` 默认 `0.0 m`，起飞完成进入 `CMD_CTRL` 后、record 开始前，沿无人机当前机头方向做前向补偿。用于抵消机体后重导致的起飞后后窜。
+- `PAYLOAD_LIFT_FORWARD_COMP_M` 默认 `0.0 m`，夹住草莓熊后抬升时，沿无人机当前机头方向同步做前向补偿。用于抵消带载抬升阶段后窜。
 - `RETREAT_SPEED` 默认 `0.6 m/s`，用于放置后向前撤离。
+
+如果夹起草莓熊后摆动明显，先使用更保守的带载参数：
+
+```bash
+PAYLOAD_LIFT_SPEED=0.12 \
+PAYLOAD_TRANSFER_SPEED=0.18 \
+POST_GRASP_SETTLE_S=2.0 \
+POST_LIFT_SETTLE_S=2.0 \
+bash shflies/auto_record_grasp_place.sh
+```
+
+如果机体后重导致起飞或带载抬升时明显往后窜，可先小量补偿，不建议一开始超过 `0.10 m`：
+
+```bash
+TAKEOFF_FORWARD_COMP_M=0.05 \
+PAYLOAD_LIFT_FORWARD_COMP_M=0.05 \
+bash shflies/auto_record_grasp_place.sh
+```
 
 夹爪慢闭合：
 

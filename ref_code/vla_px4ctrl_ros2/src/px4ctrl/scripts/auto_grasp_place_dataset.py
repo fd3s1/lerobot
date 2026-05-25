@@ -65,6 +65,13 @@ class AutoConfig:
     max_speed: float
     approach_speed: float
     lift_speed: float
+    payload_lift_speed: float
+    payload_transfer_speed: float
+    post_grasp_settle_s: float
+    post_lift_settle_s: float
+    smooth_trajectory: bool
+    takeoff_forward_comp_m: float
+    payload_lift_forward_comp_m: float
     gripper_z_offset_m: float
     target_height_m: float
     target_grasp_height_m: float
@@ -430,7 +437,8 @@ class AutoGraspPlaceDataset(Node):
         keep_gripper_open: bool = False,
     ) -> PoseSample:
         distance = math.dist((start.x, start.y, start.z), (end.x, end.y, end.z))
-        duration = max(distance / max(speed, 1e-3), 1.0 / self.config.rate_hz)
+        duration_scale = 1.5 if self.config.smooth_trajectory else 1.0
+        duration = max(distance / max(speed, 1e-3) * duration_scale, 1.0 / self.config.rate_hz)
         steps = max(1, int(math.ceil(duration * self.config.rate_hz)))
         period = 1.0 / self.config.rate_hz
         self.get_logger().info(
@@ -439,7 +447,8 @@ class AutoGraspPlaceDataset(Node):
 
         next_tick = time.monotonic()
         for i in range(steps + 1):
-            alpha = i / steps
+            t = i / steps
+            alpha = (3.0 * t * t - 2.0 * t * t * t) if self.config.smooth_trajectory else t
             yaw_delta = normalize_angle(end.yaw - start.yaw)
             pose = self.checked_pose(
                 x=start.x + (end.x - start.x) * alpha,
@@ -565,6 +574,19 @@ class AutoGraspPlaceDataset(Node):
         if self.px4ctrl_state != "CMD_CTRL":
             raise RuntimeError(f"Failed to enter CMD_CTRL; latest px4ctrl state={self.px4ctrl_state!r}.")
 
+        if abs(self.config.takeoff_forward_comp_m) > 1e-6:
+            recentered = self.pose_relative_forward(
+                hold,
+                forward_m=self.config.takeoff_forward_comp_m,
+                up_m=0.0,
+            )
+            hold = self.fly_segment(
+                hold,
+                recentered,
+                self.config.approach_speed,
+                "Recenter forward after takeoff",
+            )
+
         self.publish_record_gate()
         gate_s = time.monotonic()
         self.hold_cmd(hold, self.config.record_start_hold_s)
@@ -572,6 +594,11 @@ class AutoGraspPlaceDataset(Node):
         yaw = hold.yaw
         target_above = self.pose_at_z(target, self.target_hover_drone_z(target), yaw)
         target_grasp = self.pose_at_z(target, self.target_grasp_drone_z(target), yaw)
+        target_lift = self.pose_relative_forward(
+            target_above,
+            forward_m=self.config.payload_lift_forward_comp_m,
+            up_m=0.0,
+        )
         box_above = self.pose_at_z(box, self.box_hover_drone_z(box), yaw)
         box_place = self.pose_at_z(box, self.box_place_drone_z(box), yaw)
         self.get_logger().info(
@@ -590,8 +617,14 @@ class AutoGraspPlaceDataset(Node):
             self.config.gripper_close_duration_s,
             hold_pose=current,
         )
-        current = self.fly_segment(current, target_above, self.config.lift_speed, "Lift object")
-        current = self.fly_segment(current, box_above, self.config.max_speed, "Fly to box hover")
+        if self.config.post_grasp_settle_s > 0.0:
+            self.get_logger().info(f"Holding after grasp for {self.config.post_grasp_settle_s:.2f}s to let payload settle.")
+            self.hold_cmd(current, self.config.post_grasp_settle_s)
+        current = self.fly_segment(current, target_lift, self.config.payload_lift_speed, "Lift object")
+        if self.config.post_lift_settle_s > 0.0:
+            self.get_logger().info(f"Holding after lift for {self.config.post_lift_settle_s:.2f}s to damp payload swing.")
+            self.hold_cmd(current, self.config.post_lift_settle_s)
+        current = self.fly_segment(current, box_above, self.config.payload_transfer_speed, "Fly to box hover")
         current = self.fly_segment(current, box_place, self.config.approach_speed, "Descend to box")
         self.get_logger().info("Opening gripper to release.")
         self.publish_gripper_ramp(
@@ -661,6 +694,23 @@ def parse_args() -> AutoConfig:
     parser.add_argument("--max-speed", type=float, default=0.6)
     parser.add_argument("--approach-speed", type=float, default=0.3)
     parser.add_argument("--lift-speed", type=float, default=0.4)
+    parser.add_argument("--payload-lift-speed", type=float, default=0.18)
+    parser.add_argument("--payload-transfer-speed", type=float, default=0.25)
+    parser.add_argument("--post-grasp-settle-s", type=float, default=1.0)
+    parser.add_argument("--post-lift-settle-s", type=float, default=1.0)
+    parser.add_argument("--smooth-trajectory", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--takeoff-forward-comp-m",
+        type=float,
+        default=0.0,
+        help="Body-forward correction after AUTO_TAKEOFF and before recording starts.",
+    )
+    parser.add_argument(
+        "--payload-lift-forward-comp-m",
+        type=float,
+        default=0.0,
+        help="Body-forward correction applied while lifting the grasped payload.",
+    )
     parser.add_argument(
         "--gripper-z-offset-m",
         type=float,
@@ -766,6 +816,10 @@ def parse_args() -> AutoConfig:
         raise ValueError("--max-speed must be in [0.5, 1.0] m/s.")
     if args.approach_speed <= 0.0 or args.lift_speed <= 0.0:
         raise ValueError("--approach-speed and --lift-speed must be positive.")
+    if args.payload_lift_speed <= 0.0 or args.payload_transfer_speed <= 0.0:
+        raise ValueError("--payload-lift-speed and --payload-transfer-speed must be positive.")
+    if args.post_grasp_settle_s < 0.0 or args.post_lift_settle_s < 0.0:
+        raise ValueError("--post-grasp-settle-s and --post-lift-settle-s must be non-negative.")
     if args.retreat_speed <= 0.0:
         raise ValueError("--retreat-speed must be positive.")
     if args.cmd_land_speed <= 0.0:

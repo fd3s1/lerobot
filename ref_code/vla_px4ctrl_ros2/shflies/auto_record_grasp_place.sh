@@ -22,6 +22,13 @@ EPISODE_TIME_S="${EPISODE_TIME_S:-30}"
 MAX_SPEED="${MAX_SPEED:-0.6}"
 APPROACH_SPEED="${APPROACH_SPEED:-0.3}"
 LIFT_SPEED="${LIFT_SPEED:-0.4}"
+PAYLOAD_LIFT_SPEED="${PAYLOAD_LIFT_SPEED:-0.18}"
+PAYLOAD_TRANSFER_SPEED="${PAYLOAD_TRANSFER_SPEED:-0.25}"
+POST_GRASP_SETTLE_S="${POST_GRASP_SETTLE_S:-1.0}"
+POST_LIFT_SETTLE_S="${POST_LIFT_SETTLE_S:-1.0}"
+SMOOTH_TRAJECTORY="${SMOOTH_TRAJECTORY:-true}"
+TAKEOFF_FORWARD_COMP_M="${TAKEOFF_FORWARD_COMP_M:-0.0}"
+PAYLOAD_LIFT_FORWARD_COMP_M="${PAYLOAD_LIFT_FORWARD_COMP_M:-0.0}"
 RETREAT_SPEED="${RETREAT_SPEED:-0.6}"
 RATE_HZ="${RATE_HZ:-20}"
 GRIPPER_Z_OFFSET_M="${GRIPPER_Z_OFFSET_M:-0.25}"
@@ -126,6 +133,8 @@ echo "[auto-record-grasp-place] record gate: ${RECORD_GATE_TOPIC}=${RECORD_GATE_
 echo "[auto-record-grasp-place] record status topic: ${RECORD_STATUS_TOPIC}"
 echo "[auto-record-grasp-place] episode time: ${EPISODE_TIME_S}s"
 echo "[auto-record-grasp-place] speeds: max=${MAX_SPEED} approach=${APPROACH_SPEED} lift=${LIFT_SPEED} retreat=${RETREAT_SPEED}"
+echo "[auto-record-grasp-place] payload damping: lift_speed=${PAYLOAD_LIFT_SPEED} transfer_speed=${PAYLOAD_TRANSFER_SPEED} post_grasp_settle=${POST_GRASP_SETTLE_S}s post_lift_settle=${POST_LIFT_SETTLE_S}s smooth=${SMOOTH_TRAJECTORY}"
+echo "[auto-record-grasp-place] forward compensation: takeoff=${TAKEOFF_FORWARD_COMP_M}m payload_lift=${PAYLOAD_LIFT_FORWARD_COMP_M}m"
 echo "[auto-record-grasp-place] geometry: gripper_z_offset=${GRIPPER_Z_OFFSET_M}m target_h=${TARGET_HEIGHT_M}m target_grasp_h=${TARGET_GRASP_HEIGHT_M}m target_z_ref=${TARGET_POSE_Z_REFERENCE}"
 echo "[auto-record-grasp-place] box: l=${BOX_LENGTH_M}m w=${BOX_WIDTH_M}m h=${BOX_HEIGHT_M}m hover_clearance=${BOX_HOVER_GRIPPER_CLEARANCE_M}m place_bottom_clearance=${BOX_PLACE_BOTTOM_CLEARANCE_M}m"
 echo "[auto-record-grasp-place] planning offsets: target=(${TARGET_OFFSET_X}, ${TARGET_OFFSET_Y}, ${TARGET_OFFSET_Z})m box=(${BOX_OFFSET_X}, ${BOX_OFFSET_Y}, ${BOX_OFFSET_Z})m"
@@ -177,6 +186,12 @@ auto_args=(
   --max-speed "${MAX_SPEED}"
   --approach-speed "${APPROACH_SPEED}"
   --lift-speed "${LIFT_SPEED}"
+  --payload-lift-speed "${PAYLOAD_LIFT_SPEED}"
+  --payload-transfer-speed "${PAYLOAD_TRANSFER_SPEED}"
+  --post-grasp-settle-s "${POST_GRASP_SETTLE_S}"
+  --post-lift-settle-s "${POST_LIFT_SETTLE_S}"
+  --takeoff-forward-comp-m "${TAKEOFF_FORWARD_COMP_M}"
+  --payload-lift-forward-comp-m "${PAYLOAD_LIFT_FORWARD_COMP_M}"
   --retreat-speed "${RETREAT_SPEED}"
   --gripper-z-offset-m "${GRIPPER_Z_OFFSET_M}"
   --target-height-m "${TARGET_HEIGHT_M}"
@@ -206,6 +221,12 @@ auto_args=(
 
 if [[ -n "${CMD_LAND_Z}" ]]; then
   auto_args+=(--cmd-land-z "${CMD_LAND_Z}")
+fi
+
+if bool_is_true "${SMOOTH_TRAJECTORY}"; then
+  auto_args+=(--smooth-trajectory)
+else
+  auto_args+=(--no-smooth-trajectory)
 fi
 
 if bool_is_true "${NO_LAND}"; then
