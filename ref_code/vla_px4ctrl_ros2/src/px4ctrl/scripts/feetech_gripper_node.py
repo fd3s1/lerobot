@@ -186,8 +186,8 @@ class FeetechGripperNode(Node):
         self.port = self.declare_parameter("port", "/dev/ttyACM1").value
         self.left_id = int(self.declare_parameter("left_id", 1).value)
         self.right_id = int(self.declare_parameter("right_id", 2).value)
-        self.left_inverted = bool(self.declare_parameter("left_inverted", False).value)
-        self.right_inverted = bool(self.declare_parameter("right_inverted", False).value)
+        self.left_inverted = bool(self.declare_parameter("left_inverted", True).value)
+        self.right_inverted = bool(self.declare_parameter("right_inverted", True).value)
         self.no_configure = bool(self.declare_parameter("no_configure", False).value)
         self.dry_run = bool(self.declare_parameter("dry_run", False).value)
 
@@ -260,8 +260,8 @@ Parameters:
   port            default /dev/ttyACM1
   left_id         default 1
   right_id        default 2
-  left_inverted   default false
-  right_inverted  default false
+  left_inverted   default true
+  right_inverted  default true
   no_configure    default false
   dry_run         default false
 """

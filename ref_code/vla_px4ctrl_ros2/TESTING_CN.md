@@ -154,7 +154,7 @@ ros2 topic pub --once /gripper/command std_msgs/msg/Float64 "{data: 0.0}"
 - `100.0`：夹爪全开
 - `0.0`：夹爪全关
 
-`feetech_gripper_node.py` 默认保持原始方向。如果单独运行 ROS 夹爪节点时方向反了，不要改 Windows 标定，先用软件反向：
+当前夹爪约定是 `100.0 = 全开`，`0.0 = 全关`。`feetech_gripper_node.py` 和 LeRobot 录制默认都使用软件反向，让无参启动时也保持这个语义。如果单独运行 ROS 夹爪节点时方向仍然反了，不要改 Windows 标定，先显式指定软件反向：
 
 ```bash
 ros2 run px4ctrl feetech_gripper_node.py --ros-args \
@@ -474,6 +474,8 @@ source install/setup.bash
 ros2 run px4ctrl feetech_gripper_node.py --ros-args -p port:=/dev/ttyACM1
 ```
 
+这个节点默认已经是 `left_inverted:=true`、`right_inverted:=true`，因此 `/gripper/command=100.0` 应该对应物理全开。
+
 确认 PX4 处于 `POSCTL` 或 `OFFBOARD` 后，拨动遥控器第 10 通道。
 
 期望：
@@ -482,7 +484,7 @@ ros2 run px4ctrl feetech_gripper_node.py --ros-args -p port:=/dev/ttyACM1
 - `POSCTL` 或 `OFFBOARD` 下，CH10 高位：夹爪全关
 - 切到 `ALTCTL`、`STABILIZED`、`MANUAL`、触发降落或高度低于 `0.20 m` 后，无论 CH10 位置如何，夹爪自动全开
 
-如果单独运行 ROS 夹爪节点时方向反了，停止夹爪节点，用反向参数重启：
+如果单独运行 ROS 夹爪节点时方向仍然反了，停止夹爪节点，用反向参数重启：
 
 ```bash
 ros2 run px4ctrl feetech_gripper_node.py --ros-args \
@@ -767,6 +769,7 @@ Robot 参数：
 - `ROBOT_MAX_POSE_AGE_S`：默认 `2.0`。允许 LeRobot 在采集过程中短暂等待最新 mocap pose。NX 同时读两路相机和写数据时偶发调度延迟，`0.5 s` 容易误判为 pose 超时。
 - `MAVROS_SETPOINT_TOPIC`：默认 `/position_cmd`。推理阶段向 px4ctrl 发送目标位置的 topic。手动采集时保留该配置，但脚本固定使用 `--robot.send_pose_actions=false`，不会发送 pose action。
 - `GRIPPER_PORT`：默认 `/dev/ttyACM1`。Feetech 舵机总线串口。
+- `GRIPPER_LEFT_INVERTED` / `GRIPPER_RIGHT_INVERTED`：默认 `true`。录制脚本会显式传给 LeRobot，保证 `100.0 = 物理全开`、`0.0 = 物理全关`，避免受旧环境默认值影响。
 - `SAFE_OPEN_GRIPPER_AFTER_EPISODE`：默认 `true`。每条 episode 到时结束后，立即在保存/编码视频前直接向 Feetech 舵机写入全开位置。这个动作不写入 dataset，也不发布 action。
 - `SAFE_OPEN_GRIPPER_ON_DISCONNECT`：默认 `true`。录制进程退出并进入 robot disconnect 时，在关闭 `/dev/ttyACM1` 前再次直接向 Feetech 舵机写入全开位置，避免串口关闭后夹爪停在闭合位置。
 - `DISCONNECT_GRIPPER_OPEN_POSITION`：默认 `100.0`。disconnect 前写入的夹爪全开目标。保持数据语义 `100 = 全开`。

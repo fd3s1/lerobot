@@ -26,6 +26,8 @@ MAVROS_SETPOINT_TOPIC="${MAVROS_SETPOINT_TOPIC:-/position_cmd}"
 EXPERT_POSE_TOPIC="${EXPERT_POSE_TOPIC:-/px4ctrl/expert_pose}"
 GRIPPER_TOPIC="${GRIPPER_TOPIC:-/gripper/command}"
 GRIPPER_PORT="${GRIPPER_PORT:-/dev/ttyACM1}"
+GRIPPER_LEFT_INVERTED="${GRIPPER_LEFT_INVERTED:-true}"
+GRIPPER_RIGHT_INVERTED="${GRIPPER_RIGHT_INVERTED:-true}"
 SAFE_OPEN_GRIPPER_ON_DISCONNECT="${SAFE_OPEN_GRIPPER_ON_DISCONNECT:-true}"
 SAFE_OPEN_GRIPPER_AFTER_EPISODE="${SAFE_OPEN_GRIPPER_AFTER_EPISODE:-true}"
 DISCONNECT_GRIPPER_OPEN_POSITION="${DISCONNECT_GRIPPER_OPEN_POSITION:-100.0}"
@@ -210,6 +212,8 @@ echo "[record-vla-dataset] image writer threads/camera: ${IMAGE_WRITER_THREADS_P
 echo "[record-vla-dataset] front camera: ${FRONT_CAMERA}"
 echo "[record-vla-dataset] down camera: ${DOWN_CAMERA}"
 echo "[record-vla-dataset] gripper port: ${GRIPPER_PORT}"
+echo "[record-vla-dataset] gripper left inverted: ${GRIPPER_LEFT_INVERTED}"
+echo "[record-vla-dataset] gripper right inverted: ${GRIPPER_RIGHT_INVERTED}"
 echo "[record-vla-dataset] safe open gripper on disconnect: ${SAFE_OPEN_GRIPPER_ON_DISCONNECT}"
 echo "[record-vla-dataset] safe open gripper after episode: ${SAFE_OPEN_GRIPPER_AFTER_EPISODE}"
 echo "[record-vla-dataset] disconnect gripper open position: ${DISCONNECT_GRIPPER_OPEN_POSITION}"
@@ -227,6 +231,8 @@ PYTHONUNBUFFERED=1 lerobot-record \
   --robot.mavros_setpoint_topic="${MAVROS_SETPOINT_TOPIC}" \
   --robot.send_pose_actions=false \
   --robot.gripper_port="${GRIPPER_PORT}" \
+  --robot.gripper_left_inverted="${GRIPPER_LEFT_INVERTED}" \
+  --robot.gripper_right_inverted="${GRIPPER_RIGHT_INVERTED}" \
   --robot.safe_open_gripper_on_disconnect="${SAFE_OPEN_GRIPPER_ON_DISCONNECT}" \
   --robot.safe_open_gripper_after_episode="${SAFE_OPEN_GRIPPER_AFTER_EPISODE}" \
   --robot.disconnect_gripper_open_position="${DISCONNECT_GRIPPER_OPEN_POSITION}" \

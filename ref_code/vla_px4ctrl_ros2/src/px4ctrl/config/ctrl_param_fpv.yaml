@@ -63,8 +63,8 @@ feetech_gripper_node:
     port: /dev/ttyACM1
     left_id: 1
     right_id: 2
-    left_inverted: false
-    right_inverted: false
+    left_inverted: true
+    right_inverted: true
     no_configure: false
     dry_run: false
     lerobot_src: /home/user/vla_drone/lerobot/src
