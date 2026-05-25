@@ -15,6 +15,8 @@ PX4CTRL_STATE_TOPIC="${PX4CTRL_STATE_TOPIC:-/px4ctrl/state}"
 RECORD_STATUS_TOPIC="${RECORD_STATUS_TOPIC:-/lerobot_record/status}"
 RECORD_GATE_TOPIC="${RECORD_GATE_TOPIC:-/auto_grasp_dataset/record_gate}"
 RECORD_GATE_VALUE="${RECORD_GATE_VALUE:-START}"
+POSE_PREFLIGHT_TIMEOUT_S="${POSE_PREFLIGHT_TIMEOUT_S:-3}"
+SKIP_POSE_PREFLIGHT="${SKIP_POSE_PREFLIGHT:-false}"
 
 EPISODE_TIME_S="${EPISODE_TIME_S:-30}"
 MAX_SPEED="${MAX_SPEED:-0.6}"
@@ -47,6 +49,21 @@ bool_is_true() {
     1|true|yes|y|on) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+check_pose_topic_once() {
+  local label="$1"
+  local topic="$2"
+
+  echo "[auto-record-grasp-place] checking ${label} pose topic: ${topic}"
+  if timeout "${POSE_PREFLIGHT_TIMEOUT_S}s" \
+    ros2 topic echo --once --qos-reliability best_effort "${topic}" >/dev/null 2>&1; then
+    echo "[auto-record-grasp-place] ${label} pose topic is live: ${topic}"
+    return 0
+  fi
+
+  echo "[auto-record-grasp-place] ERROR: no fresh ${label} pose on ${topic} within ${POSE_PREFLIGHT_TIMEOUT_S}s" >&2
+  return 1
 }
 
 record_pid=""
@@ -108,6 +125,25 @@ echo "[auto-record-grasp-place] box: l=${BOX_LENGTH_M}m w=${BOX_WIDTH_M}m h=${BO
 echo "[auto-record-grasp-place] release retreat: up=${RELEASE_RETREAT_UP_M}m forward=${RELEASE_RETREAT_FORWARD_M}m"
 echo "[auto-record-grasp-place] landing: mode=${LANDING_MODE} cmd_speed=${CMD_LAND_SPEED} cmd_z=${CMD_LAND_Z:-pre_takeoff_z+${CMD_LAND_Z_OFFSET_M}}"
 
+set +u
+source /opt/ros/humble/setup.bash
+source "${WORKSPACE_DIR}/install/setup.bash"
+set -u
+
+if ! bool_is_true "${SKIP_POSE_PREFLIGHT}"; then
+  preflight_failed=false
+  check_pose_topic_once "drone" "${DRONE_POSE_TOPIC}" || preflight_failed=true
+  check_pose_topic_once "target" "${TARGET_POSE_TOPIC}" || preflight_failed=true
+  check_pose_topic_once "box" "${BOX_POSE_TOPIC}" || preflight_failed=true
+  if [[ "${preflight_failed}" == "true" ]]; then
+    echo "[auto-record-grasp-place] Start mocap/MAVROS first, usually:" >&2
+    echo "[auto-record-grasp-place]   bash shflies/run_mocap_mavros.sh" >&2
+    echo "[auto-record-grasp-place] Or check actual VRPN names with:" >&2
+    echo "[auto-record-grasp-place]   ros2 topic list | grep -E 'strawberry|box|pose'" >&2
+    exit 1
+  fi
+fi
+
 START_GATE_TOPIC="${RECORD_GATE_TOPIC}" \
 START_GATE_VALUE="${RECORD_GATE_VALUE}" \
 START_GATE_STABLE_S=0.0 \
@@ -118,11 +154,6 @@ TASK="${TASK:-Auto grasp target and place into box}" \
 setsid bash "${SCRIPT_DIR}/record_vla_dataset.sh" &
 record_pid="$!"
 record_uses_setsid=true
-
-set +u
-source /opt/ros/humble/setup.bash
-source "${WORKSPACE_DIR}/install/setup.bash"
-set -u
 
 auto_args=(
   --drone-pose-topic "${DRONE_POSE_TOPIC}"

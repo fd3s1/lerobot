@@ -864,12 +864,21 @@ ros2 topic echo /strawberry_bear/pose
 ros2 topic echo /box1/pose
 ```
 
-自动采集前，把 CH5 和 CH6 都拨到高位，然后运行：
+自动采集脚本不会启动 VRPN/MAVROS/px4ctrl。先在第一个终端启动 mocap 和飞控链路：
+
+```bash
+cd ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
+bash shflies/run_mocap_mavros.sh
+```
+
+确认 `/mavros/vision_pose/pose`、`/strawberry_bear/pose`、`/box1/pose` 都有数据后，把 CH5 和 CH6 都拨到高位，在第二个终端运行：
 
 ```bash
 cd ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
 bash shflies/auto_record_grasp_place.sh
 ```
+
+`auto_record_grasp_place.sh` 启动 record 前会先检查三个位姿 topic；如果缺任何一个，会直接退出，不会启动相机和录制。
 
 如果 VRPN 刚体名字变化，可以临时改 topic：
 
