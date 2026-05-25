@@ -174,6 +174,8 @@ class DatasetRecordConfig:
     start_gate_stable_s: int | float = 3.0
     # 0 means wait indefinitely.
     start_gate_timeout_s: int | float = 0.0
+    # Optional ROS2 String status topic. Empty topic disables status publishing.
+    status_topic: str = ""
     # Number of seconds for resetting the environment after each episode.
     reset_time_s: int | float = 60
     # Number of episodes to record.
@@ -327,6 +329,54 @@ def wait_for_start_gate(
     finally:
         executor.shutdown()
         node.destroy_node()
+
+
+class RecordStatusPublisher:
+    def __init__(self, topic: str) -> None:
+        self.node = None
+        self.publisher = None
+        self._msg_type = None
+
+        if not topic:
+            return
+
+        import rclpy
+        from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+        from std_msgs.msg import String
+
+        if not rclpy.ok():
+            rclpy.init(args=None)
+
+        qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+        self._msg_type = String
+        self.node = rclpy.create_node("lerobot_record_status")
+        self.publisher = self.node.create_publisher(String, topic, qos)
+
+    def publish(self, status: str) -> None:
+        if self.node is None or self.publisher is None or self._msg_type is None:
+            return
+
+        msg = self._msg_type()
+        msg.data = status
+        self.publisher.publish(msg)
+
+        import rclpy
+
+        rclpy.spin_once(self.node, timeout_sec=0.0)
+
+    def close(self) -> None:
+        if self.node is None:
+            return
+
+        self.node.destroy_node()
+        self.node = None
+        self.publisher = None
+        self._msg_type = None
 
 
 def prewarm_record_inputs(
@@ -679,6 +729,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
 
     dataset = None
     listener = None
+    record_status = RecordStatusPublisher(cfg.dataset.status_topic)
 
     try:
         if cfg.resume:
@@ -747,12 +798,14 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             recorded_episodes = 0
             while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
                 log_say(f"Recording episode {dataset.num_episodes}", cfg.play_sounds)
+                record_status.publish("WAITING_GATE")
                 wait_for_start_gate(
                     topic=cfg.dataset.start_gate_topic,
                     value=cfg.dataset.start_gate_value,
                     stable_s=cfg.dataset.start_gate_stable_s,
                     timeout_s=cfg.dataset.start_gate_timeout_s,
                 )
+                record_status.publish("RECORDING")
                 prewarm_record_inputs(
                     robot=robot,
                     fps=cfg.dataset.fps,
@@ -818,7 +871,10 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
 
                 dataset.save_episode()
                 recorded_episodes += 1
+                record_status.publish("EPISODE_DONE")
     finally:
+        record_status.publish("EXITING")
+        record_status.close()
         log_say("Stop recording", cfg.play_sounds, blocking=True)
 
         if dataset:

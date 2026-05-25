@@ -43,6 +43,7 @@ install(TARGETS px4ctrl_node
 )
 
 install(PROGRAMS
+  scripts/auto_grasp_place_dataset.py
   scripts/feetech_gripper_node.py
   scripts/fly_x_gripper_test.py
   scripts/vrpn_to_mavros_vision_bridge.py

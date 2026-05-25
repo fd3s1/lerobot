@@ -798,6 +798,7 @@ Dataset 参数：
 - `START_GATE_VALUE`：默认 `AUTO_HOVER`。只有 topic 内容等于该值时才开始稳定计时。
 - `START_GATE_STABLE_S`：默认 `3.0`。`/px4ctrl/state` 必须连续保持 `AUTO_HOVER` 的时间。切出 AUTO_HOVER 会清零重新计时。
 - `START_GATE_TIMEOUT_S`：默认 `0.0`。`0.0` 表示无限等待。现场飞行建议保持无限等待，准备好后切入 AUTO_HOVER 即可。
+- `DATASET_STATUS_TOPIC`：默认空。自动采集脚本使用时设为 `/lerobot_record/status`，record 完成相机、夹爪和 ROS 初始化并等待 gate 后会发布 `WAITING_GATE`。
 - `RESET_TIME_S`：默认 `10`。两条 episode 之间留 10 秒复位时间。
 - `TASK`：默认 `Fly to the target and operate the gripper`。本批数据的任务描述。
 - `PUSH_TO_HUB`：默认 `false`。采集后只保存到本地，不自动上传 Hugging Face Hub。
@@ -835,6 +836,130 @@ ros2 topic echo /mavros/state
 - 门控和预热阶段都不会调用 `dataset.add_frame()`，不会污染数据集。
 - 门控和预热阶段都不会调用 `robot.send_action()`，不会发布 `/position_cmd`，也不会主动驱动夹爪。
 - px4ctrl 终端中进入 AUTO_HOVER 的状态切换日志为绿色，离开 AUTO_HOVER 的状态切换日志为红色，便于飞行中快速判断状态变化。
+
+### 13.4.1 自动抓取/放置采集
+
+如果手动 AUTO_HOVER 不跟手，可以使用自动采集入口。该入口不会覆盖手动脚本：`record_vla_dataset.sh` 默认仍然是手动采集，自动流程只通过总控脚本临时设置 record gate。
+
+默认 VRPN 刚体 topic：
+
+- 被抓目标：`/strawberry_bear/pose`
+- 放置盒子：`/box1/pose`
+
+启动前确认：
+
+```bash
+ros2 topic echo /strawberry_bear/pose
+ros2 topic echo /box1/pose
+ros2 topic echo /mavros/vision_pose/pose
+ros2 topic echo /px4ctrl/state
+```
+
+自动采集前，把 CH5 和 CH6 都拨到高位，然后运行：
+
+```bash
+cd ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
+bash shflies/auto_record_grasp_place.sh
+```
+
+如果 VRPN 刚体名字变化，可以临时改 topic：
+
+```bash
+TARGET_POSE_TOPIC=/new_target/pose \
+BOX_POSE_TOPIC=/new_box/pose \
+bash shflies/auto_record_grasp_place.sh
+```
+
+第一次飞行建议使用更保守速度：
+
+```bash
+MAX_SPEED=0.5 APPROACH_SPEED=0.25 LIFT_SPEED=0.35 \
+bash shflies/auto_record_grasp_place.sh
+```
+
+默认几何假设：
+
+- 夹爪夹持中心在无人机 mocap 刚体中心下方 `0.25 m`：`GRIPPER_Z_OFFSET_M=0.25`。
+- 被抓目标高度 `0.30 m`：`TARGET_HEIGHT_M=0.30`。
+- 目标刚体 z 默认表示目标几何中心：`TARGET_POSE_Z_REFERENCE=center`。
+- 夹爪默认夹在目标底部上方 `0.17 m` 处：`TARGET_GRASP_HEIGHT_M=0.17`。
+- 周转箱尺寸默认 `0.65 x 0.41 x 0.14 m`：`BOX_LENGTH_M=0.65`、`BOX_WIDTH_M=0.41`、`BOX_HEIGHT_M=0.14`。
+- 周转箱刚体中心默认在箱子上沿平面、XY 为箱体几何中心。自动脚本会把玩具放到箱子中心附近。
+- 夹取高度和放置高度分别计算，不使用同一个飞行高度。放置高度按“箱底 + 目标夹持高度 + 释放余量”换算到无人机中心高度。
+- 脚本会用箱体长宽做中心放置余量检查；默认把目标高度 `0.30 m` 作为保守占地尺寸估计。
+
+如果夹爪下偏不是 `0.25 m`，临时覆盖：
+
+```bash
+GRIPPER_Z_OFFSET_M=0.22 bash shflies/auto_record_grasp_place.sh
+```
+
+如果你说的 `0.25 cm` 是真实尺寸，而不是 `0.25 m`，应使用：
+
+```bash
+GRIPPER_Z_OFFSET_M=0.0025 bash shflies/auto_record_grasp_place.sh
+```
+
+自动流程：
+
+1. 总控脚本先启动 `record_vla_dataset.sh`。
+2. record 完成相机、夹爪、ROS bridge 初始化后发布 `/lerobot_record/status = WAITING_GATE`，此时还没有起飞，也没有写 dataset。
+3. 自动任务脚本读取 `/strawberry_bear/pose`、`/box1/pose`、`/mavros/vision_pose/pose`，确认新鲜稳定。
+4. 自动发布夹爪全开 `100.0`，然后发布 `/px4ctrl/takeoff_land` 起飞。
+5. 等 `/px4ctrl/state = AUTO_HOVER`，表示 `AUTO_TAKEOFF` 已完成。
+6. 自动发布当前位置 hold 的 `/position_cmd`，让 px4ctrl 进入 `CMD_CTRL`。
+7. 进入 `CMD_CTRL` 后发布 `/auto_grasp_dataset/record_gate = START`，record 才开始写 dataset。
+8. 第一帧保持任务起点悬停，下一帧开始向目标飞，避免数据集中包含起飞后的长时间悬停。
+
+轨迹速度：
+
+- `/position_cmd` 是位置目标，但自动脚本按 `20 Hz` 逐点插值发布，不直接跳到目标点。
+- `MAX_SPEED` 默认 `0.6 m/s`，建议范围 `0.5-1.0 m/s`。
+- `APPROACH_SPEED` 默认 `0.3 m/s`，用于下降接近目标和盒子。
+- `LIFT_SPEED` 默认 `0.4 m/s`，用于抓取后抬升和释放后抬升。
+- `RETREAT_SPEED` 默认 `0.6 m/s`，用于放置后向前撤离。
+
+夹爪慢闭合：
+
+- 不改 Feetech 舵机速度寄存器。
+- 自动脚本用命令斜坡慢闭合，默认约 `1.5 s` 从 `100.0` 逐步到 `0.0`。
+- 如需更慢：
+
+```bash
+GRIPPER_CLOSE_DURATION_S=2.5 bash shflies/auto_record_grasp_place.sh
+```
+
+放置后撤离：
+
+- 物体释放后，脚本会再次发布夹爪全开 `100.0`。
+- 然后从放置点上升 `0.3 m`：`RELEASE_RETREAT_UP_M=0.3`。
+- 再沿当前 yaw 的机头前方飞 `2.0 m`：`RELEASE_RETREAT_FORWARD_M=2.0`。
+- 撤离完成后默认不触发 px4ctrl `AUTO_LAND`，而是继续在 `CMD_CTRL` 下用 `/position_cmd` 限速下降。
+- `LANDING_MODE=cmd` 为默认值。CMD 降落目标高度默认使用起飞前无人机刚体 z：`CMD_LAND_Z=起飞前 z + CMD_LAND_Z_OFFSET_M`。
+- `CMD_LAND_SPEED` 默认 `0.25 m/s`。降落过程中持续发布夹爪全开 `100.0`。
+- CMD 降落会进入 dataset，用于记录完整任务收尾；但它不会自动 disarm，落地后需要手动切模式/上锁，或后续再加自动 disarm 策略。
+- `EPISODE_TIME_S` 需要足够覆盖“起飞后任务开始、抓取、放置、撤离、降落”全过程；如果 episode 太短，降落后半段不会被保存。
+
+如需修改：
+
+```bash
+RELEASE_RETREAT_UP_M=0.4 RELEASE_RETREAT_FORWARD_M=1.5 \
+bash shflies/auto_record_grasp_place.sh
+```
+
+如需指定 CMD 降落高度或改回 px4ctrl 自动降落：
+
+```bash
+CMD_LAND_Z=0.12 CMD_LAND_SPEED=0.2 bash shflies/auto_record_grasp_place.sh
+
+LANDING_MODE=auto bash shflies/auto_record_grasp_place.sh
+```
+
+注意：
+
+- 目标和盒子的 mocap 位姿只用于自动脚本规划，不进入 LeRobot dataset features。
+- record 只记录飞机 observation、相机、夹爪状态和 `/px4ctrl/expert_pose` action。
+- 自动脚本会等 `EPISODE_TIME_S` 预计结束后再降落，避免降落过程进入数据集；如果任务提前完成，会在安全高度 hold 到 episode 结束。
 
 夹爪安全策略：
 
