@@ -54,8 +54,10 @@ trap 'cleanup; exit 130' INT TERM
 trap cleanup EXIT
 
 set +u
+set +u
 source /opt/ros/humble/setup.bash
 source "${WORKSPACE_DIR}/install/setup.bash"
+set -u
 set -u
 
 echo "[run-mocap-mavros] workspace: ${WORKSPACE_DIR}"

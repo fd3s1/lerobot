@@ -82,8 +82,10 @@ TASK="${TASK:-Auto grasp target and place into box}" \
 bash "${SCRIPT_DIR}/record_vla_dataset.sh" &
 record_pid="$!"
 
+set +u
 source /opt/ros/humble/setup.bash
 source "${WORKSPACE_DIR}/install/setup.bash"
+set -u
 
 auto_args=(
   --drone-pose-topic "${DRONE_POSE_TOPIC}"
