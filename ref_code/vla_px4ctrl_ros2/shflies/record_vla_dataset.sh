@@ -16,10 +16,10 @@ CONDA_SH="${CONDA_SH:-${HOME}/miniforge3/etc/profile.d/conda.sh}"
 
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 DATASET_PREFIX="${DATASET_PREFIX:-vla_drone_grasp}"
-DATASET_NAME="${DATASET_NAME:-${DATASET_PREFIX}_${RUN_ID}}"
-DATASET_ROOT="${DATASET_ROOT:-${HOME}/vla_drone/data/${DATASET_NAME}}"
+DATASET_BASE_DIR="${DATASET_BASE_DIR:-${HOME}/vla_drone/data}"
 REPO_OWNER="${REPO_OWNER:-fd3s1}"
-REPO_ID="${REPO_ID:-${REPO_OWNER}/${DATASET_NAME}}"
+RESUME_DATASET="${RESUME_DATASET:-false}"
+RESUME_LATEST="${RESUME_LATEST:-false}"
 
 NOKOV_POSE_TOPIC="${NOKOV_POSE_TOPIC:-/mavros/vision_pose/pose}"
 MAVROS_SETPOINT_TOPIC="${MAVROS_SETPOINT_TOPIC:-/position_cmd}"
@@ -62,6 +62,100 @@ ROBOT_MAX_POSE_AGE_S="${ROBOT_MAX_POSE_AGE_S:-2.0}"
 TELEOP_STARTUP_TIMEOUT_S="${TELEOP_STARTUP_TIMEOUT_S:-2.0}"
 TELEOP_MAX_POSE_AGE_S="${TELEOP_MAX_POSE_AGE_S:-0.5}"
 
+bool_is_true() {
+  case "${1,,}" in
+    1|true|yes|y|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+select_dataset_for_resume() {
+  if [[ -d "${DATASET_BASE_DIR}" ]]; then
+    mapfile -t dataset_dirs < <(
+      find "${DATASET_BASE_DIR}" -maxdepth 1 -type d -name "${DATASET_PREFIX}_*" -printf "%T@ %p\n" 2>/dev/null |
+        sort -nr |
+        awk '{sub($1 FS, ""); print}'
+    )
+  else
+    dataset_dirs=()
+  fi
+
+  if [[ "${#dataset_dirs[@]}" -eq 0 ]]; then
+    echo "[record-vla-dataset] no datasets found under ${DATASET_BASE_DIR}/${DATASET_PREFIX}_*" >&2
+    exit 1
+  fi
+
+  if ! [[ -t 0 ]]; then
+    echo "[record-vla-dataset] resume selection needs an interactive terminal." >&2
+    echo "[record-vla-dataset] Set DATASET_NAME, DATASET_ROOT, or RESUME_LATEST=true." >&2
+    exit 1
+  fi
+
+  echo "[record-vla-dataset] select dataset to resume:"
+  for idx in "${!dataset_dirs[@]}"; do
+    printf "  [%d] %s\n" "$((idx + 1))" "$(basename "${dataset_dirs[$idx]}")"
+  done
+
+  local selection
+  read -r -p "[record-vla-dataset] dataset number: " selection
+  if ! [[ "${selection}" =~ ^[0-9]+$ ]] ||
+     ((selection < 1 || selection > ${#dataset_dirs[@]})); then
+    echo "[record-vla-dataset] invalid selection: ${selection}" >&2
+    exit 1
+  fi
+
+  DATASET_ROOT="${dataset_dirs[$((selection - 1))]}"
+  DATASET_NAME="$(basename "${DATASET_ROOT}")"
+}
+
+if bool_is_true "${RESUME_LATEST}"; then
+  RESUME_DATASET=true
+  if [[ -d "${DATASET_BASE_DIR}" ]]; then
+    DATASET_ROOT="$(
+      find "${DATASET_BASE_DIR}" -maxdepth 1 -type d -name "${DATASET_PREFIX}_*" -printf "%T@ %p\n" 2>/dev/null |
+        sort -nr |
+        awk 'NR == 1 {sub($1 FS, ""); print}'
+    )"
+  else
+    DATASET_ROOT=""
+  fi
+  if [[ -z "${DATASET_ROOT}" ]]; then
+    echo "[record-vla-dataset] no datasets found under ${DATASET_BASE_DIR}/${DATASET_PREFIX}_*" >&2
+    exit 1
+  fi
+  DATASET_NAME="$(basename "${DATASET_ROOT}")"
+elif bool_is_true "${RESUME_DATASET}"; then
+  if [[ -n "${DATASET_ROOT:-}" ]]; then
+    DATASET_NAME="${DATASET_NAME:-$(basename "${DATASET_ROOT}")}"
+  elif [[ -n "${DATASET_NAME:-}" ]]; then
+    DATASET_ROOT="${DATASET_BASE_DIR}/${DATASET_NAME}"
+  else
+    select_dataset_for_resume
+  fi
+else
+  DATASET_NAME="${DATASET_NAME:-${DATASET_PREFIX}_${RUN_ID}}"
+  DATASET_ROOT="${DATASET_ROOT:-${DATASET_BASE_DIR}/${DATASET_NAME}}"
+fi
+
+REPO_ID="${REPO_ID:-${REPO_OWNER}/${DATASET_NAME}}"
+
+if bool_is_true "${RESUME_DATASET}" && [[ ! -d "${DATASET_ROOT}" ]]; then
+  echo "[record-vla-dataset] resume dataset root does not exist: ${DATASET_ROOT}" >&2
+  exit 1
+fi
+
+if bool_is_true "${RESUME_DATASET}"; then
+  RESUME_DATASET=true
+else
+  RESUME_DATASET=false
+fi
+
+if bool_is_true "${RESUME_LATEST}"; then
+  RESUME_LATEST=true
+else
+  RESUME_LATEST=false
+fi
+
 if [[ -f "${CONDA_SH}" ]]; then
   set +u
   # shellcheck disable=SC1090
@@ -94,6 +188,9 @@ echo "[record-vla-dataset] conda env: ${CONDA_ENV}"
 echo "[record-vla-dataset] dataset name: ${DATASET_NAME}"
 echo "[record-vla-dataset] dataset root: ${DATASET_ROOT}"
 echo "[record-vla-dataset] repo id: ${REPO_ID}"
+echo "[record-vla-dataset] resume dataset: ${RESUME_DATASET}"
+echo "[record-vla-dataset] resume latest: ${RESUME_LATEST}"
+echo "[record-vla-dataset] dataset base dir: ${DATASET_BASE_DIR}"
 echo "[record-vla-dataset] episodes: ${NUM_EPISODES}"
 echo "[record-vla-dataset] episode time: ${EPISODE_TIME_S}s"
 echo "[record-vla-dataset] record prewarm steps: ${RECORD_PREWARM_STEPS}"
@@ -123,6 +220,7 @@ echo "[record-vla-dataset] expert topic: ${EXPERT_POSE_TOPIC}"
 echo "[record-vla-dataset] gripper topic: ${GRIPPER_TOPIC}"
 
 PYTHONUNBUFFERED=1 lerobot-record \
+  --resume="${RESUME_DATASET}" \
   --robot.type=vla_drone \
   --robot.nokov_pose_topic="${NOKOV_POSE_TOPIC}" \
   --robot.max_pose_age_s="${ROBOT_MAX_POSE_AGE_S}" \

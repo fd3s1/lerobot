@@ -22,7 +22,7 @@
 - 遥控器第 10 通道：低位打开，高位关闭
 - CH10 只在 PX4 模式为 `POSCTL` 或 `OFFBOARD` 时控制夹爪。
 - `ALTCTL`、`STABILIZED`、`MANUAL`、降落、已落地、未解锁或未知模式下，夹爪会自动保持全开。
-- 夹爪比起落架低约 `15 cm`，当前配置会在 mocap 高度 `z <= 0.15 m` 时强制全开，避免接近地面时夹爪触地。
+- 新夹爪安全高度按 `20 cm` 处理，当前配置会在 mocap 高度 `z <= 0.20 m` 时强制全开，避免接近地面时夹爪触地。
 
 安全前提：
 
@@ -431,7 +431,7 @@ gripper:
   pwm_close: 1700
   open_position: 100.0
   closed_position: 0.0
-  force_open_below_z: 0.15
+  force_open_below_z: 0.20
 ```
 
 期望：
@@ -439,7 +439,7 @@ gripper:
 - 在 `POSCTL` 或 `OFFBOARD` 下，CH10 低位：`/gripper/command` 输出 `100.0`
 - 在 `POSCTL` 或 `OFFBOARD` 下，CH10 高位：`/gripper/command` 输出 `0.0`
 - 在 `POSCTL` 或 `OFFBOARD` 下，CH10 中间：不发布新命令
-- 在 `ALTCTL`、`STABILIZED`、`MANUAL`、降落、未解锁、未知模式或 `z <= 0.15 m` 时，无论 CH10 位置如何，`/gripper/command` 都应发布或保持 `100.0`
+- 在 `ALTCTL`、`STABILIZED`、`MANUAL`、降落、未解锁、未知模式或 `z <= 0.20 m` 时，无论 CH10 位置如何，`/gripper/command` 都应发布或保持 `100.0`
 
 如果允许模式下没有 CH10 输出，检查：
 
@@ -480,7 +480,7 @@ ros2 run px4ctrl feetech_gripper_node.py --ros-args -p port:=/dev/ttyACM1
 
 - `POSCTL` 或 `OFFBOARD` 下，CH10 低位：夹爪全开
 - `POSCTL` 或 `OFFBOARD` 下，CH10 高位：夹爪全关
-- 切到 `ALTCTL`、`STABILIZED`、`MANUAL`、触发降落或高度低于 `0.15 m` 后，无论 CH10 位置如何，夹爪自动全开
+- 切到 `ALTCTL`、`STABILIZED`、`MANUAL`、触发降落或高度低于 `0.20 m` 后，无论 CH10 位置如何，夹爪自动全开
 
 如果单独运行 ROS 夹爪节点时方向反了，停止夹爪节点，用反向参数重启：
 
@@ -631,8 +631,8 @@ ros2 run px4ctrl fly_x_gripper_test.py --no-land
 
 - 手动采集时不要让 LeRobot 把 pose action 反写到 `/position_cmd`，否则会干扰 px4ctrl 的 RC hover 控制。因此必须设置 `--robot.send_pose_actions=false`。
 - 手动采集时不要启动 `feetech_gripper_node.py`，因为 `vla_drone` robot 会直接打开 `/dev/ttyACM1` 控制 Feetech 夹爪。
-- 夹爪仍然用遥控器 CH10 控制，但只有 `POSCTL` 或 `OFFBOARD` 下 CH10 生效。其它模式、降落、未解锁或 `z <= 0.15 m` 时 px4ctrl 会强制 `/gripper/command=100.0`。LeRobot 会记录 `/gripper/command`，并把该 action 发送给 `vla_drone` robot 执行。
-- 当前相机约定：`/dev/video0` 是前视相机，`/dev/video2` 是夹爪/下视相机。
+- 夹爪仍然用遥控器 CH10 控制，但只有 `POSCTL` 或 `OFFBOARD` 下 CH10 生效。其它模式、降落、未解锁或 `z <= 0.20 m` 时 px4ctrl 会强制 `/gripper/command=100.0`。LeRobot 会记录 `/gripper/command`，并把该 action 发送给 `vla_drone` robot 执行。
+- 当前相机约定：前视使用 `FRONT_CAMERA`，夹爪/下视使用 `DOWN_CAMERA`。现场固定路径写在 `shflies/record_camera_paths.env`。
 
 ### 13.1 启动飞行和定位链路
 
@@ -675,7 +675,7 @@ ros2 topic echo /gripper/command
 - `/mavros/vision_pose/pose` 有稳定 mocap 数据。
 - `/px4ctrl/expert_pose` 持续发布。
 - `POSCTL` 或 `OFFBOARD` 下拨动 CH10 时，`/gripper/command` 在 `100.0` 和 `0.0` 之间变化。
-- `ALTCTL`、`STABILIZED`、`MANUAL`、降落、未解锁或 `z <= 0.15 m` 时，`/gripper/command` 为 `100.0`。
+- `ALTCTL`、`STABILIZED`、`MANUAL`、降落、未解锁或 `z <= 0.20 m` 时，`/gripper/command` 为 `100.0`。
 
 ### 13.2 启动 LeRobot 录制
 
@@ -731,6 +731,16 @@ DATASET_PREFIX=debug_vla_drone EPISODE_TIME_S=10 RESET_TIME_S=1 DATASET_VIDEO=fa
 
 # 临时修改任务描述
 TASK="Fly to the target cube and close the gripper" bash shflies/record_vla_dataset.sh
+
+# 续录指定数据集：NUM_EPISODES 表示本次追加几条 episode
+RESUME_DATASET=true DATASET_NAME=vla_drone_grasp_YYYYmmdd_HHMMSS \
+  NUM_EPISODES=3 bash shflies/record_vla_dataset.sh
+
+# 交互选择已有数据集续录
+RESUME_DATASET=true bash shflies/record_vla_dataset.sh
+
+# 快速续录最新数据集，仅在确认最新目录就是目标数据集时使用
+RESUME_LATEST=true NUM_EPISODES=3 bash shflies/record_vla_dataset.sh
 ```
 
 ### 13.3 录制脚本参数解释
@@ -740,9 +750,12 @@ TASK="Fly to the target cube and close the gripper" bash shflies/record_vla_data
 - `RUN_ID`：默认使用当前时间，例如 `20260521_143012`。
 - `DATASET_PREFIX`：数据集名前缀，默认 `vla_drone_grasp`。
 - `DATASET_NAME`：完整数据集名，默认 `${DATASET_PREFIX}_${RUN_ID}`。
-- `DATASET_ROOT`：本地保存路径，默认 `${HOME}/vla_drone/data/${DATASET_NAME}`。
+- `DATASET_BASE_DIR`：数据集根目录，默认 `${HOME}/vla_drone/data`。
+- `DATASET_ROOT`：本地保存路径，默认 `${DATASET_BASE_DIR}/${DATASET_NAME}`。
 - `REPO_OWNER`：repo_id 的用户名前缀，默认 `fd3s1`。
 - `REPO_ID`：数据集 ID，默认 `${REPO_OWNER}/${DATASET_NAME}`。即使 `PUSH_TO_HUB=false`，LeRobot 仍需要一个 repo_id 作为数据集标识。
+- `RESUME_DATASET`：默认 `false`。设为 `true` 时续录已有数据集，`NUM_EPISODES` 表示本次追加的 episode 数量。
+- `RESUME_LATEST`：默认 `false`。设为 `true` 时自动续录 `${DATASET_BASE_DIR}` 下最新的 `${DATASET_PREFIX}_*` 数据集。
 - `CONDA_ENV`：要激活的 conda 环境，默认 `vla-drone-v044`。
 - `CONDA_SH`：conda 初始化脚本，默认 `${HOME}/miniforge3/etc/profile.d/conda.sh`。
 - 脚本内部会执行 `source /opt/ros/humble/setup.bash`，让 conda Python 能 import ROS2 的 `rclpy`。
@@ -858,9 +871,166 @@ ros2 topic echo /gripper/command
 - Position 模式悬停稳定。
 - 当前 mocap 位置在 `ctrl_param_fpv.yaml` 的 `limits` 范围内，特别是大场地负 X 方向不要小于 `x_min`。
 - `POSCTL/OFFBOARD` 下 CH10 能实际控制夹爪。
-- `ALTCTL/STABILIZED/MANUAL/AUTO_LAND/未解锁/z <= 0.15 m` 下夹爪自动全开。
+- `ALTCTL/STABILIZED/MANUAL/AUTO_LAND/未解锁/z <= 0.20 m` 下夹爪自动全开。
 - `/dev/video0` 和 `/dev/video2` 都能被 LeRobot 找到。
 - 没有单独运行 `feetech_gripper_node.py`。
+
+### 13.7 复制数据集到服务器并可视化
+
+在 NX 上选择要复制的数据集。快速复制最新数据集时用：
+
+```bash
+conda activate vla-drone-v044
+cd ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
+
+DATASET_ROOT="$(ls -td ~/vla_drone/data/vla_drone_grasp_* | head -1)"
+DATASET_NAME="$(basename "$DATASET_ROOT")"
+REPO_ID="fd3s1/${DATASET_NAME}"
+```
+
+如果要复制指定数据集，手动填 `DATASET_NAME`：
+
+```bash
+conda activate vla-drone-v044
+cd ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
+
+DATASET_NAME="vla_drone_grasp_YYYYmmdd_HHMMSS"
+DATASET_ROOT="${HOME}/vla_drone/data/${DATASET_NAME}"
+REPO_ID="fd3s1/${DATASET_NAME}"
+```
+
+如果不确定名字，可以先列出所有本地数据集，再复制选中的那个：
+
+```bash
+ls -td ~/vla_drone/data/vla_drone_grasp_*
+
+DATASET_ROOT="/home/user/vla_drone/data/vla_drone_grasp_YYYYmmdd_HHMMSS"
+DATASET_NAME="$(basename "$DATASET_ROOT")"
+REPO_ID="fd3s1/${DATASET_NAME}"
+```
+
+确认路径：
+
+```bash
+echo "DATASET_ROOT=${DATASET_ROOT}"
+echo "DATASET_NAME=${DATASET_NAME}"
+echo "REPO_ID=${REPO_ID}"
+```
+
+推荐用 `rsync` 复制到服务器：
+
+```bash
+ssh user@10.1.1.35 "mkdir -p ~/vla_drone/data"
+rsync -av "$DATASET_ROOT" user@10.1.1.35:~/vla_drone/data/
+```
+
+如果出现：
+
+```text
+ssh: connect to host 10.1.1.35 port 22: Connection refused
+```
+
+说明服务器 SSH 服务没有启动或没有安装。在服务器上执行：
+
+```bash
+sudo systemctl status ssh
+sudo apt install -y openssh-server
+sudo systemctl enable --now ssh
+```
+
+如果暂时不用 SSH，也可以先打包再拷贝：
+
+```bash
+tar -czf ~/vla_drone/${DATASET_NAME}.tar.gz -C "$(dirname "$DATASET_ROOT")" "$DATASET_NAME"
+```
+
+在服务器上解压：
+
+```bash
+mkdir -p ~/vla_drone/data
+tar -xzf ~/vla_drone/${DATASET_NAME}.tar.gz -C ~/vla_drone/data
+```
+
+服务器上建议单独建一个只用于可视化的环境：
+
+```bash
+conda create -n vla-drone-viz python=3.10 -y
+conda activate vla-drone-viz
+cd ~/vla_drone/lerobot
+pip install -e .
+pip install rerun-sdk opencv-python av torchvision
+```
+
+注意 Python 包名是 `av`，不是 `pyav`。
+
+用 LeRobot/Rerun 可视化：
+
+```bash
+conda activate vla-drone-viz
+cd ~/vla_drone/lerobot
+
+DATASET_ROOT="$(ls -td ~/vla_drone/data/vla_drone_grasp_* | head -1)"
+DATASET_NAME="$(basename "$DATASET_ROOT")"
+REPO_ID="fd3s1/${DATASET_NAME}"
+
+lerobot-dataset-viz \
+  --repo-id "$REPO_ID" \
+  --root "$DATASET_ROOT" \
+  --episode-index 0 \
+  --num-workers 0 \
+  --batch-size 8 \
+  --tolerance-s 0.01
+```
+
+如果 Rerun 播放一卡一卡，先不要直接判断数据集坏了。`lerobot-dataset-viz` 是逐帧解码后再写入 Rerun，低功耗机器或远程显示会更容易卡。可以先直接播放原始视频：
+
+```bash
+find "$DATASET_ROOT" -type f | grep -E '\.(mp4|avi|mkv)$'
+
+ffplay "$DATASET_ROOT/videos/observation.images.front/chunk-000/file-000.mp4"
+ffplay "$DATASET_ROOT/videos/observation.images.down/chunk-000/file-000.mp4"
+```
+
+对已经编码好的 `.mp4`，`ffplay` 不需要加 `-framerate`。如果 `ffplay` 流畅，通常说明视频本身没问题，卡顿主要来自 Rerun 可视化链路。
+
+也可以把前视和下视合成一个预览视频：
+
+```bash
+ffmpeg \
+  -i "$DATASET_ROOT/videos/observation.images.front/chunk-000/file-000.mp4" \
+  -i "$DATASET_ROOT/videos/observation.images.down/chunk-000/file-000.mp4" \
+  -filter_complex hstack \
+  -c:v libx264 -crf 20 -preset veryfast \
+  /tmp/vla_drone_preview.mp4
+
+ffplay /tmp/vla_drone_preview.mp4
+```
+
+检查数据集帧数和时间戳：
+
+```bash
+DATASET_ROOT="$DATASET_ROOT" REPO_ID="$REPO_ID" python - <<'PY'
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+import numpy as np
+import os
+
+root = os.environ["DATASET_ROOT"]
+repo_id = os.environ["REPO_ID"]
+ds = LeRobotDataset(repo_id, root=root)
+ts = np.array([ds[i]["timestamp"].item() for i in range(ds.num_frames)])
+
+print("frames:", ds.num_frames)
+print("episodes:", ds.num_episodes)
+print("duration:", ts[-1] - ts[0])
+print("mean dt:", np.diff(ts).mean())
+print("max dt:", np.diff(ts).max())
+print("features:", ds.features)
+PY
+```
+
+20 fps 的正常数据通常 `mean dt` 接近 `0.05`，`max dt` 也应接近 `0.05`。如果 Rerun 卡但 `ffplay` 流畅、时间戳正常，优先按可视化性能问题处理。
+
+如果发现 `front/down` 画面标签反了，优先检查 NX 上 `shflies/record_camera_paths.env` 的固定摄像头路径。历史旧数据集不建议自动改标签，避免和已有 episode 混淆。
 
 ## 14. 常用排错命令
 
@@ -941,7 +1111,7 @@ RC 夹爪测试通过：
 
 - `POSCTL/OFFBOARD` 下 CH10 低位发布 `100.0`
 - `POSCTL/OFFBOARD` 下 CH10 高位发布 `0.0`
-- `ALTCTL/STABILIZED/MANUAL/AUTO_LAND/未解锁/z <= 0.15 m` 下发布或保持 `100.0`
+- `ALTCTL/STABILIZED/MANUAL/AUTO_LAND/未解锁/z <= 0.20 m` 下发布或保持 `100.0`
 - 真实夹爪方向正确：`100.0` 全开，`0.0` 全关
 
 定位测试通过：

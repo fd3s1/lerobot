@@ -55,7 +55,7 @@ px4ctrl:
       pwm_close: 1700
       open_position: 100.0
       closed_position: 0.0
-      force_open_below_z: 0.15
+      force_open_below_z: 0.20
 
 feetech_gripper_node:
   ros__parameters:
