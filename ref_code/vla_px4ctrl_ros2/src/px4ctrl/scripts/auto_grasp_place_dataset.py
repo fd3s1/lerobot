@@ -118,9 +118,9 @@ class AutoGraspPlaceDataset(Node):
         self.record_status: str | None = None
         self.pose_subscriptions = []
 
-        self._create_pose_subscription_pair("drone", config.drone_pose_topic)
-        self._create_pose_subscription_pair("target", config.target_pose_topic)
-        self._create_pose_subscription_pair("box", config.box_pose_topic)
+        self._create_pose_subscription("drone", config.drone_pose_topic)
+        self._create_pose_subscription("target", config.target_pose_topic)
+        self._create_pose_subscription("box", config.box_pose_topic)
         self.create_subscription(String, config.px4ctrl_state_topic, self._state_cb, 10)
 
         status_qos = QoSProfile(
@@ -137,13 +137,9 @@ class AutoGraspPlaceDataset(Node):
         self.takeoff_land_pub = self.create_publisher(TakeoffLand, config.takeoff_land_topic, 10)
         self.record_gate_pub = self.create_publisher(String, config.record_gate_topic, 10)
 
-    def _create_pose_subscription_pair(self, key: str, topic: str) -> None:
-        reliable_qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.VOLATILE,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10,
-        )
+    def _create_pose_subscription(self, key: str, topic: str) -> None:
+        # A BEST_EFFORT subscription is compatible with both VRPN BEST_EFFORT
+        # publishers and MAVROS RELIABLE publishers, and avoids noisy QoS warnings.
         best_effort_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
@@ -151,7 +147,6 @@ class AutoGraspPlaceDataset(Node):
             depth=10,
         )
         callback = self._pose_cb(key)
-        self.pose_subscriptions.append(self.create_subscription(PoseStamped, topic, callback, reliable_qos))
         self.pose_subscriptions.append(self.create_subscription(PoseStamped, topic, callback, best_effort_qos))
 
     def _pose_cb(self, key: str):
@@ -289,13 +284,29 @@ class AutoGraspPlaceDataset(Node):
             rclpy.spin_once(self, timeout_sec=0.0)
             time.sleep(max(0.0, interval_s))
 
-    def publish_gripper_ramp(self, start: float, end: float, duration_s: float) -> None:
+    def publish_gripper_ramp(
+        self,
+        start: float,
+        end: float,
+        duration_s: float,
+        hold_pose: PoseSample | None = None,
+    ) -> None:
         steps = max(2, int(math.ceil(duration_s * self.config.rate_hz)))
         period = 1.0 / self.config.rate_hz
+        next_tick = time.monotonic()
         for i in range(steps + 1):
             alpha = i / steps
+            if hold_pose is not None:
+                self.publish_cmd(hold_pose)
             self.publish_gripper(start + (end - start) * alpha, repeats=1, interval_s=0.0)
-            time.sleep(period)
+            rclpy.spin_once(self, timeout_sec=0.0)
+            next_tick += period
+            time.sleep(max(0.0, next_tick - time.monotonic()))
+
+            if hold_pose is not None and self.px4ctrl_state != "CMD_CTRL":
+                raise RuntimeError(
+                    f"px4ctrl left CMD_CTRL during gripper ramp; latest={self.px4ctrl_state!r}."
+                )
 
     def publish_takeoff(self) -> None:
         msg = TakeoffLand()
@@ -538,6 +549,7 @@ class AutoGraspPlaceDataset(Node):
             self.config.gripper_open,
             self.config.gripper_closed,
             self.config.gripper_close_duration_s,
+            hold_pose=current,
         )
         current = self.fly_segment(current, target_above, self.config.lift_speed, "Lift object")
         current = self.fly_segment(current, box_above, self.config.max_speed, "Fly to box hover")
@@ -547,6 +559,7 @@ class AutoGraspPlaceDataset(Node):
             self.config.gripper_closed,
             self.config.gripper_open,
             self.config.gripper_open_duration_s,
+            hold_pose=current,
         )
         self.publish_gripper(self.config.gripper_open, repeats=5)
 
@@ -739,7 +752,8 @@ def main() -> None:
     except KeyboardInterrupt:
         node.emergency_open_and_land()
         raise
-    except Exception:
+    except Exception as exc:
+        node.get_logger().error(f"Automatic sequence failed: {exc}")
         node.emergency_open_and_land()
         raise
     finally:
