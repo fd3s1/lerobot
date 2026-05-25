@@ -15,8 +15,9 @@ PX4CTRL_STATE_TOPIC="${PX4CTRL_STATE_TOPIC:-/px4ctrl/state}"
 RECORD_STATUS_TOPIC="${RECORD_STATUS_TOPIC:-/lerobot_record/status}"
 RECORD_GATE_TOPIC="${RECORD_GATE_TOPIC:-/auto_grasp_dataset/record_gate}"
 RECORD_GATE_VALUE="${RECORD_GATE_VALUE:-START}"
-POSE_PREFLIGHT_TIMEOUT_S="${POSE_PREFLIGHT_TIMEOUT_S:-3}"
+POSE_PREFLIGHT_TIMEOUT_S="${POSE_PREFLIGHT_TIMEOUT_S:-6}"
 SKIP_POSE_PREFLIGHT="${SKIP_POSE_PREFLIGHT:-false}"
+POSE_PREFLIGHT_REQUIRED="${POSE_PREFLIGHT_REQUIRED:-false}"
 
 EPISODE_TIME_S="${EPISODE_TIME_S:-30}"
 MAX_SPEED="${MAX_SPEED:-0.6}"
@@ -29,6 +30,12 @@ POST_LIFT_SETTLE_S="${POST_LIFT_SETTLE_S:-1.0}"
 SMOOTH_TRAJECTORY="${SMOOTH_TRAJECTORY:-true}"
 TAKEOFF_FORWARD_COMP_M="${TAKEOFF_FORWARD_COMP_M:-0.0}"
 PAYLOAD_LIFT_FORWARD_COMP_M="${PAYLOAD_LIFT_FORWARD_COMP_M:-0.0}"
+TAKEOFF_COMP_X="${TAKEOFF_COMP_X:-0.0}"
+TAKEOFF_COMP_Y="${TAKEOFF_COMP_Y:-0.0}"
+TAKEOFF_COMP_Z="${TAKEOFF_COMP_Z:-0.0}"
+PAYLOAD_LIFT_COMP_X="${PAYLOAD_LIFT_COMP_X:-0.0}"
+PAYLOAD_LIFT_COMP_Y="${PAYLOAD_LIFT_COMP_Y:-0.0}"
+PAYLOAD_LIFT_COMP_Z="${PAYLOAD_LIFT_COMP_Z:-0.0}"
 RETREAT_SPEED="${RETREAT_SPEED:-0.6}"
 RATE_HZ="${RATE_HZ:-20}"
 GRIPPER_Z_OFFSET_M="${GRIPPER_Z_OFFSET_M:-0.25}"
@@ -75,7 +82,7 @@ check_pose_topic_once() {
     return 0
   fi
 
-  echo "[auto-record-grasp-place] ERROR: no fresh ${label} pose on ${topic} within ${POSE_PREFLIGHT_TIMEOUT_S}s" >&2
+  echo "[auto-record-grasp-place] WARNING: no fresh ${label} pose on ${topic} within ${POSE_PREFLIGHT_TIMEOUT_S}s during one-shot preflight" >&2
   return 1
 }
 
@@ -135,11 +142,13 @@ echo "[auto-record-grasp-place] episode time: ${EPISODE_TIME_S}s"
 echo "[auto-record-grasp-place] speeds: max=${MAX_SPEED} approach=${APPROACH_SPEED} lift=${LIFT_SPEED} retreat=${RETREAT_SPEED}"
 echo "[auto-record-grasp-place] payload damping: lift_speed=${PAYLOAD_LIFT_SPEED} transfer_speed=${PAYLOAD_TRANSFER_SPEED} post_grasp_settle=${POST_GRASP_SETTLE_S}s post_lift_settle=${POST_LIFT_SETTLE_S}s smooth=${SMOOTH_TRAJECTORY}"
 echo "[auto-record-grasp-place] forward compensation: takeoff=${TAKEOFF_FORWARD_COMP_M}m payload_lift=${PAYLOAD_LIFT_FORWARD_COMP_M}m"
+echo "[auto-record-grasp-place] map compensation: takeoff=(${TAKEOFF_COMP_X}, ${TAKEOFF_COMP_Y}, ${TAKEOFF_COMP_Z})m payload_lift=(${PAYLOAD_LIFT_COMP_X}, ${PAYLOAD_LIFT_COMP_Y}, ${PAYLOAD_LIFT_COMP_Z})m"
 echo "[auto-record-grasp-place] geometry: gripper_z_offset=${GRIPPER_Z_OFFSET_M}m target_h=${TARGET_HEIGHT_M}m target_grasp_h=${TARGET_GRASP_HEIGHT_M}m target_z_ref=${TARGET_POSE_Z_REFERENCE}"
 echo "[auto-record-grasp-place] box: l=${BOX_LENGTH_M}m w=${BOX_WIDTH_M}m h=${BOX_HEIGHT_M}m hover_clearance=${BOX_HOVER_GRIPPER_CLEARANCE_M}m place_bottom_clearance=${BOX_PLACE_BOTTOM_CLEARANCE_M}m"
 echo "[auto-record-grasp-place] planning offsets: target=(${TARGET_OFFSET_X}, ${TARGET_OFFSET_Y}, ${TARGET_OFFSET_Z})m box=(${BOX_OFFSET_X}, ${BOX_OFFSET_Y}, ${BOX_OFFSET_Z})m"
 echo "[auto-record-grasp-place] release retreat: up=${RELEASE_RETREAT_UP_M}m forward=${RELEASE_RETREAT_FORWARD_M}m"
 echo "[auto-record-grasp-place] landing: mode=${LANDING_MODE} cmd_speed=${CMD_LAND_SPEED} cmd_z=${CMD_LAND_Z:-pre_takeoff_z+${CMD_LAND_Z_OFFSET_M}}"
+echo "[auto-record-grasp-place] pose preflight: timeout=${POSE_PREFLIGHT_TIMEOUT_S}s required=${POSE_PREFLIGHT_REQUIRED} skip=${SKIP_POSE_PREFLIGHT}"
 
 set +u
 source /opt/ros/humble/setup.bash
@@ -152,11 +161,18 @@ if ! bool_is_true "${SKIP_POSE_PREFLIGHT}"; then
   check_pose_topic_once "target" "${TARGET_POSE_TOPIC}" || preflight_failed=true
   check_pose_topic_once "box" "${BOX_POSE_TOPIC}" || preflight_failed=true
   if [[ "${preflight_failed}" == "true" ]]; then
-    echo "[auto-record-grasp-place] Start mocap/MAVROS first, usually:" >&2
-    echo "[auto-record-grasp-place]   bash shflies/run_mocap_mavros.sh" >&2
-    echo "[auto-record-grasp-place] Or check actual VRPN names with:" >&2
-    echo "[auto-record-grasp-place]   ros2 topic list | grep -E 'strawberry|box|pose'" >&2
-    exit 1
+    echo "[auto-record-grasp-place] One-shot pose preflight did not see every topic." >&2
+    echo "[auto-record-grasp-place] This can be a DDS discovery delay; continuing by default." >&2
+    echo "[auto-record-grasp-place] The auto task node will keep waiting for fresh poses before takeoff." >&2
+    echo "[auto-record-grasp-place] To make this a hard failure, set POSE_PREFLIGHT_REQUIRED=true." >&2
+    echo "[auto-record-grasp-place] To skip this advisory check, set SKIP_POSE_PREFLIGHT=true." >&2
+    if bool_is_true "${POSE_PREFLIGHT_REQUIRED}"; then
+      echo "[auto-record-grasp-place] Start mocap/MAVROS first, usually:" >&2
+      echo "[auto-record-grasp-place]   bash shflies/run_mocap_mavros.sh" >&2
+      echo "[auto-record-grasp-place] Or check actual VRPN names with:" >&2
+      echo "[auto-record-grasp-place]   ros2 topic list | grep -E 'strawberry|box|pose'" >&2
+      exit 1
+    fi
   fi
 fi
 
@@ -192,6 +208,12 @@ auto_args=(
   --post-lift-settle-s "${POST_LIFT_SETTLE_S}"
   --takeoff-forward-comp-m "${TAKEOFF_FORWARD_COMP_M}"
   --payload-lift-forward-comp-m "${PAYLOAD_LIFT_FORWARD_COMP_M}"
+  --takeoff-comp-x "${TAKEOFF_COMP_X}"
+  --takeoff-comp-y "${TAKEOFF_COMP_Y}"
+  --takeoff-comp-z "${TAKEOFF_COMP_Z}"
+  --payload-lift-comp-x "${PAYLOAD_LIFT_COMP_X}"
+  --payload-lift-comp-y "${PAYLOAD_LIFT_COMP_Y}"
+  --payload-lift-comp-z "${PAYLOAD_LIFT_COMP_Z}"
   --retreat-speed "${RETREAT_SPEED}"
   --gripper-z-offset-m "${GRIPPER_Z_OFFSET_M}"
   --target-height-m "${TARGET_HEIGHT_M}"

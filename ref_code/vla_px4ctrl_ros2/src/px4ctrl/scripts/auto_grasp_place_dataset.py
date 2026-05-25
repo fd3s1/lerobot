@@ -72,6 +72,12 @@ class AutoConfig:
     smooth_trajectory: bool
     takeoff_forward_comp_m: float
     payload_lift_forward_comp_m: float
+    takeoff_comp_x: float
+    takeoff_comp_y: float
+    takeoff_comp_z: float
+    payload_lift_comp_x: float
+    payload_lift_comp_y: float
+    payload_lift_comp_z: float
     gripper_z_offset_m: float
     target_height_m: float
     target_grasp_height_m: float
@@ -586,6 +592,29 @@ class AutoGraspPlaceDataset(Node):
                 self.config.approach_speed,
                 "Recenter forward after takeoff",
             )
+        if any(abs(value) > 1e-6 for value in (
+            self.config.takeoff_comp_x,
+            self.config.takeoff_comp_y,
+            self.config.takeoff_comp_z,
+        )):
+            compensated = self.offset_pose(
+                hold,
+                self.config.takeoff_comp_x,
+                self.config.takeoff_comp_y,
+                self.config.takeoff_comp_z,
+            )
+            self.get_logger().info(
+                "Recenter in mocap/map frame after takeoff: "
+                f"dx={self.config.takeoff_comp_x:.3f}, "
+                f"dy={self.config.takeoff_comp_y:.3f}, "
+                f"dz={self.config.takeoff_comp_z:.3f}."
+            )
+            hold = self.fly_segment(
+                hold,
+                compensated,
+                self.config.approach_speed,
+                "Recenter map-frame after takeoff",
+            )
 
         self.publish_record_gate()
         gate_s = time.monotonic()
@@ -599,6 +628,23 @@ class AutoGraspPlaceDataset(Node):
             forward_m=self.config.payload_lift_forward_comp_m,
             up_m=0.0,
         )
+        if any(abs(value) > 1e-6 for value in (
+            self.config.payload_lift_comp_x,
+            self.config.payload_lift_comp_y,
+            self.config.payload_lift_comp_z,
+        )):
+            target_lift = self.offset_pose(
+                target_lift,
+                self.config.payload_lift_comp_x,
+                self.config.payload_lift_comp_y,
+                self.config.payload_lift_comp_z,
+            )
+            self.get_logger().info(
+                "Payload lift compensation in mocap/map frame: "
+                f"dx={self.config.payload_lift_comp_x:.3f}, "
+                f"dy={self.config.payload_lift_comp_y:.3f}, "
+                f"dz={self.config.payload_lift_comp_z:.3f}."
+            )
         box_above = self.pose_at_z(box, self.box_hover_drone_z(box), yaw)
         box_place = self.pose_at_z(box, self.box_place_drone_z(box), yaw)
         self.get_logger().info(
@@ -711,6 +757,12 @@ def parse_args() -> AutoConfig:
         default=0.0,
         help="Body-forward correction applied while lifting the grasped payload.",
     )
+    parser.add_argument("--takeoff-comp-x", type=float, default=0.0)
+    parser.add_argument("--takeoff-comp-y", type=float, default=0.0)
+    parser.add_argument("--takeoff-comp-z", type=float, default=0.0)
+    parser.add_argument("--payload-lift-comp-x", type=float, default=0.0)
+    parser.add_argument("--payload-lift-comp-y", type=float, default=0.0)
+    parser.add_argument("--payload-lift-comp-z", type=float, default=0.0)
     parser.add_argument(
         "--gripper-z-offset-m",
         type=float,

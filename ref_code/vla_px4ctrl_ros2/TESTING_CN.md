@@ -878,7 +878,20 @@ cd ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
 bash shflies/auto_record_grasp_place.sh
 ```
 
-`auto_record_grasp_place.sh` 启动 record 前会先检查三个位姿 topic；如果缺任何一个，会直接退出，不会启动相机和录制。
+`auto_record_grasp_place.sh` 启动 record 前会先用 `ros2 topic echo --once` 做一次位姿 topic 预检查，默认等待 `6s`。这个检查只作为提示：如果某个 topic 因 DDS 发现延迟没有被一次性命令捕获，脚本会打印 warning 并继续。真正的自动任务节点会持续等待 `/mavros/vision_pose/pose`、目标和盒子三个位姿都新鲜后才起飞。
+
+相关参数：
+
+```bash
+# 默认：预检查失败只报警，后续自动节点继续等待
+POSE_PREFLIGHT_TIMEOUT_S=6 bash shflies/auto_record_grasp_place.sh
+
+# 如果希望预检查失败就退出
+POSE_PREFLIGHT_REQUIRED=true bash shflies/auto_record_grasp_place.sh
+
+# 如果不想做这一步一次性预检查
+SKIP_POSE_PREFLIGHT=true bash shflies/auto_record_grasp_place.sh
+```
 
 如果 VRPN 刚体名字变化，可以临时改 topic：
 
@@ -952,6 +965,8 @@ bash shflies/auto_record_grasp_place.sh
 - `POST_LIFT_SETTLE_S` 默认 `1.0 s`，抬升后原地等待，降低摆振后再横移。
 - `TAKEOFF_FORWARD_COMP_M` 默认 `0.0 m`，起飞完成进入 `CMD_CTRL` 后、record 开始前，沿无人机当前机头方向做前向补偿。用于抵消机体后重导致的起飞后后窜。
 - `PAYLOAD_LIFT_FORWARD_COMP_M` 默认 `0.0 m`，夹住草莓熊后抬升时，沿无人机当前机头方向同步做前向补偿。用于抵消带载抬升阶段后窜。
+- `TAKEOFF_COMP_X/Y/Z` 默认 `0.0 m`，起飞后按 mocap/map 坐标系直接补偿位置，不依赖无人机 yaw。
+- `PAYLOAD_LIFT_COMP_X/Y/Z` 默认 `0.0 m`，夹住草莓熊后抬升时按 mocap/map 坐标系补偿位置。
 - `RETREAT_SPEED` 默认 `0.6 m/s`，用于放置后向前撤离。
 
 如果夹起草莓熊后摆动明显，先使用更保守的带载参数：
@@ -971,6 +986,18 @@ TAKEOFF_FORWARD_COMP_M=0.05 \
 PAYLOAD_LIFT_FORWARD_COMP_M=0.05 \
 bash shflies/auto_record_grasp_place.sh
 ```
+
+如果发现 `TAKEOFF_FORWARD_COMP_M` 或 `PAYLOAD_LIFT_FORWARD_COMP_M` 方向不对，说明 mocap 刚体 yaw 和实际机头方向可能不一致。此时优先用 map 坐标系补偿，例如希望向 mocap `+X` 方向补 `5 cm`：
+
+```bash
+TAKEOFF_FORWARD_COMP_M=0.0 \
+PAYLOAD_LIFT_FORWARD_COMP_M=0.0 \
+TAKEOFF_COMP_X=0.05 \
+PAYLOAD_LIFT_COMP_X=0.05 \
+bash shflies/auto_record_grasp_place.sh
+```
+
+如果需要向 mocap `-X`、`+Y` 或 `-Y` 方向补偿，分别设置负号或对应轴，例如 `TAKEOFF_COMP_X=-0.05`、`TAKEOFF_COMP_Y=0.05`。
 
 夹爪慢闭合：
 
