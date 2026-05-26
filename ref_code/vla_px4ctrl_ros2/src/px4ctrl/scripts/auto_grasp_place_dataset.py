@@ -129,6 +129,7 @@ class AutoConfig:
     grasp_position_error_threshold: float
     grasp_angle_contact_delta: float
     grasp_stall_delta: float
+    grasp_contact_min_close_delta: float
     grasp_contact_confirm_steps: int
     grasp_balance_load_diff: float
     grasp_balance_step: float
@@ -744,6 +745,7 @@ class AutoGraspPlaceDataset(Node):
                 grasp_position_error_threshold=self.config.grasp_position_error_threshold,
                 grasp_angle_contact_delta=self.config.grasp_angle_contact_delta,
                 grasp_stall_delta=self.config.grasp_stall_delta,
+                grasp_contact_min_close_delta=self.config.grasp_contact_min_close_delta,
                 grasp_contact_confirm_steps=self.config.grasp_contact_confirm_steps,
                 grasp_balance_load_diff=self.config.grasp_balance_load_diff,
                 grasp_balance_step=self.config.grasp_balance_step,
@@ -1127,11 +1129,12 @@ def parse_args() -> AutoConfig:
     parser.add_argument("--grasp-step-size", type=float, default=3.0)
     parser.add_argument("--grasp-step-settle-s", type=float, default=0.10)
     parser.add_argument("--grasp-close-min", type=float, default=15.0)
-    parser.add_argument("--grasp-contact-current-delta", type=float, default=100.0)
-    parser.add_argument("--grasp-contact-load-delta", type=float, default=60.0)
-    parser.add_argument("--grasp-position-error-threshold", type=float, default=3.0)
-    parser.add_argument("--grasp-angle-contact-delta", type=float, default=3.0)
-    parser.add_argument("--grasp-stall-delta", type=float, default=0.8)
+    parser.add_argument("--grasp-contact-current-delta", type=float, default=180.0)
+    parser.add_argument("--grasp-contact-load-delta", type=float, default=100.0)
+    parser.add_argument("--grasp-position-error-threshold", type=float, default=10.0)
+    parser.add_argument("--grasp-angle-contact-delta", type=float, default=12.0)
+    parser.add_argument("--grasp-stall-delta", type=float, default=0.25)
+    parser.add_argument("--grasp-contact-min-close-delta", type=float, default=15.0)
     parser.add_argument("--grasp-contact-confirm-steps", type=int, default=2)
     parser.add_argument("--grasp-balance-load-diff", type=float, default=60.0)
     parser.add_argument("--grasp-balance-step", type=float, default=1.5)
@@ -1203,6 +1206,8 @@ def parse_args() -> AutoConfig:
         raise ValueError("--grasp-close-min must be within [0, --gripper-open].")
     if args.grasp_angle_contact_delta < 0.0 or args.grasp_stall_delta < 0.0:
         raise ValueError("--grasp-angle-contact-delta and --grasp-stall-delta must be non-negative.")
+    if args.grasp_contact_min_close_delta < 0.0:
+        raise ValueError("--grasp-contact-min-close-delta must be non-negative.")
     if args.grasp_contact_confirm_steps < 1:
         raise ValueError("--grasp-contact-confirm-steps must be >= 1.")
     if args.grasp_max_balance_steps < 0:

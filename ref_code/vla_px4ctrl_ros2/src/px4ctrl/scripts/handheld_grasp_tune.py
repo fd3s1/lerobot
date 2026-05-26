@@ -55,6 +55,7 @@ class HandheldConfig:
     ch10_index: int
     ch10_threshold: int
     gripper_open: float
+    manual_override_pos: float
     gripper_z_offset_m: float
     target_height_m: float
     target_grasp_height_m: float
@@ -77,6 +78,7 @@ class HandheldConfig:
     grasp_position_error_threshold: float
     grasp_angle_contact_delta: float
     grasp_stall_delta: float
+    grasp_contact_min_close_delta: float
     grasp_contact_confirm_steps: int
     grasp_balance_load_diff: float
     grasp_balance_step: float
@@ -113,7 +115,7 @@ class HandheldGraspTune(Node):
         self.gripper_pair_pub = self.create_publisher(GripperCommandPair, config.gripper_command_pair_topic, 10)
 
         self.get_logger().info(
-            "Handheld tune started. CH10 high runs soft grasp; CH10 low opens and resets. "
+            "Handheld tune started. CH10 low runs automatic soft grasp; CH10 high manually overrides closure. "
             "This node does not publish position commands, takeoff/land, or record data."
         )
 
@@ -166,13 +168,18 @@ class HandheldGraspTune(Node):
         return self.feedback is not None and time.monotonic() - self.feedback.received_s <= self.config.feedback_timeout_s
 
     def ch10_high(self) -> bool:
-        if self.rc is None or self.rc_received_s is None:
-            return False
-        if time.monotonic() - self.rc_received_s > self.config.pose_timeout_s:
+        if not self.rc_fresh():
             return False
         if self.config.ch10_index < 0 or self.config.ch10_index >= len(self.rc.channels):
             return False
         return int(self.rc.channels[self.config.ch10_index]) >= self.config.ch10_threshold
+
+    def rc_fresh(self) -> bool:
+        return (
+            self.rc is not None
+            and self.rc_received_s is not None
+            and time.monotonic() - self.rc_received_s <= self.config.pose_timeout_s
+        )
 
     def publish_pair(self, left: float, right: float) -> None:
         left = clamp(left, 0.0, 100.0)
@@ -205,8 +212,8 @@ class HandheldGraspTune(Node):
         deadline = time.monotonic() + max(0.0, duration_s)
         while rclpy.ok() and time.monotonic() < deadline:
             rclpy.spin_once(self, timeout_sec=0.0)
-            if not self.ch10_high():
-                raise RuntimeError("CH10 went low during soft grasp.")
+            if self.ch10_high():
+                raise RuntimeError("CH10 went high; manual override interrupted soft grasp.")
             self.publish_pair(left, right)
             time.sleep(period)
 
@@ -275,6 +282,8 @@ class HandheldGraspTune(Node):
                 parts.append(f"{key}_age={now_s - pose.received_s:.2f}s")
 
         rc_state = "HIGH" if self.ch10_high() else "LOW"
+        if not self.rc_fresh():
+            rc_state = "STALE"
         line = f"CH10={rc_state} state={self.state} " + " ".join(parts)
 
         if drone is not None and target is not None:
@@ -315,6 +324,7 @@ class HandheldGraspTune(Node):
                 grasp_position_error_threshold=self.config.grasp_position_error_threshold,
                 grasp_angle_contact_delta=self.config.grasp_angle_contact_delta,
                 grasp_stall_delta=self.config.grasp_stall_delta,
+                grasp_contact_min_close_delta=self.config.grasp_contact_min_close_delta,
                 grasp_contact_confirm_steps=self.config.grasp_contact_confirm_steps,
                 grasp_balance_load_diff=self.config.grasp_balance_load_diff,
                 grasp_balance_step=self.config.grasp_balance_step,
@@ -338,9 +348,9 @@ class HandheldGraspTune(Node):
             rclpy.spin_once(self, timeout_sec=0.02)
             self.log_status()
 
-            if not self.ch10_high():
+            if not self.rc_fresh():
                 if self.state != "IDLE":
-                    self.get_logger().info("CH10 low: opening gripper and resetting soft grasp.")
+                    self.get_logger().warn("RC stale: opening gripper and waiting for CH10.")
                 self.state = "IDLE"
                 if time.monotonic() - self.last_open_publish_s >= 0.2:
                     self.last_open_publish_s = time.monotonic()
@@ -348,9 +358,24 @@ class HandheldGraspTune(Node):
                 time.sleep(period)
                 continue
 
+            if self.ch10_high():
+                if self.state != "MANUAL_OVERRIDE":
+                    self.get_logger().info(
+                        f"CH10 high: manual override, publishing pair={self.config.manual_override_pos:.1f}."
+                    )
+                self.state = "MANUAL_OVERRIDE"
+                self.publish_pair(self.config.manual_override_pos, self.config.manual_override_pos)
+                time.sleep(period)
+                continue
+
+            if self.state == "MANUAL_OVERRIDE":
+                self.get_logger().info("CH10 low: returning from manual override to automatic soft grasp.")
+                self.state = "IDLE"
+
             if self.state == "IDLE":
                 self.state = "GRASPING"
                 try:
+                    self.get_logger().info("CH10 low: starting automatic soft-grasp sequence.")
                     self.run_soft_grasp_once()
                 except Exception as exc:
                     self.get_logger().warn(f"Soft grasp stopped: {exc}")
@@ -378,6 +403,7 @@ def parse_args() -> HandheldConfig:
     parser.add_argument("--ch10-index", type=int, default=9)
     parser.add_argument("--ch10-threshold", type=int, default=1500)
     parser.add_argument("--gripper-open", type=float, default=100.0)
+    parser.add_argument("--manual-override-pos", type=float, default=0.0)
     parser.add_argument("--gripper-z-offset-m", type=float, default=0.25)
     parser.add_argument("--target-height-m", type=float, default=0.30)
     parser.add_argument("--target-grasp-height-m", type=float, default=0.17)
@@ -395,11 +421,12 @@ def parse_args() -> HandheldConfig:
     parser.add_argument("--grasp-step-size", type=float, default=3.0)
     parser.add_argument("--grasp-step-settle-s", type=float, default=0.10)
     parser.add_argument("--grasp-close-min", type=float, default=15.0)
-    parser.add_argument("--grasp-contact-current-delta", type=float, default=100.0)
-    parser.add_argument("--grasp-contact-load-delta", type=float, default=60.0)
-    parser.add_argument("--grasp-position-error-threshold", type=float, default=3.0)
-    parser.add_argument("--grasp-angle-contact-delta", type=float, default=3.0)
-    parser.add_argument("--grasp-stall-delta", type=float, default=0.8)
+    parser.add_argument("--grasp-contact-current-delta", type=float, default=180.0)
+    parser.add_argument("--grasp-contact-load-delta", type=float, default=100.0)
+    parser.add_argument("--grasp-position-error-threshold", type=float, default=10.0)
+    parser.add_argument("--grasp-angle-contact-delta", type=float, default=12.0)
+    parser.add_argument("--grasp-stall-delta", type=float, default=0.25)
+    parser.add_argument("--grasp-contact-min-close-delta", type=float, default=15.0)
     parser.add_argument("--grasp-contact-confirm-steps", type=int, default=2)
     parser.add_argument("--grasp-balance-load-diff", type=float, default=60.0)
     parser.add_argument("--grasp-balance-step", type=float, default=1.5)
@@ -412,12 +439,16 @@ def parse_args() -> HandheldConfig:
         raise ValueError("--rate-hz must be positive.")
     if args.ch10_index < 0:
         raise ValueError("--ch10-index must be non-negative.")
+    if not 0.0 <= args.manual_override_pos <= args.gripper_open:
+        raise ValueError("--manual-override-pos must be within [0, --gripper-open].")
     if args.grasp_step_size <= 0.0 or args.grasp_step_settle_s <= 0.0:
         raise ValueError("--grasp-step-size and --grasp-step-settle-s must be positive.")
     if not 0.0 <= args.grasp_close_min <= args.gripper_open:
         raise ValueError("--grasp-close-min must be within [0, --gripper-open].")
     if args.grasp_contact_confirm_steps < 1:
         raise ValueError("--grasp-contact-confirm-steps must be >= 1.")
+    if args.grasp_contact_min_close_delta < 0.0:
+        raise ValueError("--grasp-contact-min-close-delta must be non-negative.")
     if args.grasp_max_balance_steps < 0:
         raise ValueError("--grasp-max-balance-steps must be >= 0.")
 

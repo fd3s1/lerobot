@@ -38,8 +38,9 @@ class SoftGraspConfig:
     grasp_contact_current_delta: float = 100.0
     grasp_contact_load_delta: float = 60.0
     grasp_position_error_threshold: float = 3.0
-    grasp_angle_contact_delta: float = 3.0
-    grasp_stall_delta: float = 0.8
+    grasp_angle_contact_delta: float = 10.0
+    grasp_stall_delta: float = 0.25
+    grasp_contact_min_close_delta: float = 12.0
     grasp_contact_confirm_steps: int = 2
     grasp_balance_load_diff: float = 60.0
     grasp_balance_step: float = 1.5
@@ -135,13 +136,19 @@ class SoftGraspController:
             stall=stall,
         )
 
-    def _contact_from_metrics(self, metrics: _SideMetrics) -> bool:
+    def _contact_from_metrics(self, metrics: _SideMetrics, close_delta: float) -> bool:
+        angle_contact_enabled = close_delta >= self.config.grasp_contact_min_close_delta
         return (
-            metrics.angle_lag >= self.config.grasp_angle_contact_delta
-            or metrics.position_error >= self.config.grasp_position_error_threshold
-            or metrics.stall
-            or metrics.current_delta >= self.config.grasp_contact_current_delta
+            metrics.current_delta >= self.config.grasp_contact_current_delta
             or metrics.load_delta >= self.config.grasp_contact_load_delta
+            or (
+                angle_contact_enabled
+                and (
+                    metrics.angle_lag >= self.config.grasp_angle_contact_delta
+                    or metrics.position_error >= self.config.grasp_position_error_threshold
+                    or metrics.stall
+                )
+            )
         )
 
     def run(self) -> SoftGraspResult:
@@ -195,13 +202,13 @@ class SoftGraspController:
             )
 
             if not left_contact:
-                if self._contact_from_metrics(left_metrics):
+                if self._contact_from_metrics(left_metrics, cfg.gripper_open - left_goal):
                     left_confirm += 1
                     left_contact = left_confirm >= cfg.grasp_contact_confirm_steps
                 else:
                     left_confirm = 0
             if not right_contact:
-                if self._contact_from_metrics(right_metrics):
+                if self._contact_from_metrics(right_metrics, cfg.gripper_open - right_goal):
                     right_confirm += 1
                     right_contact = right_confirm >= cfg.grasp_contact_confirm_steps
                 else:
@@ -212,6 +219,7 @@ class SoftGraspController:
                 f"L_goal={left_goal:.1f} R_goal={right_goal:.1f} "
                 f"L_pos={feedback.left_pos:.1f} R_pos={feedback.right_pos:.1f} "
                 f"L_lag={left_metrics.angle_lag:.1f} R_lag={right_metrics.angle_lag:.1f} "
+                f"close=({cfg.gripper_open - left_goal:.1f},{cfg.gripper_open - right_goal:.1f}) "
                 f"L_load={feedback.left_load:.0f} R_load={feedback.right_load:.0f} "
                 f"L_cur={feedback.left_current:.0f} R_cur={feedback.right_current:.0f} "
                 f"L_contact={left_contact} R_contact={right_contact}"

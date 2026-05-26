@@ -32,6 +32,7 @@ CH10_INDEX="${CH10_INDEX:-9}"
 CH10_THRESHOLD="${CH10_THRESHOLD:-1500}"
 
 GRIPPER_OPEN="${GRIPPER_OPEN:-100.0}"
+MANUAL_OVERRIDE_POS="${MANUAL_OVERRIDE_POS:-0.0}"
 GRIPPER_Z_OFFSET_M="${GRIPPER_Z_OFFSET_M:-0.25}"
 TARGET_HEIGHT_M="${TARGET_HEIGHT_M:-0.30}"
 TARGET_GRASP_HEIGHT_M="${TARGET_GRASP_HEIGHT_M:-0.17}"
@@ -51,11 +52,12 @@ BOX_OFFSET_Z="${BOX_OFFSET_Z:-0.0}"
 GRASP_STEP_SIZE="${GRASP_STEP_SIZE:-3.0}"
 GRASP_STEP_SETTLE_S="${GRASP_STEP_SETTLE_S:-0.10}"
 GRASP_CLOSE_MIN="${GRASP_CLOSE_MIN:-15.0}"
-GRASP_CONTACT_CURRENT_DELTA="${GRASP_CONTACT_CURRENT_DELTA:-100}"
-GRASP_CONTACT_LOAD_DELTA="${GRASP_CONTACT_LOAD_DELTA:-60}"
-GRASP_POSITION_ERROR_THRESHOLD="${GRASP_POSITION_ERROR_THRESHOLD:-3.0}"
-GRASP_ANGLE_CONTACT_DELTA="${GRASP_ANGLE_CONTACT_DELTA:-3.0}"
-GRASP_STALL_DELTA="${GRASP_STALL_DELTA:-0.8}"
+GRASP_CONTACT_CURRENT_DELTA="${GRASP_CONTACT_CURRENT_DELTA:-180}"
+GRASP_CONTACT_LOAD_DELTA="${GRASP_CONTACT_LOAD_DELTA:-100}"
+GRASP_POSITION_ERROR_THRESHOLD="${GRASP_POSITION_ERROR_THRESHOLD:-10.0}"
+GRASP_ANGLE_CONTACT_DELTA="${GRASP_ANGLE_CONTACT_DELTA:-12.0}"
+GRASP_STALL_DELTA="${GRASP_STALL_DELTA:-0.25}"
+GRASP_CONTACT_MIN_CLOSE_DELTA="${GRASP_CONTACT_MIN_CLOSE_DELTA:-15.0}"
 GRASP_CONTACT_CONFIRM_STEPS="${GRASP_CONTACT_CONFIRM_STEPS:-2}"
 GRASP_BALANCE_LOAD_DIFF="${GRASP_BALANCE_LOAD_DIFF:-60}"
 GRASP_BALANCE_STEP="${GRASP_BALANCE_STEP:-1.5}"
@@ -98,14 +100,22 @@ echo "[handheld-grasp-tune] gripper feedback topic: ${GRIPPER_FEEDBACK_TOPIC}"
 echo "[handheld-grasp-tune] gripper manager: start=${START_GRIPPER_MANAGER} port=${GRIPPER_MANAGER_PORT}"
 echo "[handheld-grasp-tune] scalar command is isolated at: ${HANDHELD_GRIPPER_SCALAR_TOPIC}"
 echo "[handheld-grasp-tune] grasp params file: ${GRASP_PARAMS_FILE:-<none>}"
-echo "[handheld-grasp-tune] soft grasp: step=${GRASP_STEP_SIZE} settle=${GRASP_STEP_SETTLE_S}s min=${GRASP_CLOSE_MIN} angle_lag=${GRASP_ANGLE_CONTACT_DELTA} stall=${GRASP_STALL_DELTA}"
+echo "[handheld-grasp-tune] soft grasp: step=${GRASP_STEP_SIZE} settle=${GRASP_STEP_SETTLE_S}s min=${GRASP_CLOSE_MIN} angle_lag=${GRASP_ANGLE_CONTACT_DELTA} stall=${GRASP_STALL_DELTA} min_close=${GRASP_CONTACT_MIN_CLOSE_DELTA}"
 echo "[handheld-grasp-tune] offsets: target=(${TARGET_OFFSET_X}, ${TARGET_OFFSET_Y}, ${TARGET_OFFSET_Z}) box=(${BOX_OFFSET_X}, ${BOX_OFFSET_Y}, ${BOX_OFFSET_Z})"
+echo "[handheld-grasp-tune] CH10 low=automatic soft grasp, CH10 high=manual override pair=${MANUAL_OVERRIDE_POS}"
 echo "[handheld-grasp-tune] no record, no takeoff, no /position_cmd will be published."
 
 set +u
 source /opt/ros/humble/setup.bash
 source "${WORKSPACE_DIR}/install/setup.bash"
 set -u
+
+existing_gripper_nodes="$(ros2 node list 2>/dev/null | grep -E '(^|/)feetech_gripper_node($|_)' || true)"
+if [[ -n "${existing_gripper_nodes}" ]]; then
+  echo "[handheld-grasp-tune] WARNING: existing feetech_gripper_node detected before starting:" >&2
+  echo "${existing_gripper_nodes}" >&2
+  echo "[handheld-grasp-tune] Stop old gripper nodes first, otherwise CH10 scalar /gripper/command may look like manual control." >&2
+fi
 
 if [[ "${START_GRIPPER_MANAGER,,}" =~ ^(1|true|yes|y|on)$ ]]; then
   setsid ros2 run px4ctrl feetech_gripper_node.py --ros-args \
@@ -134,6 +144,7 @@ ros2 run px4ctrl handheld_grasp_tune.py \
   --ch10-index "${CH10_INDEX}" \
   --ch10-threshold "${CH10_THRESHOLD}" \
   --gripper-open "${GRIPPER_OPEN}" \
+  --manual-override-pos "${MANUAL_OVERRIDE_POS}" \
   --gripper-z-offset-m "${GRIPPER_Z_OFFSET_M}" \
   --target-height-m "${TARGET_HEIGHT_M}" \
   --target-grasp-height-m "${TARGET_GRASP_HEIGHT_M}" \
@@ -156,6 +167,7 @@ ros2 run px4ctrl handheld_grasp_tune.py \
   --grasp-position-error-threshold "${GRASP_POSITION_ERROR_THRESHOLD}" \
   --grasp-angle-contact-delta "${GRASP_ANGLE_CONTACT_DELTA}" \
   --grasp-stall-delta "${GRASP_STALL_DELTA}" \
+  --grasp-contact-min-close-delta "${GRASP_CONTACT_MIN_CLOSE_DELTA}" \
   --grasp-contact-confirm-steps "${GRASP_CONTACT_CONFIRM_STEPS}" \
   --grasp-balance-load-diff "${GRASP_BALANCE_LOAD_DIFF}" \
   --grasp-balance-step "${GRASP_BALANCE_STEP}" \
