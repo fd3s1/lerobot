@@ -1015,8 +1015,11 @@ bash shflies/auto_record_grasp_place.sh
 夹爪软夹持：
 
 - 当前 STS3215 仍使用位置伺服模式，不是真正硬件力控。
-- 自动脚本不再从 `100.0` 硬闭合到 `0.0`，而是通过 `/gripper/command_pair` 让左右夹爪按小步低速闭合。
-- gripper manager 以 `/gripper/feedback` 发布左右位置、load、current、位置误差；自动脚本用这些反馈判断接触。
+- 当前默认抓取模式是折中测试用的 `GRASP_MODE=continuous_center`：夹爪不根据 load/current 判断接触，而是在抓取高度以固定时长连续、左右对称地闭合到中间，同时无人机 `x/y` 保持顺从。
+- 连续闭合默认从 `100.0` 到 `GRIPPER_CLOSED=0.0`，闭合时长 `GRIPPER_CLOSE_DURATION_S=3.0 s`。如果反作用力仍大，先加长到 `4~5 s` 或把 `GRIPPER_CLOSED` 提高到 `10~20`；如果夹不住，再降低 `GRIPPER_CLOSED`。
+- 如果需要切回基于反馈的软夹持，使用 `GRASP_MODE=soft bash shflies/auto_record_grasp_place.sh`。
+- 在 `continuous_center` 模式下，脚本通过 `/gripper/command_pair` 连续发布左右相同的目标开度，不使用接触判断。
+- 在 `soft` 模式下，gripper manager 以 `/gripper/feedback` 发布左右位置、load、current、位置误差；自动脚本用这些反馈判断接触。
 - gripper manager 退出时默认再次写入全开位置：`open_on_shutdown=true`、`shutdown_open_position=100.0`、`shutdown_open_repeats=3`。
 - 抓取阶段 `z/yaw` 保持，`x/y` 做顺从保持：允许无人机在小半径内让开夹爪反作用力，避免位置环硬拉导致机体倾斜放大。
 - 如果抓取阶段平面漂移超过 `GRASP_ABORT_DRIFT_M`，脚本会打开夹爪并退出。
@@ -1025,6 +1028,9 @@ bash shflies/auto_record_grasp_place.sh
 默认参数：
 
 ```bash
+GRASP_MODE=continuous_center
+GRIPPER_CLOSED=0.0
+GRIPPER_CLOSE_DURATION_S=3.0
 GRASP_STEP_SIZE=3.0
 GRASP_STEP_SETTLE_S=0.10
 GRASP_OPEN_TIMEOUT_S=2.0

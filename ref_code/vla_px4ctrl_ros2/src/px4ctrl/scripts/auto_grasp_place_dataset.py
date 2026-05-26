@@ -117,6 +117,7 @@ class AutoConfig:
     record_ready_timeout_s: float
     record_duration_s: float
     record_start_hold_s: float
+    grasp_mode: Literal["soft", "continuous_center"]
     gripper_open: float
     gripper_closed: float
     gripper_close_duration_s: float
@@ -733,6 +734,9 @@ class AutoGraspPlaceDataset(Node):
     def soft_grasp(self, reference: PoseSample) -> PoseSample:
         latest: PoseSample = self.hold_cmd_compliant(reference, 0.3)
 
+        if self.config.grasp_mode == "continuous_center":
+            return self.continuous_center_grasp(latest)
+
         def hold_pair(left_goal: float, right_goal: float, duration_s: float) -> PoseSample:
             nonlocal latest
             latest = self._hold_pair_step(reference, left_goal, right_goal, duration_s)
@@ -769,6 +773,33 @@ class AutoGraspPlaceDataset(Node):
         result = controller.run()
         if isinstance(result.context, PoseSample):
             latest = result.context
+        return latest
+
+    def continuous_center_grasp(self, reference: PoseSample) -> PoseSample:
+        cfg = self.config
+        duration_s = max(0.0, cfg.gripper_close_duration_s)
+        period = 1.0 / cfg.rate_hz
+        steps = max(2, int(math.ceil(duration_s * cfg.rate_hz)))
+        latest = reference
+        self.get_logger().info(
+            "Continuous center grasp: closing symmetrically "
+            f"{cfg.gripper_open:.1f}->{cfg.gripper_closed:.1f} over {duration_s:.2f}s "
+            "while XY remains compliant."
+        )
+        next_tick = time.monotonic()
+        for i in range(steps + 1):
+            rclpy.spin_once(self, timeout_sec=0.0)
+            latest = self.compliant_pose(reference)
+            alpha = i / steps
+            target = cfg.gripper_open + (cfg.gripper_closed - cfg.gripper_open) * alpha
+            self.publish_cmd(latest)
+            self.publish_gripper_pair(target, target)
+            next_tick += period
+            time.sleep(max(0.0, next_tick - time.monotonic()))
+            if self.px4ctrl_state != "CMD_CTRL":
+                raise RuntimeError(
+                    f"px4ctrl left CMD_CTRL during continuous center grasp; latest={self.px4ctrl_state!r}."
+                )
         return latest
 
     def finish_with_cmd_landing(self, current: PoseSample, pre_takeoff_drone: PoseSample, gate_s: float) -> None:
@@ -1130,6 +1161,7 @@ def parse_args() -> AutoConfig:
     parser.add_argument("--record-ready-timeout-s", type=float, default=60.0)
     parser.add_argument("--record-duration-s", type=float, default=30.0)
     parser.add_argument("--record-start-hold-s", type=float, default=0.06)
+    parser.add_argument("--grasp-mode", choices=("soft", "continuous_center"), default="continuous_center")
     parser.add_argument("--gripper-open", type=float, default=100.0)
     parser.add_argument("--gripper-closed", type=float, default=0.0)
     parser.add_argument("--gripper-close-duration-s", type=float, default=1.5)
@@ -1212,6 +1244,10 @@ def parse_args() -> AutoConfig:
         raise ValueError("--box-length-m, --box-width-m, and --box-height-m must be positive.")
     if args.release_retreat_up_m < 0.0 or args.release_retreat_forward_m < 0.0:
         raise ValueError("--release-retreat-up-m and --release-retreat-forward-m must be non-negative.")
+    if not 0.0 <= args.gripper_closed <= args.gripper_open:
+        raise ValueError("--gripper-closed must be within [0, --gripper-open].")
+    if args.gripper_close_duration_s <= 0.0 or args.gripper_open_duration_s <= 0.0:
+        raise ValueError("--gripper-close-duration-s and --gripper-open-duration-s must be positive.")
     if (
         args.grasp_step_size <= 0.0
         or args.grasp_step_settle_s <= 0.0
