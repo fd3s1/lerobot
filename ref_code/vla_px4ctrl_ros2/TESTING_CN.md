@@ -923,6 +923,10 @@ bash shflies/auto_record_grasp_place.sh
 - 可对目标和箱子的规划位置施加 mocap/map 坐标系偏置。偏置单位是米，方向与 mocap 的 `x/y/z` 完全一致，不随无人机 yaw 旋转：
   - `TARGET_OFFSET_X/Y/Z`
   - `BOX_OFFSET_X/Y/Z`
+- 如果夹爪接触中心不在无人机 mocap 刚体中心正下方，使用 body-frame 夹爪水平偏置：
+  - `GRIPPER_X_OFFSET_M`：从无人机刚体中心到夹爪接触中心的机体系前向偏置，单位米，向机头为正。
+  - `GRIPPER_Y_OFFSET_M`：从无人机刚体中心到夹爪接触中心的机体系左向偏置，单位米，向左为正。
+  - 脚本会自动把“夹爪接触中心对准目标”换算成“无人机刚体中心应飞到的位置”，因此不要再用 `TARGET_OFFSET_X/Y` 补偿固定的机体/夹爪安装偏置。
 
 如果夹爪下偏不是 `0.25 m`，临时覆盖：
 
@@ -943,6 +947,12 @@ TARGET_OFFSET_X=0.05 BOX_OFFSET_Y=-0.04 \
 bash shflies/auto_record_grasp_place.sh
 ```
 
+如果夹爪相对无人机刚体中心在机头方向前方 `8 cm`，应使用：
+
+```bash
+GRIPPER_X_OFFSET_M=0.08 bash shflies/auto_record_grasp_place.sh
+```
+
 自动流程：
 
 1. 总控脚本先启动 `feetech_gripper_node.py`，由它独占 `/dev/ttyACM1`，发布 `/gripper/feedback`，接收 `/gripper/command_pair` 和兼容旧流程的 `/gripper/command`。
@@ -959,6 +969,8 @@ bash shflies/auto_record_grasp_place.sh
 
 - 自动任务启动前会先确认目标、盒子、无人机三者位姿新鲜稳定，但不会只使用这一刻的位置跑完整个任务。
 - 飞向草莓熊上方时，脚本会持续读取 `/strawberry_bear/pose`，实时刷新目标上方 waypoint。
+- 到达目标上方、下降到抓取高度、带载起吊、到达箱子上方、下降到投放高度后，脚本都会额外用动捕检查无人机实际位置是否到位。默认 `WAYPOINT_ARRIVAL_TOLERANCE_M=0.08`、`WAYPOINT_ARRIVAL_SETTLE_S=0.3`、`WAYPOINT_ARRIVAL_TIMEOUT_S=5.0`。这避免把“命令轨迹已经走完”误认为“飞机实际已到达关键点”。
+- 如果启用了起飞后的 `TAKEOFF_FORWARD_COMP_M` 或 `TAKEOFF_COMP_X/Y/Z` 重定位，record gate 打开前也会先等待动捕确认实际到位，避免把起飞后的重定位过程录进数据集开头。
 - 到达目标上方后，进入下降、闭合夹爪、抬升阶段，这些阶段可能遮挡草莓熊刚体；脚本会锁存最后一次新鲜目标位姿，避免遮挡导致 waypoint 跳变。
 - 飞向盒子上方时，脚本会持续读取 `/box1/pose`，实时刷新盒子上方 waypoint。
 - 到达盒子上方后，进入下降投放阶段，可能遮挡盒子刚体；脚本会锁存最后一次新鲜盒子位姿。
@@ -1033,6 +1045,11 @@ bash shflies/auto_record_grasp_place.sh
 GRASP_MODE=continuous_center
 GRIPPER_CLOSED=0.0
 GRIPPER_CLOSE_DURATION_S=4.0
+GRIPPER_X_OFFSET_M=0.0
+GRIPPER_Y_OFFSET_M=0.0
+WAYPOINT_ARRIVAL_TOLERANCE_M=0.08
+WAYPOINT_ARRIVAL_SETTLE_S=0.3
+WAYPOINT_ARRIVAL_TIMEOUT_S=5.0
 GRASP_STEP_SIZE=3.0
 GRASP_STEP_SETTLE_S=0.10
 GRASP_OPEN_TIMEOUT_S=2.0
