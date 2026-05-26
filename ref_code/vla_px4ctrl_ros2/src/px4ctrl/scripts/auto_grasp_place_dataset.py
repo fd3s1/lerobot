@@ -40,6 +40,22 @@ def quaternion_to_yaw(msg: PoseStamped) -> float:
     return normalize_angle(math.atan2(siny_cosp, cosy_cosp))
 
 
+def quaternion_to_roll_pitch_yaw(msg: PoseStamped) -> tuple[float, float, float]:
+    q = msg.pose.orientation
+    sinr_cosp = 2.0 * (q.w * q.x + q.y * q.z)
+    cosr_cosp = 1.0 - 2.0 * (q.x * q.x + q.y * q.y)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+
+    sinp = 2.0 * (q.w * q.y - q.z * q.x)
+    if abs(sinp) >= 1.0:
+        pitch = math.copysign(math.pi / 2.0, sinp)
+    else:
+        pitch = math.asin(sinp)
+
+    yaw = quaternion_to_yaw(msg)
+    return roll, pitch, yaw
+
+
 @dataclass
 class PoseSample:
     x: float
@@ -48,6 +64,8 @@ class PoseSample:
     yaw: float
     received_s: float
     frame_id: str
+    roll: float = 0.0
+    pitch: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -141,7 +159,10 @@ class AutoConfig:
     grasp_max_balance_steps: int
     grasp_angle_balance_diff: float
     grasp_compliance_radius_m: float
+    grasp_compliance_elastic_gain: float
     grasp_abort_drift_m: float
+    grasp_attitude_soft_rad: float
+    grasp_abort_attitude_rad: float
     release_retreat_up_m: float
     release_retreat_forward_m: float
     retreat_speed: float
@@ -202,13 +223,16 @@ class AutoGraspPlaceDataset(Node):
 
     def _pose_cb(self, key: str):
         def callback(msg: PoseStamped) -> None:
+            roll, pitch, yaw = quaternion_to_roll_pitch_yaw(msg)
             self.poses[key] = PoseSample(
                 x=float(msg.pose.position.x),
                 y=float(msg.pose.position.y),
                 z=float(msg.pose.position.z),
-                yaw=quaternion_to_yaw(msg),
+                yaw=yaw,
                 received_s=time.monotonic(),
                 frame_id=str(msg.header.frame_id),
+                roll=roll,
+                pitch=pitch,
             )
 
         return callback
@@ -575,7 +599,7 @@ class AutoGraspPlaceDataset(Node):
         next_tick = time.monotonic()
         for i in range(steps + 1):
             t = i / steps
-            alpha = (3.0 * t * t - 2.0 * t * t * t) if self.config.smooth_trajectory else t
+            alpha = (10.0 * t**3 - 15.0 * t**4 + 6.0 * t**5) if self.config.smooth_trajectory else t
             yaw_delta = normalize_angle(end.yaw - start.yaw)
             pose = self.checked_pose(
                 x=start.x + (end.x - start.x) * alpha,
@@ -678,6 +702,15 @@ class AutoGraspPlaceDataset(Node):
         if drone is None or not self.pose_fresh("drone"):
             return reference
 
+        attitude = max(abs(drone.roll), abs(drone.pitch))
+        if attitude > self.config.grasp_abort_attitude_rad:
+            self.publish_gripper(self.config.gripper_open, repeats=5)
+            raise RuntimeError(
+                f"Drone attitude too large during compliant grasp: "
+                f"roll={drone.roll:.3f}rad pitch={drone.pitch:.3f}rad, "
+                f"threshold={self.config.grasp_abort_attitude_rad:.3f}rad."
+            )
+
         dx = drone.x - reference.x
         dy = drone.y - reference.y
         drift_xy = math.hypot(dx, dy)
@@ -688,7 +721,31 @@ class AutoGraspPlaceDataset(Node):
                 f"abort threshold is {self.config.grasp_abort_drift_m:.3f}m."
             )
 
-        allowed = min(drift_xy, self.config.grasp_compliance_radius_m)
+        elastic_gain = self.config.grasp_compliance_elastic_gain
+        if attitude > self.config.grasp_attitude_soft_rad:
+            attitude_span = max(
+                self.config.grasp_abort_attitude_rad - self.config.grasp_attitude_soft_rad,
+                1e-6,
+            )
+            attitude_ratio = clamp(
+                (attitude - self.config.grasp_attitude_soft_rad) / attitude_span,
+                0.0,
+                1.0,
+            )
+            # As attitude grows, leave more XY error for the position controller
+            # so the vehicle is encouraged to level instead of following the load.
+            elastic_gain = min(1.0, elastic_gain + (1.0 - elastic_gain) * attitude_ratio)
+
+        free_radius = self.config.grasp_compliance_radius_m
+        if drift_xy <= free_radius:
+            allowed = (1.0 - elastic_gain) * drift_xy
+        else:
+            overflow = drift_xy - free_radius
+            allowed = min(
+                drift_xy,
+                (1.0 - elastic_gain) * free_radius
+                + (1.0 - 0.5 * elastic_gain) * overflow,
+            )
         if drift_xy > 1e-6:
             scale = allowed / drift_xy
             x = reference.x + dx * scale
@@ -790,7 +847,8 @@ class AutoGraspPlaceDataset(Node):
         for i in range(steps + 1):
             rclpy.spin_once(self, timeout_sec=0.0)
             latest = self.compliant_pose(reference)
-            alpha = i / steps
+            t = i / steps
+            alpha = 10.0 * t**3 - 15.0 * t**4 + 6.0 * t**5
             target = cfg.gripper_open + (cfg.gripper_closed - cfg.gripper_open) * alpha
             self.publish_cmd(latest)
             self.publish_gripper_pair(target, target)
@@ -1184,8 +1242,11 @@ def parse_args() -> AutoConfig:
     parser.add_argument("--grasp-balance-step", type=float, default=1.5)
     parser.add_argument("--grasp-max-balance-steps", type=int, default=8)
     parser.add_argument("--grasp-angle-balance-diff", type=float, default=5.0)
-    parser.add_argument("--grasp-compliance-radius-m", type=float, default=0.14)
-    parser.add_argument("--grasp-abort-drift-m", type=float, default=0.24)
+    parser.add_argument("--grasp-compliance-radius-m", type=float, default=0.35)
+    parser.add_argument("--grasp-compliance-elastic-gain", type=float, default=0.15)
+    parser.add_argument("--grasp-abort-drift-m", type=float, default=0.80)
+    parser.add_argument("--grasp-attitude-soft-rad", type=float, default=0.30)
+    parser.add_argument("--grasp-abort-attitude-rad", type=float, default=0.65)
     parser.add_argument(
         "--release-retreat-up-m",
         type=float,
@@ -1272,8 +1333,19 @@ def parse_args() -> AutoConfig:
         raise ValueError("--grasp-max-balance-steps must be >= 0.")
     if args.grasp_angle_balance_diff < 0.0:
         raise ValueError("--grasp-angle-balance-diff must be non-negative.")
-    if args.grasp_compliance_radius_m < 0.0 or args.grasp_abort_drift_m <= 0.0:
-        raise ValueError("--grasp-compliance-radius-m must be non-negative and --grasp-abort-drift-m positive.")
+    if (
+        args.grasp_compliance_radius_m < 0.0
+        or not 0.0 <= args.grasp_compliance_elastic_gain <= 1.0
+        or args.grasp_abort_drift_m <= 0.0
+        or args.grasp_attitude_soft_rad < 0.0
+        or args.grasp_abort_attitude_rad <= 0.0
+        or args.grasp_attitude_soft_rad >= args.grasp_abort_attitude_rad
+    ):
+        raise ValueError(
+            "--grasp-compliance-radius-m must be non-negative, "
+            "--grasp-compliance-elastic-gain must be in [0, 1], "
+            "and attitude/drift thresholds must be positive and ordered."
+        )
 
     return AutoConfig(**vars(args))
 

@@ -58,9 +58,9 @@ px4ctrl:
       force_open_below_z: 0.20
 
     cmd_feedforward:
-      enable: true
-      max_velocity: 0.8
-      max_acceleration: 1.5
+      enable: false
+      max_velocity: 0.5
+      max_acceleration: 0.8
 
 feetech_gripper_node:
   ros__parameters:

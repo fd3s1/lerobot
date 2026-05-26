@@ -967,7 +967,7 @@ bash shflies/auto_record_grasp_place.sh
 轨迹速度：
 
 - `/position_cmd` 是位置目标，但自动脚本按 `20 Hz` 逐点插值发布，不直接跳到目标点。
-- `px4ctrl` 会从连续 `/position_cmd` 估计速度/加速度前馈，并写入 MAVROS `PositionTarget`。当前配置限幅为 `cmd_feedforward.max_velocity=0.8 m/s`、`cmd_feedforward.max_acceleration=1.5 m/s^2`。
+- 当前默认关闭 `cmd_feedforward.enable`。`px4ctrl` 只向 PX4 发送位置/yaw setpoint，避免 Python/ROS 发布时间抖动被差分成速度/加速度前馈后放大普通 `CMD_CTRL` 抖动。
 - 默认开启 `SMOOTH_TRAJECTORY=true`，轨迹采用平滑起停，避免段起点/终点速度突变激发草莓熊摆动。
 - `MAX_SPEED` 默认 `0.6 m/s`，建议范围 `0.5-1.0 m/s`。
 - `APPROACH_SPEED` 默认 `0.3 m/s`，用于下降接近目标和盒子。
@@ -1016,7 +1016,9 @@ bash shflies/auto_record_grasp_place.sh
 
 - 当前 STS3215 仍使用位置伺服模式，不是真正硬件力控。
 - 当前默认抓取模式是折中测试用的 `GRASP_MODE=continuous_center`：夹爪不根据 load/current 判断接触，而是在抓取高度以固定时长连续、左右对称地闭合到中间，同时无人机 `x/y` 保持顺从。
-- 连续闭合默认从 `100.0` 到 `GRIPPER_CLOSED=0.0`，闭合时长 `GRIPPER_CLOSE_DURATION_S=3.0 s`。如果反作用力仍大，先加长到 `4~5 s` 或把 `GRIPPER_CLOSED` 提高到 `10~20`；如果夹不住，再降低 `GRIPPER_CLOSED`。
+- 连续闭合默认从 `100.0` 到 `GRIPPER_CLOSED=0.0`，闭合时长 `GRIPPER_CLOSE_DURATION_S=4.0 s`。如果反作用力仍大，先加长到 `5~6 s` 或把 `GRIPPER_CLOSED` 提高到 `10~20`；如果夹不住，再降低 `GRIPPER_CLOSED`。
+- 抓取顺从不是完全放开位置环：默认 `GRASP_COMPLIANCE_ELASTIC_GAIN=0.15`，即保留约 15% 的 XY 偏移作为弱弹性回拉，剩余偏移允许飞机跟随夹爪反作用移动。
+- 如果 roll/pitch 超过 `GRASP_ATTITUDE_SOFT_RAD=0.30 rad`，脚本会逐步加大 XY 回拉，鼓励飞机恢复水平；超过 `GRASP_ABORT_ATTITUDE_RAD=0.65 rad` 才开夹退出。
 - 如果需要切回基于反馈的软夹持，使用 `GRASP_MODE=soft bash shflies/auto_record_grasp_place.sh`。
 - 在 `continuous_center` 模式下，脚本通过 `/gripper/command_pair` 连续发布左右相同的目标开度，不使用接触判断。
 - 在 `soft` 模式下，gripper manager 以 `/gripper/feedback` 发布左右位置、load、current、位置误差；自动脚本用这些反馈判断接触。
@@ -1030,7 +1032,7 @@ bash shflies/auto_record_grasp_place.sh
 ```bash
 GRASP_MODE=continuous_center
 GRIPPER_CLOSED=0.0
-GRIPPER_CLOSE_DURATION_S=3.0
+GRIPPER_CLOSE_DURATION_S=4.0
 GRASP_STEP_SIZE=3.0
 GRASP_STEP_SETTLE_S=0.10
 GRASP_OPEN_TIMEOUT_S=2.0
@@ -1049,8 +1051,11 @@ GRASP_BALANCE_LOAD_DIFF=60
 GRASP_BALANCE_STEP=1.5
 GRASP_MAX_BALANCE_STEPS=8
 GRASP_ANGLE_BALANCE_DIFF=5.0
-GRASP_COMPLIANCE_RADIUS_M=0.14
-GRASP_ABORT_DRIFT_M=0.24
+GRASP_COMPLIANCE_RADIUS_M=0.35
+GRASP_COMPLIANCE_ELASTIC_GAIN=0.15
+GRASP_ABORT_DRIFT_M=0.80
+GRASP_ATTITUDE_SOFT_RAD=0.30
+GRASP_ABORT_ATTITUDE_RAD=0.65
 ```
 
 这些参数集中在 `shflies/grasp_params.env`。`auto_record_grasp_place.sh` 和手持调参脚本都会 source 同一个文件，所以你在这里稳定下来的参数会默认同步到真实自动飞行。命令行环境变量优先级更高，只影响本次运行：
