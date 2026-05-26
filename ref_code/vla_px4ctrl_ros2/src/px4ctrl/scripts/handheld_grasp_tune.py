@@ -72,6 +72,10 @@ class HandheldConfig:
     box_offset_z: float
     grasp_step_size: float
     grasp_step_settle_s: float
+    grasp_open_timeout_s: float
+    grasp_open_tolerance: float
+    grasp_step_timeout_s: float
+    grasp_goal_tolerance: float
     grasp_close_min: float
     grasp_contact_current_delta: float
     grasp_contact_load_delta: float
@@ -316,8 +320,12 @@ class HandheldGraspTune(Node):
         controller = SoftGraspController(
             config=SoftGraspConfig(
                 gripper_open=self.config.gripper_open,
+                grasp_open_timeout_s=self.config.grasp_open_timeout_s,
+                grasp_open_tolerance=self.config.grasp_open_tolerance,
                 grasp_step_size=self.config.grasp_step_size,
                 grasp_step_settle_s=self.config.grasp_step_settle_s,
+                grasp_step_timeout_s=self.config.grasp_step_timeout_s,
+                grasp_goal_tolerance=self.config.grasp_goal_tolerance,
                 grasp_close_min=self.config.grasp_close_min,
                 grasp_contact_current_delta=self.config.grasp_contact_current_delta,
                 grasp_contact_load_delta=self.config.grasp_contact_load_delta,
@@ -403,7 +411,7 @@ def parse_args() -> HandheldConfig:
     parser.add_argument("--ch10-index", type=int, default=9)
     parser.add_argument("--ch10-threshold", type=int, default=1500)
     parser.add_argument("--gripper-open", type=float, default=100.0)
-    parser.add_argument("--manual-override-pos", type=float, default=0.0)
+    parser.add_argument("--manual-override-pos", type=float, default=15.0)
     parser.add_argument("--gripper-z-offset-m", type=float, default=0.25)
     parser.add_argument("--target-height-m", type=float, default=0.30)
     parser.add_argument("--target-grasp-height-m", type=float, default=0.17)
@@ -420,11 +428,15 @@ def parse_args() -> HandheldConfig:
     parser.add_argument("--box-offset-z", type=float, default=0.0)
     parser.add_argument("--grasp-step-size", type=float, default=3.0)
     parser.add_argument("--grasp-step-settle-s", type=float, default=0.10)
+    parser.add_argument("--grasp-open-timeout-s", type=float, default=2.0)
+    parser.add_argument("--grasp-open-tolerance", type=float, default=5.0)
+    parser.add_argument("--grasp-step-timeout-s", type=float, default=0.80)
+    parser.add_argument("--grasp-goal-tolerance", type=float, default=3.0)
     parser.add_argument("--grasp-close-min", type=float, default=15.0)
-    parser.add_argument("--grasp-contact-current-delta", type=float, default=180.0)
-    parser.add_argument("--grasp-contact-load-delta", type=float, default=100.0)
-    parser.add_argument("--grasp-position-error-threshold", type=float, default=10.0)
-    parser.add_argument("--grasp-angle-contact-delta", type=float, default=12.0)
+    parser.add_argument("--grasp-contact-current-delta", type=float, default=250.0)
+    parser.add_argument("--grasp-contact-load-delta", type=float, default=800.0)
+    parser.add_argument("--grasp-position-error-threshold", type=float, default=20.0)
+    parser.add_argument("--grasp-angle-contact-delta", type=float, default=20.0)
     parser.add_argument("--grasp-stall-delta", type=float, default=0.25)
     parser.add_argument("--grasp-contact-min-close-delta", type=float, default=15.0)
     parser.add_argument("--grasp-contact-confirm-steps", type=int, default=2)
@@ -441,8 +453,18 @@ def parse_args() -> HandheldConfig:
         raise ValueError("--ch10-index must be non-negative.")
     if not 0.0 <= args.manual_override_pos <= args.gripper_open:
         raise ValueError("--manual-override-pos must be within [0, --gripper-open].")
-    if args.grasp_step_size <= 0.0 or args.grasp_step_settle_s <= 0.0:
-        raise ValueError("--grasp-step-size and --grasp-step-settle-s must be positive.")
+    if (
+        args.grasp_step_size <= 0.0
+        or args.grasp_step_settle_s <= 0.0
+        or args.grasp_step_timeout_s <= 0.0
+        or args.grasp_open_timeout_s <= 0.0
+    ):
+        raise ValueError(
+            "--grasp-step-size, --grasp-step-settle-s, --grasp-step-timeout-s, "
+            "and --grasp-open-timeout-s must be positive."
+        )
+    if args.grasp_goal_tolerance < 0.0 or args.grasp_open_tolerance < 0.0:
+        raise ValueError("--grasp-goal-tolerance and --grasp-open-tolerance must be non-negative.")
     if not 0.0 <= args.grasp_close_min <= args.gripper_open:
         raise ValueError("--grasp-close-min must be within [0, --gripper-open].")
     if args.grasp_contact_confirm_steps < 1:

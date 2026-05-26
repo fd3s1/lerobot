@@ -32,7 +32,7 @@ CH10_INDEX="${CH10_INDEX:-9}"
 CH10_THRESHOLD="${CH10_THRESHOLD:-1500}"
 
 GRIPPER_OPEN="${GRIPPER_OPEN:-100.0}"
-MANUAL_OVERRIDE_POS="${MANUAL_OVERRIDE_POS:-0.0}"
+MANUAL_OVERRIDE_POS="${MANUAL_OVERRIDE_POS:-15.0}"
 GRIPPER_Z_OFFSET_M="${GRIPPER_Z_OFFSET_M:-0.25}"
 TARGET_HEIGHT_M="${TARGET_HEIGHT_M:-0.30}"
 TARGET_GRASP_HEIGHT_M="${TARGET_GRASP_HEIGHT_M:-0.17}"
@@ -51,11 +51,15 @@ BOX_OFFSET_Z="${BOX_OFFSET_Z:-0.0}"
 
 GRASP_STEP_SIZE="${GRASP_STEP_SIZE:-3.0}"
 GRASP_STEP_SETTLE_S="${GRASP_STEP_SETTLE_S:-0.10}"
+GRASP_OPEN_TIMEOUT_S="${GRASP_OPEN_TIMEOUT_S:-2.0}"
+GRASP_OPEN_TOLERANCE="${GRASP_OPEN_TOLERANCE:-5.0}"
+GRASP_STEP_TIMEOUT_S="${GRASP_STEP_TIMEOUT_S:-0.80}"
+GRASP_GOAL_TOLERANCE="${GRASP_GOAL_TOLERANCE:-3.0}"
 GRASP_CLOSE_MIN="${GRASP_CLOSE_MIN:-15.0}"
-GRASP_CONTACT_CURRENT_DELTA="${GRASP_CONTACT_CURRENT_DELTA:-180}"
-GRASP_CONTACT_LOAD_DELTA="${GRASP_CONTACT_LOAD_DELTA:-100}"
-GRASP_POSITION_ERROR_THRESHOLD="${GRASP_POSITION_ERROR_THRESHOLD:-10.0}"
-GRASP_ANGLE_CONTACT_DELTA="${GRASP_ANGLE_CONTACT_DELTA:-12.0}"
+GRASP_CONTACT_CURRENT_DELTA="${GRASP_CONTACT_CURRENT_DELTA:-250}"
+GRASP_CONTACT_LOAD_DELTA="${GRASP_CONTACT_LOAD_DELTA:-800}"
+GRASP_POSITION_ERROR_THRESHOLD="${GRASP_POSITION_ERROR_THRESHOLD:-20.0}"
+GRASP_ANGLE_CONTACT_DELTA="${GRASP_ANGLE_CONTACT_DELTA:-20.0}"
 GRASP_STALL_DELTA="${GRASP_STALL_DELTA:-0.25}"
 GRASP_CONTACT_MIN_CLOSE_DELTA="${GRASP_CONTACT_MIN_CLOSE_DELTA:-15.0}"
 GRASP_CONTACT_CONFIRM_STEPS="${GRASP_CONTACT_CONFIRM_STEPS:-2}"
@@ -100,7 +104,7 @@ echo "[handheld-grasp-tune] gripper feedback topic: ${GRIPPER_FEEDBACK_TOPIC}"
 echo "[handheld-grasp-tune] gripper manager: start=${START_GRIPPER_MANAGER} port=${GRIPPER_MANAGER_PORT}"
 echo "[handheld-grasp-tune] scalar command is isolated at: ${HANDHELD_GRIPPER_SCALAR_TOPIC}"
 echo "[handheld-grasp-tune] grasp params file: ${GRASP_PARAMS_FILE:-<none>}"
-echo "[handheld-grasp-tune] soft grasp: step=${GRASP_STEP_SIZE} settle=${GRASP_STEP_SETTLE_S}s min=${GRASP_CLOSE_MIN} angle_lag=${GRASP_ANGLE_CONTACT_DELTA} stall=${GRASP_STALL_DELTA} min_close=${GRASP_CONTACT_MIN_CLOSE_DELTA}"
+echo "[handheld-grasp-tune] soft grasp: step=${GRASP_STEP_SIZE} settle=${GRASP_STEP_SETTLE_S}s step_timeout=${GRASP_STEP_TIMEOUT_S}s goal_tol=${GRASP_GOAL_TOLERANCE} open_timeout=${GRASP_OPEN_TIMEOUT_S}s open_tol=${GRASP_OPEN_TOLERANCE} min=${GRASP_CLOSE_MIN} angle_lag=${GRASP_ANGLE_CONTACT_DELTA} stall=${GRASP_STALL_DELTA} min_close=${GRASP_CONTACT_MIN_CLOSE_DELTA}"
 echo "[handheld-grasp-tune] offsets: target=(${TARGET_OFFSET_X}, ${TARGET_OFFSET_Y}, ${TARGET_OFFSET_Z}) box=(${BOX_OFFSET_X}, ${BOX_OFFSET_Y}, ${BOX_OFFSET_Z})"
 echo "[handheld-grasp-tune] CH10 low=automatic soft grasp, CH10 high=manual override pair=${MANUAL_OVERRIDE_POS}"
 echo "[handheld-grasp-tune] no record, no takeoff, no /position_cmd will be published."
@@ -161,6 +165,10 @@ ros2 run px4ctrl handheld_grasp_tune.py \
   --box-offset-z "${BOX_OFFSET_Z}" \
   --grasp-step-size "${GRASP_STEP_SIZE}" \
   --grasp-step-settle-s "${GRASP_STEP_SETTLE_S}" \
+  --grasp-open-timeout-s "${GRASP_OPEN_TIMEOUT_S}" \
+  --grasp-open-tolerance "${GRASP_OPEN_TOLERANCE}" \
+  --grasp-step-timeout-s "${GRASP_STEP_TIMEOUT_S}" \
+  --grasp-goal-tolerance "${GRASP_GOAL_TOLERANCE}" \
   --grasp-close-min "${GRASP_CLOSE_MIN}" \
   --grasp-contact-current-delta "${GRASP_CONTACT_CURRENT_DELTA}" \
   --grasp-contact-load-delta "${GRASP_CONTACT_LOAD_DELTA}" \

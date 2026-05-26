@@ -1027,11 +1027,15 @@ bash shflies/auto_record_grasp_place.sh
 ```bash
 GRASP_STEP_SIZE=3.0
 GRASP_STEP_SETTLE_S=0.10
+GRASP_OPEN_TIMEOUT_S=2.0
+GRASP_OPEN_TOLERANCE=5.0
+GRASP_STEP_TIMEOUT_S=0.80
+GRASP_GOAL_TOLERANCE=3.0
 GRASP_CLOSE_MIN=15.0
-GRASP_CONTACT_CURRENT_DELTA=180
-GRASP_CONTACT_LOAD_DELTA=100
-GRASP_POSITION_ERROR_THRESHOLD=10.0
-GRASP_ANGLE_CONTACT_DELTA=12.0
+GRASP_CONTACT_CURRENT_DELTA=250
+GRASP_CONTACT_LOAD_DELTA=800
+GRASP_POSITION_ERROR_THRESHOLD=20.0
+GRASP_ANGLE_CONTACT_DELTA=20.0
 GRASP_STALL_DELTA=0.25
 GRASP_CONTACT_MIN_CLOSE_DELTA=15.0
 GRASP_CONTACT_CONFIRM_STEPS=2
@@ -1084,7 +1088,9 @@ bash shflies/handheld_grasp_tune.sh
 - gripper manager 的 scalar `/gripper/command` 会被重映射到 `/handheld_grasp_tune/ignore_scalar_command`，避免 px4ctrl 的 CH10 直接闭合命令和测试节点的 pair command 抢夹爪。
 - 测试节点只发布 `/gripper/command_pair`。
 - CH10 低位：自动软夹持生效。触发时终端会打印 `CH10 low: starting automatic soft-grasp sequence.`。
-- CH10 高位：手动超控自动夹取，直接发布左右夹爪目标 `MANUAL_OVERRIDE_POS`，默认 `0.0`。高位期间自动软夹持暂停；回到低位后重新进入自动软夹持。
+- CH10 高位：手动超控自动夹取，直接发布左右夹爪目标 `MANUAL_OVERRIDE_POS`，默认 `15.0`。高位期间自动软夹持暂停；回到低位后重新进入自动软夹持。
+- 自动软夹持每一步会等待舵机跟上目标，默认最多 `GRASP_STEP_TIMEOUT_S=0.80s`；角度滞后只有在这一步超时后才会当成接触，避免把正常跟随延迟误判成夹到物体。
+- 自动软夹持开始前会先发布全开，并等待左右夹爪接近 `GRIPPER_OPEN`，避免从手动闭合位置直接进入自动闭合导致跳变。
 - 终端会持续显示无人机相对草莓熊抓取点、box 放置点的 `dx/dy/dz`，以及当前左右夹爪位置、goal、load、current。
 - 如果感觉像 CH10 在直接手动控制夹爪，而不是软夹持，先确认没有旧的 `feetech_gripper_node.py` 仍在监听 `/gripper/command`。手持脚本启动时会检查并提示已有 gripper 节点。
 
@@ -1097,8 +1103,11 @@ GRASP_STEP_SIZE=1.5 GRASP_CLOSE_MIN=25.0 bash shflies/handheld_grasp_tune.sh
 # 临时更大胆，只影响本次手持测试
 GRASP_STEP_SIZE=4.0 GRASP_CLOSE_MIN=10.0 bash shflies/handheld_grasp_tune.sh
 
-# 高位手动超控不要完全闭合到 0，可改成 15
-MANUAL_OVERRIDE_POS=15.0 bash shflies/handheld_grasp_tune.sh
+# 高位手动超控如果只想打开，可设成 100
+MANUAL_OVERRIDE_POS=100.0 bash shflies/handheld_grasp_tune.sh
+
+# 如果确实要测试硬闭合到 0，需要明确指定；容易触发过载，不建议带物体使用
+MANUAL_OVERRIDE_POS=0.0 bash shflies/handheld_grasp_tune.sh
 ```
 
 如果某组参数手持测试效果好，把它写入：

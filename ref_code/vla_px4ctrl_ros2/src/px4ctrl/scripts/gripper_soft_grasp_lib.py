@@ -32,15 +32,19 @@ class GripperFeedbackState:
 @dataclass(frozen=True)
 class SoftGraspConfig:
     gripper_open: float = 100.0
+    grasp_open_timeout_s: float = 2.0
+    grasp_open_tolerance: float = 5.0
     grasp_step_size: float = 3.0
     grasp_step_settle_s: float = 0.10
+    grasp_step_timeout_s: float = 0.80
+    grasp_goal_tolerance: float = 3.0
     grasp_close_min: float = 15.0
-    grasp_contact_current_delta: float = 100.0
-    grasp_contact_load_delta: float = 60.0
-    grasp_position_error_threshold: float = 3.0
-    grasp_angle_contact_delta: float = 10.0
+    grasp_contact_current_delta: float = 250.0
+    grasp_contact_load_delta: float = 800.0
+    grasp_position_error_threshold: float = 20.0
+    grasp_angle_contact_delta: float = 20.0
     grasp_stall_delta: float = 0.25
-    grasp_contact_min_close_delta: float = 12.0
+    grasp_contact_min_close_delta: float = 15.0
     grasp_contact_confirm_steps: int = 2
     grasp_balance_load_diff: float = 60.0
     grasp_balance_step: float = 1.5
@@ -136,13 +140,14 @@ class SoftGraspController:
             stall=stall,
         )
 
-    def _contact_from_metrics(self, metrics: _SideMetrics, close_delta: float) -> bool:
+    def _contact_from_metrics(self, metrics: _SideMetrics, close_delta: float, timed_out: bool) -> bool:
         angle_contact_enabled = close_delta >= self.config.grasp_contact_min_close_delta
         return (
             metrics.current_delta >= self.config.grasp_contact_current_delta
             or metrics.load_delta >= self.config.grasp_contact_load_delta
             or (
                 angle_contact_enabled
+                and timed_out
                 and (
                     metrics.angle_lag >= self.config.grasp_angle_contact_delta
                     or metrics.position_error >= self.config.grasp_position_error_threshold
@@ -151,16 +156,34 @@ class SoftGraspController:
             )
         )
 
+    def _wait_open_ready(self) -> GripperFeedbackState:
+        cfg = self.config
+        deadline = time.monotonic() + max(0.0, cfg.grasp_open_timeout_s)
+        feedback = self.wait_feedback()
+        while time.monotonic() < deadline:
+            left_ready = feedback.left_pos >= cfg.gripper_open - cfg.grasp_open_tolerance
+            right_ready = feedback.right_pos >= cfg.gripper_open - cfg.grasp_open_tolerance
+            if left_ready and right_ready:
+                return feedback
+            self.hold_pair_step(cfg.gripper_open, cfg.gripper_open, cfg.grasp_step_settle_s)
+            feedback = self.wait_feedback()
+        self.log(
+            "Soft grasp open precheck timed out: "
+            f"L_pos={feedback.left_pos:.1f} R_pos={feedback.right_pos:.1f}; "
+            "continuing with current feedback as baseline."
+        )
+        return feedback
+
     def run(self) -> SoftGraspResult:
         cfg = self.config
         min_goal = clamp(cfg.grasp_close_min, 0.0, cfg.gripper_open)
 
         self.log(
-            "Soft grasp: angle-first step closing; current/load are secondary contact checks."
+            "Soft grasp: step closing with settle wait; current/load are immediate checks, "
+            "angle lag is only contact after step timeout."
         )
         self.open_gripper(5)
-        self.hold_pair_step(cfg.gripper_open, cfg.gripper_open, 0.25)
-        baseline = self.wait_feedback()
+        baseline = self._wait_open_ready()
         previous_feedback: GripperFeedbackState | None = baseline
 
         left_goal = cfg.gripper_open
@@ -181,9 +204,8 @@ class SoftGraspController:
             if not right_contact:
                 right_goal = max(min_goal, right_goal - cfg.grasp_step_size)
 
-            context = self.hold_pair_step(left_goal, right_goal, cfg.grasp_step_settle_s)
-            feedback = self.wait_feedback()
-
+            step_deadline = time.monotonic() + max(cfg.grasp_step_timeout_s, cfg.grasp_step_settle_s)
+            feedback = previous_feedback if previous_feedback is not None else baseline
             left_metrics = self._side_metrics(
                 feedback=feedback,
                 baseline=baseline,
@@ -201,18 +223,46 @@ class SoftGraspController:
                 previous_goal=prev_right_goal,
             )
 
-            if not left_contact:
-                if self._contact_from_metrics(left_metrics, cfg.gripper_open - left_goal):
-                    left_confirm += 1
-                    left_contact = left_confirm >= cfg.grasp_contact_confirm_steps
-                else:
-                    left_confirm = 0
-            if not right_contact:
-                if self._contact_from_metrics(right_metrics, cfg.gripper_open - right_goal):
-                    right_confirm += 1
-                    right_contact = right_confirm >= cfg.grasp_contact_confirm_steps
-                else:
-                    right_confirm = 0
+            while True:
+                context = self.hold_pair_step(left_goal, right_goal, cfg.grasp_step_settle_s)
+                feedback = self.wait_feedback()
+                timed_out = time.monotonic() >= step_deadline
+
+                left_metrics = self._side_metrics(
+                    feedback=feedback,
+                    baseline=baseline,
+                    previous_feedback=previous_feedback,
+                    side="left",
+                    goal=left_goal,
+                    previous_goal=prev_left_goal,
+                )
+                right_metrics = self._side_metrics(
+                    feedback=feedback,
+                    baseline=baseline,
+                    previous_feedback=previous_feedback,
+                    side="right",
+                    goal=right_goal,
+                    previous_goal=prev_right_goal,
+                )
+
+                if not left_contact:
+                    if self._contact_from_metrics(left_metrics, cfg.gripper_open - left_goal, timed_out):
+                        left_confirm += 1
+                        left_contact = left_confirm >= cfg.grasp_contact_confirm_steps
+                    else:
+                        left_confirm = 0
+                if not right_contact:
+                    if self._contact_from_metrics(right_metrics, cfg.gripper_open - right_goal, timed_out):
+                        right_confirm += 1
+                        right_contact = right_confirm >= cfg.grasp_contact_confirm_steps
+                    else:
+                        right_confirm = 0
+
+                left_settled = left_contact or left_metrics.angle_lag <= cfg.grasp_goal_tolerance
+                right_settled = right_contact or right_metrics.angle_lag <= cfg.grasp_goal_tolerance
+                previous_feedback = feedback
+                if (left_settled and right_settled) or timed_out or (left_contact and right_contact):
+                    break
 
             self.log(
                 "Soft grasp step: "
@@ -224,8 +274,6 @@ class SoftGraspController:
                 f"L_cur={feedback.left_current:.0f} R_cur={feedback.right_current:.0f} "
                 f"L_contact={left_contact} R_contact={right_contact}"
             )
-
-            previous_feedback = feedback
 
             if left_goal <= min_goal and right_goal <= min_goal and not (left_contact and right_contact):
                 self.open_gripper(5)
