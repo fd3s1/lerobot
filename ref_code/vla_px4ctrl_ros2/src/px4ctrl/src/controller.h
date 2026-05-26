@@ -11,12 +11,16 @@ struct Desired_State_t
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
   Eigen::Vector3d p{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d v{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d a{Eigen::Vector3d::Zero()};
   double yaw{0.0};
 
   Desired_State_t() = default;
   explicit Desired_State_t(const Odom_Data_t &odom)
   {
     p = odom.p;
+    v.setZero();
+    a.setZero();
     yaw = uav_utils::normalize_angle(uav_utils::get_yaw_from_quaternion(odom.q));
   }
 };
@@ -26,6 +30,8 @@ struct Controller_Output_t
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
   Eigen::Vector3d position{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d velocity{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d acceleration{Eigen::Vector3d::Zero()};
   double yaw{0.0};
 };
 

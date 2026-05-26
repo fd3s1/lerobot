@@ -64,6 +64,13 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
   gripper.force_open_below_z =
     node.declare_parameter<double>("gripper.force_open_below_z", gripper.force_open_below_z);
 
+  cmd_feedforward.enable =
+    node.declare_parameter<bool>("cmd_feedforward.enable", cmd_feedforward.enable);
+  cmd_feedforward.max_velocity =
+    node.declare_parameter<double>("cmd_feedforward.max_velocity", cmd_feedforward.max_velocity);
+  cmd_feedforward.max_acceleration =
+    node.declare_parameter<double>("cmd_feedforward.max_acceleration", cmd_feedforward.max_acceleration);
+
   if (takeoff_land.enable_auto_arm && !takeoff_land.enable) {
     takeoff_land.enable_auto_arm = false;
     RCLCPP_ERROR(

@@ -10,6 +10,8 @@ find_package(std_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/AuxCommand.msg"
+  "msg/GripperCommandPair.msg"
+  "msg/GripperFeedback.msg"
   "msg/OccMap3d.msg"
   "msg/PolyTraj.msg"
   "msg/PositionCommand.msg"

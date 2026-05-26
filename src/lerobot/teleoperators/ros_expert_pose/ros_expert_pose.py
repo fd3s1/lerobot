@@ -34,7 +34,8 @@ class TimedExpertPose:
 
 @dataclass(frozen=True)
 class TimedGripperCommand:
-    value: float
+    left: float
+    right: float
     received_at_s: float
 
 
@@ -103,6 +104,7 @@ class ROSExpertPoseTeleop(Teleoperator):
     def connect(self, calibrate: bool = True) -> None:
         import rclpy
         from geometry_msgs.msg import PoseStamped
+        from quadrotor_msgs.msg import GripperCommandPair
         from rclpy.executors import SingleThreadedExecutor
         from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
         from std_msgs.msg import Float64
@@ -128,6 +130,18 @@ class ROSExpertPoseTeleop(Teleoperator):
         self._node.create_subscription(PoseStamped, self.config.expert_pose_topic, self._pose_cb, best_effort_qos)
         self._node.create_subscription(Float64, self.config.gripper_topic, self._gripper_cb, reliable_qos)
         self._node.create_subscription(Float64, self.config.gripper_topic, self._gripper_cb, best_effort_qos)
+        self._node.create_subscription(
+            GripperCommandPair,
+            self.config.gripper_pair_topic,
+            self._gripper_pair_cb,
+            reliable_qos,
+        )
+        self._node.create_subscription(
+            GripperCommandPair,
+            self.config.gripper_pair_topic,
+            self._gripper_pair_cb,
+            best_effort_qos,
+        )
 
         self._executor = SingleThreadedExecutor()
         self._executor.add_node(self._node)
@@ -161,8 +175,19 @@ class ROSExpertPoseTeleop(Teleoperator):
             self._latest_pose = pose
 
     def _gripper_cb(self, msg) -> None:
+        value = clamp(float(msg.data), 0.0, 100.0)
         gripper = TimedGripperCommand(
-            value=clamp(float(msg.data), 0.0, 100.0),
+            left=value,
+            right=value,
+            received_at_s=time.monotonic(),
+        )
+        with self._lock:
+            self._latest_gripper = gripper
+
+    def _gripper_pair_cb(self, msg) -> None:
+        gripper = TimedGripperCommand(
+            left=clamp(float(msg.left_pos), 0.0, 100.0),
+            right=clamp(float(msg.right_pos), 0.0, 100.0),
             received_at_s=time.monotonic(),
         )
         with self._lock:
@@ -199,24 +224,29 @@ class ROSExpertPoseTeleop(Teleoperator):
 
         if gripper is None:
             if self.config.require_gripper_command:
-                raise RuntimeError(f"No gripper command received on {self.config.gripper_topic}.")
-            gripper_value = clamp(self.config.default_gripper_pos, 0.0, 100.0)
+                raise RuntimeError(
+                    f"No gripper command received on {self.config.gripper_topic} "
+                    f"or {self.config.gripper_pair_topic}."
+                )
+            gripper_left = clamp(self.config.default_gripper_pos, 0.0, 100.0)
+            gripper_right = gripper_left
         else:
             gripper_age_s = now_s - gripper.received_at_s
             if self.config.max_gripper_age_s > 0.0 and gripper_age_s > self.config.max_gripper_age_s:
                 raise RuntimeError(
-                    f"Gripper command on {self.config.gripper_topic} is stale: "
+                    f"Gripper command on {self.config.gripper_topic}/{self.config.gripper_pair_topic} is stale: "
                     f"{gripper_age_s:.3f}s > {self.config.max_gripper_age_s:.3f}s."
                 )
-            gripper_value = gripper.value
+            gripper_left = gripper.left
+            gripper_right = gripper.right
 
         return {
             ACTION_X: pose.x,
             ACTION_Y: pose.y,
             ACTION_Z: pose.z,
             ACTION_YAW: pose.yaw,
-            GRIPPER_LEFT_POS: gripper_value,
-            GRIPPER_RIGHT_POS: gripper_value,
+            GRIPPER_LEFT_POS: gripper_left,
+            GRIPPER_RIGHT_POS: gripper_right,
         }
 
     def send_feedback(self, feedback: dict[str, Any]) -> None:

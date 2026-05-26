@@ -23,6 +23,10 @@ class VLADroneConfig(RobotConfig):
     disconnect_gripper_open_position: float = 100.0
     disconnect_gripper_repeats: int = 3
     disconnect_gripper_settle_s: float = 0.5
+    use_ros_gripper: bool = False
+    gripper_command_topic: str = "/gripper/command_pair"
+    gripper_feedback_topic: str = "/gripper/feedback"
+    gripper_feedback_timeout_s: float = 0.5
 
     nokov_pose_topic: str = "/mavros/vision_pose/pose"
     mavros_setpoint_topic: str = "/position_cmd"

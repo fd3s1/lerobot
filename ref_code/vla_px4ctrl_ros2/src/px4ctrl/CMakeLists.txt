@@ -46,6 +46,8 @@ install(PROGRAMS
   scripts/auto_grasp_place_dataset.py
   scripts/feetech_gripper_node.py
   scripts/fly_x_gripper_test.py
+  scripts/gripper_soft_grasp_lib.py
+  scripts/handheld_grasp_tune.py
   scripts/vrpn_to_mavros_vision_bridge.py
   DESTINATION lib/${PROJECT_NAME}
 )

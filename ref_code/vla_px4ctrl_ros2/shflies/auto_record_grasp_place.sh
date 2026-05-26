@@ -4,12 +4,27 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+GRASP_PARAMS_FILE="${GRASP_PARAMS_FILE:-${SCRIPT_DIR}/grasp_params.env}"
+if [[ -n "${GRASP_PARAMS_FILE}" && -f "${GRASP_PARAMS_FILE}" ]]; then
+  # shellcheck source=/dev/null
+  source "${GRASP_PARAMS_FILE}"
+fi
+
 CONDA_ENV="${CONDA_ENV:-vla-drone-v044}"
 TARGET_POSE_TOPIC="${TARGET_POSE_TOPIC:-/strawberry_bear/pose}"
 BOX_POSE_TOPIC="${BOX_POSE_TOPIC:-/box1/pose}"
 DRONE_POSE_TOPIC="${DRONE_POSE_TOPIC:-/mavros/vision_pose/pose}"
 CMD_TOPIC="${CMD_TOPIC:-/position_cmd}"
 GRIPPER_TOPIC="${GRIPPER_TOPIC:-/gripper/command}"
+GRIPPER_COMMAND_PAIR_TOPIC="${GRIPPER_COMMAND_PAIR_TOPIC:-/gripper/command_pair}"
+GRIPPER_FEEDBACK_TOPIC="${GRIPPER_FEEDBACK_TOPIC:-/gripper/feedback}"
+GRIPPER_FEEDBACK_TIMEOUT_S="${GRIPPER_FEEDBACK_TIMEOUT_S:-0.5}"
+START_GRIPPER_MANAGER="${START_GRIPPER_MANAGER:-true}"
+GRIPPER_MANAGER_PORT="${GRIPPER_MANAGER_PORT:-/dev/ttyACM1}"
+GRIPPER_MANAGER_FEEDBACK_RATE_HZ="${GRIPPER_MANAGER_FEEDBACK_RATE_HZ:-20.0}"
+GRIPPER_MANAGER_TORQUE_LIMIT="${GRIPPER_MANAGER_TORQUE_LIMIT:-0}"
+GRIPPER_MANAGER_GOAL_VELOCITY="${GRIPPER_MANAGER_GOAL_VELOCITY:-0}"
+GRIPPER_MANAGER_ACCELERATION="${GRIPPER_MANAGER_ACCELERATION:-0}"
 TAKEOFF_LAND_TOPIC="${TAKEOFF_LAND_TOPIC:-/px4ctrl/takeoff_land}"
 PX4CTRL_STATE_TOPIC="${PX4CTRL_STATE_TOPIC:-/px4ctrl/state}"
 RECORD_STATUS_TOPIC="${RECORD_STATUS_TOPIC:-/lerobot_record/status}"
@@ -23,10 +38,10 @@ EPISODE_TIME_S="${EPISODE_TIME_S:-30}"
 MAX_SPEED="${MAX_SPEED:-0.6}"
 APPROACH_SPEED="${APPROACH_SPEED:-0.3}"
 LIFT_SPEED="${LIFT_SPEED:-0.4}"
-PAYLOAD_LIFT_SPEED="${PAYLOAD_LIFT_SPEED:-0.18}"
-PAYLOAD_TRANSFER_SPEED="${PAYLOAD_TRANSFER_SPEED:-0.25}"
-POST_GRASP_SETTLE_S="${POST_GRASP_SETTLE_S:-1.0}"
-POST_LIFT_SETTLE_S="${POST_LIFT_SETTLE_S:-1.0}"
+PAYLOAD_LIFT_SPEED="${PAYLOAD_LIFT_SPEED:-0.10}"
+PAYLOAD_TRANSFER_SPEED="${PAYLOAD_TRANSFER_SPEED:-0.16}"
+POST_GRASP_SETTLE_S="${POST_GRASP_SETTLE_S:-1.5}"
+POST_LIFT_SETTLE_S="${POST_LIFT_SETTLE_S:-1.5}"
 SMOOTH_TRAJECTORY="${SMOOTH_TRAJECTORY:-true}"
 TAKEOFF_FORWARD_COMP_M="${TAKEOFF_FORWARD_COMP_M:-0.0}"
 PAYLOAD_LIFT_FORWARD_COMP_M="${PAYLOAD_LIFT_FORWARD_COMP_M:-0.0}"
@@ -62,6 +77,21 @@ CMD_LAND_Z="${CMD_LAND_Z:--0.3}"
 CMD_LAND_Z_OFFSET_M="${CMD_LAND_Z_OFFSET_M:-0.0}"
 GRIPPER_CLOSE_DURATION_S="${GRIPPER_CLOSE_DURATION_S:-1.5}"
 GRIPPER_OPEN_DURATION_S="${GRIPPER_OPEN_DURATION_S:-0.4}"
+GRASP_STEP_SIZE="${GRASP_STEP_SIZE:-3.0}"
+GRASP_STEP_SETTLE_S="${GRASP_STEP_SETTLE_S:-0.10}"
+GRASP_CLOSE_MIN="${GRASP_CLOSE_MIN:-15.0}"
+GRASP_CONTACT_CURRENT_DELTA="${GRASP_CONTACT_CURRENT_DELTA:-100}"
+GRASP_CONTACT_LOAD_DELTA="${GRASP_CONTACT_LOAD_DELTA:-60}"
+GRASP_POSITION_ERROR_THRESHOLD="${GRASP_POSITION_ERROR_THRESHOLD:-3.0}"
+GRASP_ANGLE_CONTACT_DELTA="${GRASP_ANGLE_CONTACT_DELTA:-3.0}"
+GRASP_STALL_DELTA="${GRASP_STALL_DELTA:-0.8}"
+GRASP_CONTACT_CONFIRM_STEPS="${GRASP_CONTACT_CONFIRM_STEPS:-2}"
+GRASP_BALANCE_LOAD_DIFF="${GRASP_BALANCE_LOAD_DIFF:-60}"
+GRASP_BALANCE_STEP="${GRASP_BALANCE_STEP:-1.5}"
+GRASP_MAX_BALANCE_STEPS="${GRASP_MAX_BALANCE_STEPS:-8}"
+GRASP_ANGLE_BALANCE_DIFF="${GRASP_ANGLE_BALANCE_DIFF:-5.0}"
+GRASP_COMPLIANCE_RADIUS_M="${GRASP_COMPLIANCE_RADIUS_M:-0.14}"
+GRASP_ABORT_DRIFT_M="${GRASP_ABORT_DRIFT_M:-0.24}"
 NO_LAND="${NO_LAND:-false}"
 
 bool_is_true() {
@@ -88,13 +118,10 @@ check_pose_topic_once() {
 
 record_pid=""
 record_uses_setsid=false
+gripper_manager_pid=""
 
 cleanup() {
-  if [[ -z "${record_pid}" ]]; then
-    return
-  fi
-
-  if kill -0 "${record_pid}" 2>/dev/null; then
+  if [[ -n "${record_pid}" ]] && kill -0 "${record_pid}" 2>/dev/null; then
     echo "[auto-record-grasp-place] stopping record process ${record_pid}"
     if [[ "${record_uses_setsid}" == "true" ]]; then
       kill -TERM -- "-${record_pid}" 2>/dev/null || true
@@ -123,6 +150,23 @@ cleanup() {
   fi
 
   record_pid=""
+
+  if [[ -n "${gripper_manager_pid}" ]] && kill -0 "${gripper_manager_pid}" 2>/dev/null; then
+    echo "[auto-record-grasp-place] stopping gripper manager ${gripper_manager_pid}"
+    kill -TERM -- "-${gripper_manager_pid}" 2>/dev/null || true
+    for _ in {1..20}; do
+      if ! kill -0 "${gripper_manager_pid}" 2>/dev/null; then
+        break
+      fi
+      sleep 0.1
+    done
+    if kill -0 "${gripper_manager_pid}" 2>/dev/null; then
+      kill -KILL -- "-${gripper_manager_pid}" 2>/dev/null || true
+    fi
+    wait "${gripper_manager_pid}" 2>/dev/null || true
+  fi
+
+  gripper_manager_pid=""
 }
 
 on_signal() {
@@ -136,6 +180,11 @@ trap on_signal INT TERM HUP
 echo "[auto-record-grasp-place] target topic: ${TARGET_POSE_TOPIC}"
 echo "[auto-record-grasp-place] box topic: ${BOX_POSE_TOPIC}"
 echo "[auto-record-grasp-place] drone topic: ${DRONE_POSE_TOPIC}"
+echo "[auto-record-grasp-place] gripper scalar topic: ${GRIPPER_TOPIC}"
+echo "[auto-record-grasp-place] gripper pair topic: ${GRIPPER_COMMAND_PAIR_TOPIC}"
+echo "[auto-record-grasp-place] gripper feedback topic: ${GRIPPER_FEEDBACK_TOPIC}"
+echo "[auto-record-grasp-place] gripper manager: start=${START_GRIPPER_MANAGER} port=${GRIPPER_MANAGER_PORT} feedback_rate=${GRIPPER_MANAGER_FEEDBACK_RATE_HZ}Hz"
+echo "[auto-record-grasp-place] grasp params file: ${GRASP_PARAMS_FILE:-<none>}"
 echo "[auto-record-grasp-place] record gate: ${RECORD_GATE_TOPIC}=${RECORD_GATE_VALUE}"
 echo "[auto-record-grasp-place] record status topic: ${RECORD_STATUS_TOPIC}"
 echo "[auto-record-grasp-place] episode time: ${EPISODE_TIME_S}s"
@@ -146,6 +195,8 @@ echo "[auto-record-grasp-place] map compensation: takeoff=(${TAKEOFF_COMP_X}, ${
 echo "[auto-record-grasp-place] geometry: gripper_z_offset=${GRIPPER_Z_OFFSET_M}m target_h=${TARGET_HEIGHT_M}m target_grasp_h=${TARGET_GRASP_HEIGHT_M}m target_z_ref=${TARGET_POSE_Z_REFERENCE}"
 echo "[auto-record-grasp-place] box: l=${BOX_LENGTH_M}m w=${BOX_WIDTH_M}m h=${BOX_HEIGHT_M}m hover_clearance=${BOX_HOVER_GRIPPER_CLEARANCE_M}m place_bottom_clearance=${BOX_PLACE_BOTTOM_CLEARANCE_M}m"
 echo "[auto-record-grasp-place] planning offsets: target=(${TARGET_OFFSET_X}, ${TARGET_OFFSET_Y}, ${TARGET_OFFSET_Z})m box=(${BOX_OFFSET_X}, ${BOX_OFFSET_Y}, ${BOX_OFFSET_Z})m"
+echo "[auto-record-grasp-place] soft grasp: step=${GRASP_STEP_SIZE} settle=${GRASP_STEP_SETTLE_S}s min=${GRASP_CLOSE_MIN} current_delta=${GRASP_CONTACT_CURRENT_DELTA} load_delta=${GRASP_CONTACT_LOAD_DELTA} pos_err=${GRASP_POSITION_ERROR_THRESHOLD} angle_lag=${GRASP_ANGLE_CONTACT_DELTA} stall=${GRASP_STALL_DELTA}"
+echo "[auto-record-grasp-place] soft grasp balance/compliance: load_diff=${GRASP_BALANCE_LOAD_DIFF} angle_diff=${GRASP_ANGLE_BALANCE_DIFF} balance_step=${GRASP_BALANCE_STEP} max_balance=${GRASP_MAX_BALANCE_STEPS} compliance_radius=${GRASP_COMPLIANCE_RADIUS_M} abort_drift=${GRASP_ABORT_DRIFT_M}"
 echo "[auto-record-grasp-place] release retreat: up=${RELEASE_RETREAT_UP_M}m forward=${RELEASE_RETREAT_FORWARD_M}m"
 echo "[auto-record-grasp-place] landing: mode=${LANDING_MODE} cmd_speed=${CMD_LAND_SPEED} cmd_z=${CMD_LAND_Z:-pre_takeoff_z+${CMD_LAND_Z_OFFSET_M}}"
 echo "[auto-record-grasp-place] pose preflight: timeout=${POSE_PREFLIGHT_TIMEOUT_S}s required=${POSE_PREFLIGHT_REQUIRED} skip=${SKIP_POSE_PREFLIGHT}"
@@ -176,11 +227,29 @@ if ! bool_is_true "${SKIP_POSE_PREFLIGHT}"; then
   fi
 fi
 
+if bool_is_true "${START_GRIPPER_MANAGER}"; then
+  setsid ros2 run px4ctrl feetech_gripper_node.py --ros-args \
+    -p port:="${GRIPPER_MANAGER_PORT}" \
+    -p command_topic:="${GRIPPER_TOPIC}" \
+    -p command_pair_topic:="${GRIPPER_COMMAND_PAIR_TOPIC}" \
+    -p feedback_topic:="${GRIPPER_FEEDBACK_TOPIC}" \
+    -p feedback_rate_hz:="${GRIPPER_MANAGER_FEEDBACK_RATE_HZ}" \
+    -p torque_limit:="${GRIPPER_MANAGER_TORQUE_LIMIT}" \
+    -p goal_velocity:="${GRIPPER_MANAGER_GOAL_VELOCITY}" \
+    -p acceleration:="${GRIPPER_MANAGER_ACCELERATION}" &
+  gripper_manager_pid="$!"
+  sleep 1.0
+fi
+
 START_GATE_TOPIC="${RECORD_GATE_TOPIC}" \
 START_GATE_VALUE="${RECORD_GATE_VALUE}" \
 START_GATE_STABLE_S=0.0 \
 RECORD_PREWARM_STEPS=0 \
 DATASET_STATUS_TOPIC="${RECORD_STATUS_TOPIC}" \
+USE_ROS_GRIPPER=true \
+GRIPPER_COMMAND_PAIR_TOPIC="${GRIPPER_COMMAND_PAIR_TOPIC}" \
+GRIPPER_FEEDBACK_TOPIC="${GRIPPER_FEEDBACK_TOPIC}" \
+GRIPPER_FEEDBACK_TIMEOUT_S="${GRIPPER_FEEDBACK_TIMEOUT_S}" \
 EPISODE_TIME_S="${EPISODE_TIME_S}" \
 TASK="${TASK:-Auto grasp target and place into box}" \
 setsid bash "${SCRIPT_DIR}/record_vla_dataset.sh" &
@@ -193,6 +262,8 @@ auto_args=(
   --box-pose-topic "${BOX_POSE_TOPIC}"
   --cmd-topic "${CMD_TOPIC}"
   --gripper-topic "${GRIPPER_TOPIC}"
+  --gripper-command-pair-topic "${GRIPPER_COMMAND_PAIR_TOPIC}"
+  --gripper-feedback-topic "${GRIPPER_FEEDBACK_TOPIC}"
   --takeoff-land-topic "${TAKEOFF_LAND_TOPIC}"
   --px4ctrl-state-topic "${PX4CTRL_STATE_TOPIC}"
   --record-status-topic "${RECORD_STATUS_TOPIC}"
@@ -239,6 +310,21 @@ auto_args=(
   --record-duration-s "${EPISODE_TIME_S}"
   --gripper-close-duration-s "${GRIPPER_CLOSE_DURATION_S}"
   --gripper-open-duration-s "${GRIPPER_OPEN_DURATION_S}"
+  --grasp-step-size "${GRASP_STEP_SIZE}"
+  --grasp-step-settle-s "${GRASP_STEP_SETTLE_S}"
+  --grasp-close-min "${GRASP_CLOSE_MIN}"
+  --grasp-contact-current-delta "${GRASP_CONTACT_CURRENT_DELTA}"
+  --grasp-contact-load-delta "${GRASP_CONTACT_LOAD_DELTA}"
+  --grasp-position-error-threshold "${GRASP_POSITION_ERROR_THRESHOLD}"
+  --grasp-angle-contact-delta "${GRASP_ANGLE_CONTACT_DELTA}"
+  --grasp-stall-delta "${GRASP_STALL_DELTA}"
+  --grasp-contact-confirm-steps "${GRASP_CONTACT_CONFIRM_STEPS}"
+  --grasp-balance-load-diff "${GRASP_BALANCE_LOAD_DIFF}"
+  --grasp-balance-step "${GRASP_BALANCE_STEP}"
+  --grasp-max-balance-steps "${GRASP_MAX_BALANCE_STEPS}"
+  --grasp-angle-balance-diff "${GRASP_ANGLE_BALANCE_DIFF}"
+  --grasp-compliance-radius-m "${GRASP_COMPLIANCE_RADIUS_M}"
+  --grasp-abort-drift-m "${GRASP_ABORT_DRIFT_M}"
 )
 
 if [[ -n "${CMD_LAND_Z}" ]]; then

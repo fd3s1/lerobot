@@ -1,0 +1,11 @@
+std_msgs/Header header
+float64 left_pos
+float64 right_pos
+float64 left_load
+float64 right_load
+float64 left_current
+float64 right_current
+float64 left_position_error
+float64 right_position_error
+float64 left_goal_pos
+float64 right_goal_pos

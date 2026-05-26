@@ -25,6 +25,10 @@ NOKOV_POSE_TOPIC="${NOKOV_POSE_TOPIC:-/mavros/vision_pose/pose}"
 MAVROS_SETPOINT_TOPIC="${MAVROS_SETPOINT_TOPIC:-/position_cmd}"
 EXPERT_POSE_TOPIC="${EXPERT_POSE_TOPIC:-/px4ctrl/expert_pose}"
 GRIPPER_TOPIC="${GRIPPER_TOPIC:-/gripper/command}"
+GRIPPER_COMMAND_PAIR_TOPIC="${GRIPPER_COMMAND_PAIR_TOPIC:-/gripper/command_pair}"
+GRIPPER_FEEDBACK_TOPIC="${GRIPPER_FEEDBACK_TOPIC:-/gripper/feedback}"
+USE_ROS_GRIPPER="${USE_ROS_GRIPPER:-false}"
+GRIPPER_FEEDBACK_TIMEOUT_S="${GRIPPER_FEEDBACK_TIMEOUT_S:-0.5}"
 GRIPPER_PORT="${GRIPPER_PORT:-/dev/ttyACM1}"
 GRIPPER_LEFT_INVERTED="${GRIPPER_LEFT_INVERTED:-true}"
 GRIPPER_RIGHT_INVERTED="${GRIPPER_RIGHT_INVERTED:-true}"
@@ -214,6 +218,10 @@ echo "[record-vla-dataset] image writer threads/camera: ${IMAGE_WRITER_THREADS_P
 echo "[record-vla-dataset] front camera: ${FRONT_CAMERA}"
 echo "[record-vla-dataset] down camera: ${DOWN_CAMERA}"
 echo "[record-vla-dataset] gripper port: ${GRIPPER_PORT}"
+echo "[record-vla-dataset] use ros gripper: ${USE_ROS_GRIPPER}"
+echo "[record-vla-dataset] gripper command pair topic: ${GRIPPER_COMMAND_PAIR_TOPIC}"
+echo "[record-vla-dataset] gripper feedback topic: ${GRIPPER_FEEDBACK_TOPIC}"
+echo "[record-vla-dataset] gripper feedback timeout: ${GRIPPER_FEEDBACK_TIMEOUT_S}s"
 echo "[record-vla-dataset] gripper left inverted: ${GRIPPER_LEFT_INVERTED}"
 echo "[record-vla-dataset] gripper right inverted: ${GRIPPER_RIGHT_INVERTED}"
 echo "[record-vla-dataset] safe open gripper on disconnect: ${SAFE_OPEN_GRIPPER_ON_DISCONNECT}"
@@ -233,6 +241,10 @@ PYTHONUNBUFFERED=1 lerobot-record \
   --robot.mavros_setpoint_topic="${MAVROS_SETPOINT_TOPIC}" \
   --robot.send_pose_actions=false \
   --robot.gripper_port="${GRIPPER_PORT}" \
+  --robot.use_ros_gripper="${USE_ROS_GRIPPER}" \
+  --robot.gripper_command_topic="${GRIPPER_COMMAND_PAIR_TOPIC}" \
+  --robot.gripper_feedback_topic="${GRIPPER_FEEDBACK_TOPIC}" \
+  --robot.gripper_feedback_timeout_s="${GRIPPER_FEEDBACK_TIMEOUT_S}" \
   --robot.gripper_left_inverted="${GRIPPER_LEFT_INVERTED}" \
   --robot.gripper_right_inverted="${GRIPPER_RIGHT_INVERTED}" \
   --robot.safe_open_gripper_on_disconnect="${SAFE_OPEN_GRIPPER_ON_DISCONNECT}" \
@@ -244,6 +256,7 @@ PYTHONUNBUFFERED=1 lerobot-record \
   --teleop.type=ros_expert_pose \
   --teleop.expert_pose_topic="${EXPERT_POSE_TOPIC}" \
   --teleop.gripper_topic="${GRIPPER_TOPIC}" \
+  --teleop.gripper_pair_topic="${GRIPPER_COMMAND_PAIR_TOPIC}" \
   --teleop.startup_timeout_s="${TELEOP_STARTUP_TIMEOUT_S}" \
   --teleop.max_pose_age_s="${TELEOP_MAX_POSE_AGE_S}" \
   --dataset.repo_id="${REPO_ID}" \

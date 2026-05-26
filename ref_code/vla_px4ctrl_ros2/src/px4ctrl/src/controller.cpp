@@ -8,6 +8,8 @@ Controller_Output_t LinearControl::calculateControl(
 {
   Controller_Output_t u;
   u.position = des.p;
+  u.velocity = des.v;
+  u.acceleration = des.a;
   u.yaw = uav_utils::normalize_angle(des.yaw);
   return u;
 }

@@ -93,6 +93,10 @@ public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
   Eigen::Vector3d p{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d v{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d a{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d last_p{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d last_v{Eigen::Vector3d::Zero()};
   Eigen::Quaterniond q{Eigen::Quaterniond::Identity()};
   double yaw{0.0};
 

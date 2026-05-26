@@ -144,9 +144,30 @@ void Command_Data_t::feed(
   const geometry_msgs::msg::PoseStamped::SharedPtr pMsg,
   const rclcpp::Time &now)
 {
+  const bool had_previous = received;
+  const Eigen::Vector3d previous_p = p;
+  const Eigen::Vector3d previous_v = v;
+  const rclcpp::Time previous_stamp = rcv_stamp;
+
   msg = *pMsg;
   uav_utils::extract_odometry(msg, p, q);
   yaw = uav_utils::normalize_angle(uav_utils::get_yaw_from_quaternion(q));
+
+  if (had_previous) {
+    const double dt = (now - previous_stamp).seconds();
+    if (dt > 1e-3 && dt < 1.0) {
+      v = (p - previous_p) / dt;
+      a = (v - previous_v) / dt;
+    } else {
+      v.setZero();
+      a.setZero();
+    }
+  } else {
+    v.setZero();
+    a.setZero();
+  }
+  last_p = previous_p;
+  last_v = previous_v;
   rcv_stamp = now;
   received = true;
 }

@@ -10,6 +10,22 @@
 
 using mavros_msgs::msg::PositionTarget;
 
+namespace {
+
+Eigen::Vector3d limit_norm(const Eigen::Vector3d &value, double max_norm)
+{
+  if (max_norm <= 0.0) {
+    return Eigen::Vector3d::Zero();
+  }
+  const double norm = value.norm();
+  if (norm <= max_norm || norm < 1e-6) {
+    return value;
+  }
+  return value * (max_norm / norm);
+}
+
+}  // namespace
+
 PX4CtrlFSM::PX4CtrlFSM(Parameter_t &param_, LinearControl &controller_, rclcpp::Node *node)
   : param(param_), controller(controller_), node_(node)
 {
@@ -231,6 +247,13 @@ Desired_State_t PX4CtrlFSM::get_cmd_des()
 {
   Desired_State_t des;
   des.p = cmd_data.p;
+  if (param.cmd_feedforward.enable) {
+    des.v = limit_norm(cmd_data.v, param.cmd_feedforward.max_velocity);
+    des.a = limit_norm(cmd_data.a, param.cmd_feedforward.max_acceleration);
+  } else {
+    des.v.setZero();
+    des.a.setZero();
+  }
   des.yaw = cmd_data.yaw;
   return des;
 }
@@ -391,17 +414,26 @@ void PX4CtrlFSM::publish_position_ctrl(const Controller_Output_t &u, const rclcp
   msg.header.frame_id = param.frame_id;
   msg.coordinate_frame = PositionTarget::FRAME_LOCAL_NED;
   msg.type_mask =
-    PositionTarget::IGNORE_VX |
-    PositionTarget::IGNORE_VY |
-    PositionTarget::IGNORE_VZ |
-    PositionTarget::IGNORE_AFX |
-    PositionTarget::IGNORE_AFY |
-    PositionTarget::IGNORE_AFZ |
     PositionTarget::IGNORE_YAW_RATE;
+  if (!param.cmd_feedforward.enable) {
+    msg.type_mask |=
+      PositionTarget::IGNORE_VX |
+      PositionTarget::IGNORE_VY |
+      PositionTarget::IGNORE_VZ |
+      PositionTarget::IGNORE_AFX |
+      PositionTarget::IGNORE_AFY |
+      PositionTarget::IGNORE_AFZ;
+  }
 
   msg.position.x = u.position.x();
   msg.position.y = u.position.y();
   msg.position.z = u.position.z();
+  msg.velocity.x = u.velocity.x();
+  msg.velocity.y = u.velocity.y();
+  msg.velocity.z = u.velocity.z();
+  msg.acceleration_or_force.x = u.acceleration.x();
+  msg.acceleration_or_force.y = u.acceleration.y();
+  msg.acceleration_or_force.z = u.acceleration.z();
   msg.yaw = static_cast<float>(uav_utils::normalize_angle(u.yaw));
   ctrl_FCU_pub->publish(msg);
 }

@@ -839,7 +839,7 @@ ros2 topic echo /mavros/state
 
 ### 13.4.1 自动抓取/放置采集
 
-如果手动 AUTO_HOVER 不跟手，可以使用自动采集入口。该入口不会覆盖手动脚本：`record_vla_dataset.sh` 默认仍然是手动采集，自动流程只通过总控脚本临时设置 record gate。
+如果手动 AUTO_HOVER 不跟手，可以使用自动采集入口。该入口不会覆盖手动脚本：`record_vla_dataset.sh` 默认仍然是手动采集，自动流程只通过总控脚本临时设置 record gate，并启动一个独立的 gripper manager 独占 `/dev/ttyACM1`。
 
 默认 VRPN 刚体 topic：
 
@@ -855,7 +855,7 @@ ros2 topic echo /mavros/vision_pose/pose
 ros2 topic echo /px4ctrl/state
 ```
 
-自动脚本订阅目标、盒子和无人机位姿时同时创建 `RELIABLE` 和 `BEST_EFFORT` 订阅，兼容 MAVROS bridge 和 VRPN 原始刚体 topic。若终端一直显示 `Still waiting for fresh poses`，优先检查 topic 名字和 QoS：
+自动脚本订阅目标、盒子和无人机位姿时使用 `BEST_EFFORT` 订阅，兼容 VRPN 原始刚体 topic，也能接收 MAVROS/bridge 的可靠发布。若终端一直显示 `Still waiting for fresh poses`，优先检查 topic 名字和 QoS：
 
 ```bash
 ros2 topic info /strawberry_bear/pose -v
@@ -901,10 +901,12 @@ BOX_POSE_TOPIC=/new_box/pose \
 bash shflies/auto_record_grasp_place.sh
 ```
 
-第一次飞行建议使用更保守速度：
+第一次飞行建议使用更保守速度。草莓熊约 `300 g`，对当前飞机属于明显带载，优先降低失控风险，不追求第一次就夹得很紧：
 
 ```bash
 MAX_SPEED=0.5 APPROACH_SPEED=0.25 LIFT_SPEED=0.35 \
+PAYLOAD_LIFT_SPEED=0.06 PAYLOAD_TRANSFER_SPEED=0.10 \
+POST_GRASP_SETTLE_S=2.0 POST_LIFT_SETTLE_S=2.0 \
 bash shflies/auto_record_grasp_place.sh
 ```
 
@@ -943,26 +945,37 @@ bash shflies/auto_record_grasp_place.sh
 
 自动流程：
 
-1. 总控脚本先启动 `record_vla_dataset.sh`。
-2. record 完成相机、夹爪、ROS bridge 初始化后发布 `/lerobot_record/status = WAITING_GATE`，此时还没有起飞，也没有写 dataset。
-3. 自动任务脚本读取 `/strawberry_bear/pose`、`/box1/pose`、`/mavros/vision_pose/pose`，确认新鲜稳定。
-4. 自动发布夹爪全开 `100.0`，然后发布 `/px4ctrl/takeoff_land` 起飞。
-5. 等 `/px4ctrl/state = AUTO_HOVER`，表示 `AUTO_TAKEOFF` 已完成。
-6. 自动发布当前位置 hold 的 `/position_cmd`，让 px4ctrl 进入 `CMD_CTRL`。
-7. 进入 `CMD_CTRL` 后发布 `/auto_grasp_dataset/record_gate = START`，record 才开始写 dataset。
-8. 第一帧保持任务起点悬停，下一帧开始向目标飞，避免数据集中包含起飞后的长时间悬停。
+1. 总控脚本先启动 `feetech_gripper_node.py`，由它独占 `/dev/ttyACM1`，发布 `/gripper/feedback`，接收 `/gripper/command_pair` 和兼容旧流程的 `/gripper/command`。
+2. 总控脚本再启动 `record_vla_dataset.sh`，并临时设置 `USE_ROS_GRIPPER=true`。此时 LeRobot record 不再打开串口，只从 `/gripper/feedback` 读取夹爪状态。
+3. record 完成相机、夹爪反馈、ROS bridge 初始化后发布 `/lerobot_record/status = WAITING_GATE`，此时还没有起飞，也没有写 dataset。
+4. 自动任务脚本读取 `/strawberry_bear/pose`、`/box1/pose`、`/mavros/vision_pose/pose`，确认新鲜稳定。
+5. 自动发布夹爪全开 `100.0`，然后发布 `/px4ctrl/takeoff_land` 起飞。
+6. 等 `/px4ctrl/state = AUTO_HOVER`，表示 `AUTO_TAKEOFF` 已完成。
+7. 自动发布当前位置 hold 的 `/position_cmd`，让 px4ctrl 进入 `CMD_CTRL`。
+8. 进入 `CMD_CTRL` 后发布 `/auto_grasp_dataset/record_gate = START`，record 才开始写 dataset。
+9. 第一帧保持任务起点悬停，下一帧开始向目标飞，避免数据集中包含起飞后的长时间悬停。
+
+目标/盒子位姿更新策略：
+
+- 自动任务启动前会先确认目标、盒子、无人机三者位姿新鲜稳定，但不会只使用这一刻的位置跑完整个任务。
+- 飞向草莓熊上方时，脚本会持续读取 `/strawberry_bear/pose`，实时刷新目标上方 waypoint。
+- 到达目标上方后，进入下降、闭合夹爪、抬升阶段，这些阶段可能遮挡草莓熊刚体；脚本会锁存最后一次新鲜目标位姿，避免遮挡导致 waypoint 跳变。
+- 飞向盒子上方时，脚本会持续读取 `/box1/pose`，实时刷新盒子上方 waypoint。
+- 到达盒子上方后，进入下降投放阶段，可能遮挡盒子刚体；脚本会锁存最后一次新鲜盒子位姿。
+- 如果接近阶段短暂看不到目标或盒子，脚本会继续使用锁存位置，并打印 `Using latched ... pose`。如果从未获得过可用锁存位姿，则会报错退出。
 
 轨迹速度：
 
 - `/position_cmd` 是位置目标，但自动脚本按 `20 Hz` 逐点插值发布，不直接跳到目标点。
+- `px4ctrl` 会从连续 `/position_cmd` 估计速度/加速度前馈，并写入 MAVROS `PositionTarget`。当前配置限幅为 `cmd_feedforward.max_velocity=0.8 m/s`、`cmd_feedforward.max_acceleration=1.5 m/s^2`。
 - 默认开启 `SMOOTH_TRAJECTORY=true`，轨迹采用平滑起停，避免段起点/终点速度突变激发草莓熊摆动。
 - `MAX_SPEED` 默认 `0.6 m/s`，建议范围 `0.5-1.0 m/s`。
 - `APPROACH_SPEED` 默认 `0.3 m/s`，用于下降接近目标和盒子。
 - `LIFT_SPEED` 默认 `0.4 m/s`，用于抓取后抬升和释放后抬升。
-- `PAYLOAD_LIFT_SPEED` 默认 `0.18 m/s`，用于夹住草莓熊后的带载抬升。
-- `PAYLOAD_TRANSFER_SPEED` 默认 `0.25 m/s`，用于带载飞向箱子。
-- `POST_GRASP_SETTLE_S` 默认 `1.0 s`，夹住后原地等待，让负载先稳定。
-- `POST_LIFT_SETTLE_S` 默认 `1.0 s`，抬升后原地等待，降低摆振后再横移。
+- `PAYLOAD_LIFT_SPEED` 默认 `0.10 m/s`，用于夹住草莓熊后的带载抬升。
+- `PAYLOAD_TRANSFER_SPEED` 默认 `0.16 m/s`，用于带载飞向箱子。
+- `POST_GRASP_SETTLE_S` 默认 `1.5 s`，夹住后原地等待，让负载先稳定。
+- `POST_LIFT_SETTLE_S` 默认 `1.5 s`，抬升后原地等待，降低摆振后再横移。
 - `TAKEOFF_FORWARD_COMP_M` 默认 `0.0 m`，起飞完成进入 `CMD_CTRL` 后、record 开始前，沿无人机当前机头方向做前向补偿。用于抵消机体后重导致的起飞后后窜。
 - `PAYLOAD_LIFT_FORWARD_COMP_M` 默认 `0.0 m`，夹住草莓熊后抬升时，沿无人机当前机头方向同步做前向补偿。用于抵消带载抬升阶段后窜。
 - `TAKEOFF_COMP_X/Y/Z` 默认 `0.0 m`，起飞后按 mocap/map 坐标系直接补偿位置，不依赖无人机 yaw。
@@ -972,8 +985,8 @@ bash shflies/auto_record_grasp_place.sh
 如果夹起草莓熊后摆动明显，先使用更保守的带载参数：
 
 ```bash
-PAYLOAD_LIFT_SPEED=0.12 \
-PAYLOAD_TRANSFER_SPEED=0.18 \
+PAYLOAD_LIFT_SPEED=0.06 \
+PAYLOAD_TRANSFER_SPEED=0.10 \
 POST_GRASP_SETTLE_S=2.0 \
 POST_LIFT_SETTLE_S=2.0 \
 bash shflies/auto_record_grasp_place.sh
@@ -999,15 +1012,103 @@ bash shflies/auto_record_grasp_place.sh
 
 如果需要向 mocap `-X`、`+Y` 或 `-Y` 方向补偿，分别设置负号或对应轴，例如 `TAKEOFF_COMP_X=-0.05`、`TAKEOFF_COMP_Y=0.05`。
 
-夹爪慢闭合：
+夹爪软夹持：
 
-- 不改 Feetech 舵机速度寄存器。
-- 自动脚本用命令斜坡慢闭合，默认约 `1.5 s` 从 `100.0` 逐步到 `0.0`。
-- 如需更慢：
+- 当前 STS3215 仍使用位置伺服模式，不是真正硬件力控。
+- 自动脚本不再从 `100.0` 硬闭合到 `0.0`，而是通过 `/gripper/command_pair` 让左右夹爪按小步低速闭合。
+- gripper manager 以 `/gripper/feedback` 发布左右位置、load、current、位置误差；自动脚本用这些反馈判断接触。
+- gripper manager 退出时默认再次写入全开位置：`open_on_shutdown=true`、`shutdown_open_position=100.0`、`shutdown_open_repeats=3`。
+- 抓取阶段 `z/yaw` 保持，`x/y` 做顺从保持：允许无人机在小半径内让开夹爪反作用力，避免位置环硬拉导致机体倾斜放大。
+- 如果抓取阶段平面漂移超过 `GRASP_ABORT_DRIFT_M`，脚本会打开夹爪并退出。
+- 软夹持目标是“刚好抓住”，不是把草莓熊强行拖到几何中心。抓到后会做少量左右负载均衡。
+
+默认参数：
 
 ```bash
-GRIPPER_CLOSE_DURATION_S=2.5 bash shflies/auto_record_grasp_place.sh
+GRASP_STEP_SIZE=3.0
+GRASP_STEP_SETTLE_S=0.10
+GRASP_CLOSE_MIN=15.0
+GRASP_CONTACT_CURRENT_DELTA=100
+GRASP_CONTACT_LOAD_DELTA=60
+GRASP_POSITION_ERROR_THRESHOLD=3.0
+GRASP_ANGLE_CONTACT_DELTA=3.0
+GRASP_STALL_DELTA=0.8
+GRASP_CONTACT_CONFIRM_STEPS=2
+GRASP_BALANCE_LOAD_DIFF=60
+GRASP_BALANCE_STEP=1.5
+GRASP_MAX_BALANCE_STEPS=8
+GRASP_ANGLE_BALANCE_DIFF=5.0
+GRASP_COMPLIANCE_RADIUS_M=0.14
+GRASP_ABORT_DRIFT_M=0.24
 ```
+
+这些参数集中在 `shflies/grasp_params.env`。`auto_record_grasp_place.sh` 和手持调参脚本都会 source 同一个文件，所以你在这里稳定下来的参数会默认同步到真实自动飞行。命令行环境变量优先级更高，只影响本次运行：
+
+```bash
+GRASP_STEP_SIZE=2.0 GRASP_CLOSE_MIN=25.0 bash shflies/auto_record_grasp_place.sh
+```
+
+如果夹取仍然扰动大，先让夹爪更保守：
+
+```bash
+GRASP_STEP_SIZE=1.0 \
+GRASP_STEP_SETTLE_S=0.25 \
+GRASP_CLOSE_MIN=30.0 \
+GRASP_COMPLIANCE_RADIUS_M=0.16 \
+GRASP_ABORT_DRIFT_M=0.24 \
+bash shflies/auto_record_grasp_place.sh
+```
+
+### 13.4.2 手持夹爪软夹持调参
+
+该入口用于手持无人机调夹爪，不录制数据集、不起飞、不发布 `/position_cmd`，也不发布 `/px4ctrl/takeoff_land`。它仍然读取无人机、草莓熊、box 位姿和 gripper feedback，并用 CH10 触发与真实自动飞行一致的软夹持动作。
+
+启动前先运行基础链路，保证 MAVROS、VRPN、px4ctrl 已经工作：
+
+```bash
+cd ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
+bash shflies/run_mocap_mavros.sh
+```
+
+第二个终端运行手持调参：
+
+```bash
+cd ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
+bash shflies/handheld_grasp_tune.sh
+```
+
+行为：
+
+- 脚本默认启动 `feetech_gripper_node.py` 并独占 `/dev/ttyACM1`。
+- gripper manager 的 scalar `/gripper/command` 会被重映射到 `/handheld_grasp_tune/ignore_scalar_command`，避免 px4ctrl 的 CH10 直接闭合命令和测试节点的 pair command 抢夹爪。
+- 测试节点只发布 `/gripper/command_pair`。
+- CH10 低位：持续发布全开 `100.0`，并复位软夹持状态机。
+- CH10 高位：执行软夹持，闭合逻辑与自动飞行一致。
+- 终端会持续显示无人机相对草莓熊抓取点、box 放置点的 `dx/dy/dz`，以及当前左右夹爪位置、goal、load、current。
+
+常用调参方式：
+
+```bash
+# 临时更保守，只影响本次手持测试
+GRASP_STEP_SIZE=1.5 GRASP_CLOSE_MIN=25.0 bash shflies/handheld_grasp_tune.sh
+
+# 临时更大胆，只影响本次手持测试
+GRASP_STEP_SIZE=4.0 GRASP_CLOSE_MIN=10.0 bash shflies/handheld_grasp_tune.sh
+```
+
+如果某组参数手持测试效果好，把它写入：
+
+```bash
+vim shflies/grasp_params.env
+```
+
+之后运行真实自动采集：
+
+```bash
+bash shflies/auto_record_grasp_place.sh
+```
+
+会默认使用同一套参数，不需要再手动复制。
 
 放置后撤离：
 
@@ -1038,7 +1139,7 @@ LANDING_MODE=auto bash shflies/auto_record_grasp_place.sh
 注意：
 
 - 目标和盒子的 mocap 位姿只用于自动脚本规划，不进入 LeRobot dataset features。
-- record 只记录飞机 observation、相机、夹爪状态和 `/px4ctrl/expert_pose` action。
+- record 只记录飞机 observation、相机、夹爪状态和 `/px4ctrl/expert_pose` action。自动流程中夹爪状态来自 `/gripper/feedback`，record 不直接打开 `/dev/ttyACM1`。
 - 默认 CMD 降落会进入 LeRobot dataset；`EPISODE_TIME_S` 应覆盖完整任务，包括降落段。
 
 夹爪安全策略：

@@ -57,14 +57,28 @@ px4ctrl:
       closed_position: 0.0
       force_open_below_z: 0.20
 
+    cmd_feedforward:
+      enable: true
+      max_velocity: 0.8
+      max_acceleration: 1.5
+
 feetech_gripper_node:
   ros__parameters:
     command_topic: /gripper/command
+    command_pair_topic: /gripper/command_pair
+    feedback_topic: /gripper/feedback
+    feedback_rate_hz: 20.0
     port: /dev/ttyACM1
     left_id: 1
     right_id: 2
     left_inverted: true
     right_inverted: true
+    torque_limit: 0
+    goal_velocity: 0
+    acceleration: 0
+    open_on_shutdown: true
+    shutdown_open_position: 100.0
+    shutdown_open_repeats: 3
     no_configure: false
     dry_run: false
     lerobot_src: /home/user/vla_drone/lerobot/src

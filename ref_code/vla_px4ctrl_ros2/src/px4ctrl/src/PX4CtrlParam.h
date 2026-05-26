@@ -75,6 +75,13 @@ public:
     double force_open_below_z{0.15};
   };
 
+  struct CmdFeedforward
+  {
+    bool enable{false};
+    double max_velocity{1.0};
+    double max_acceleration{2.0};
+  };
+
   MsgTimeout msg_timeout;
   RCReverse rc_reverse;
   AutoTakeoffLand takeoff_land;
@@ -82,6 +89,7 @@ public:
   Services services;
   Limits limits;
   Gripper gripper;
+  CmdFeedforward cmd_feedforward;
 
   double ctrl_freq_max{100.0};
   double max_manual_vel{1.0};
