@@ -972,6 +972,8 @@ GRIPPER_X_OFFSET_M=0.08 bash shflies/auto_record_grasp_place.sh
 - 到达目标上方、下降到抓取高度、带载起吊、到达箱子上方、下降到投放高度后，脚本都会额外用动捕检查无人机实际位置是否到位。默认 `WAYPOINT_ARRIVAL_TOLERANCE_M=0.08`、`WAYPOINT_ARRIVAL_SETTLE_S=0.3`、`WAYPOINT_ARRIVAL_TIMEOUT_S=5.0`。这避免把“命令轨迹已经走完”误认为“飞机实际已到达关键点”。
 - 如果启用了起飞后的 `TAKEOFF_FORWARD_COMP_M` 或 `TAKEOFF_COMP_X/Y/Z` 重定位，record gate 打开前也会先等待动捕确认实际到位，避免把起飞后的重定位过程录进数据集开头。
 - 到达目标上方后，进入下降、闭合夹爪、抬升阶段，这些阶段可能遮挡草莓熊刚体；脚本会锁存最后一次新鲜目标位姿，避免遮挡导致 waypoint 跳变。
+- 夹爪闭合和带载起吊阶段的 XY 是软约束：Z 方向继续按轨迹上升，XY 允许在 `GRASP_COMPLIANCE_RADIUS_M` 内被负载扰动带着移动，同时用 `GRASP_COMPLIANCE_ELASTIC_GAIN` 给一个弱回拉。起吊后不会立刻硬拉回原 XY 点。
+- 同一阶段会发布 `/px4ctrl/attitude_soft_mode=true`。px4ctrl 在该模式下继续保持 `CMD_CTRL`，但发给 PX4 的 `x/y` 位置目标会变成弱约束：目标点跟随当前动捕位置，只保留一小部分指向任务目标的回拉量。默认 `attitude_soft_mode.xy_gain=0.15`、`xy_max_error=0.25m`，即最大横向位置误差只转换成约 `3.75cm` 的位置回拉。高度 `z` 和 `yaw` 仍保持。该信号有 `0.5s` 超时保护，自动脚本异常退出后会自动恢复普通位置控制。
 - 飞向盒子上方时，脚本会持续读取 `/box1/pose`，实时刷新盒子上方 waypoint。
 - 到达盒子上方后，进入下降投放阶段，可能遮挡盒子刚体；脚本会锁存最后一次新鲜盒子位姿。
 - 如果接近阶段短暂看不到目标或盒子，脚本会继续使用锁存位置，并打印 `Using latched ... pose`。如果从未获得过可用锁存位姿，则会报错退出。

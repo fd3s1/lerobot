@@ -17,6 +17,8 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
     node.declare_parameter<std::string>("topics.gripper_command", topics.gripper_command);
   topics.traj_start_trigger =
     node.declare_parameter<std::string>("topics.traj_start_trigger", topics.traj_start_trigger);
+  topics.attitude_soft_mode =
+    node.declare_parameter<std::string>("topics.attitude_soft_mode", topics.attitude_soft_mode);
   topics.state = node.declare_parameter<std::string>("topics.state", topics.state);
   topics.extended_state =
     node.declare_parameter<std::string>("topics.extended_state", topics.extended_state);
@@ -70,6 +72,13 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
     node.declare_parameter<double>("cmd_feedforward.max_velocity", cmd_feedforward.max_velocity);
   cmd_feedforward.max_acceleration =
     node.declare_parameter<double>("cmd_feedforward.max_acceleration", cmd_feedforward.max_acceleration);
+
+  attitude_soft_mode.timeout =
+    node.declare_parameter<double>("attitude_soft_mode.timeout", attitude_soft_mode.timeout);
+  attitude_soft_mode.xy_gain =
+    node.declare_parameter<double>("attitude_soft_mode.xy_gain", attitude_soft_mode.xy_gain);
+  attitude_soft_mode.xy_max_error =
+    node.declare_parameter<double>("attitude_soft_mode.xy_max_error", attitude_soft_mode.xy_max_error);
 
   if (takeoff_land.enable_auto_arm && !takeoff_land.enable) {
     takeoff_land.enable_auto_arm = false;

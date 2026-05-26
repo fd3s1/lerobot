@@ -337,6 +337,14 @@ void PX4CtrlFSM::manual_flag_cb(const std_msgs::msg::UInt8::SharedPtr msg)
   traj_start_trigger_pub->publish(now_pose);
 }
 
+void PX4CtrlFSM::attitude_soft_mode_cb(
+  const std_msgs::msg::Bool::SharedPtr msg,
+  const rclcpp::Time &now)
+{
+  attitude_soft_mode_requested = msg->data;
+  last_attitude_soft_mode_time = now;
+}
+
 void PX4CtrlFSM::set_start_pose_for_takeoff_land(const Odom_Data_t &odom)
 {
   takeoff_land.start_pose.head<3>() = odom.p;
@@ -424,9 +432,30 @@ void PX4CtrlFSM::publish_position_ctrl(const Controller_Output_t &u, const rclcp
       PositionTarget::IGNORE_AFY |
       PositionTarget::IGNORE_AFZ;
   }
+  const bool soft_mode = state == CMD_CTRL && attitude_soft_mode_active(stamp);
+  if (soft_mode) {
+    msg.type_mask |=
+      PositionTarget::IGNORE_VX |
+      PositionTarget::IGNORE_VY |
+      PositionTarget::IGNORE_VZ |
+      PositionTarget::IGNORE_AFX |
+      PositionTarget::IGNORE_AFY |
+      PositionTarget::IGNORE_AFZ;
+  }
 
-  msg.position.x = u.position.x();
-  msg.position.y = u.position.y();
+  if (soft_mode && odom_data.received) {
+    Eigen::Vector2d xy_error = (u.position - odom_data.p).head<2>();
+    const double error_norm = xy_error.norm();
+    if (error_norm > param.attitude_soft_mode.xy_max_error && error_norm > 1e-6) {
+      xy_error *= param.attitude_soft_mode.xy_max_error / error_norm;
+    }
+    xy_error *= std::clamp(param.attitude_soft_mode.xy_gain, 0.0, 1.0);
+    msg.position.x = odom_data.p.x() + xy_error.x();
+    msg.position.y = odom_data.p.y() + xy_error.y();
+  } else {
+    msg.position.x = u.position.x();
+    msg.position.y = u.position.y();
+  }
   msg.position.z = u.position.z();
   msg.velocity.x = u.velocity.x();
   msg.velocity.y = u.velocity.y();
@@ -569,6 +598,12 @@ bool PX4CtrlFSM::should_force_gripper_open(const rclcpp::Time &now_time) const
   return land_requested || state == AUTO_TAKEOFF || state == AUTO_LAND ||
          odom_timeout || rc_timeout || below_safe_height ||
          !state_data.current_state.armed || !px4_mode_allows_gripper_rc();
+}
+
+bool PX4CtrlFSM::attitude_soft_mode_active(const rclcpp::Time &now_time) const
+{
+  return attitude_soft_mode_requested &&
+         (now_time - last_attitude_soft_mode_time).seconds() <= param.attitude_soft_mode.timeout;
 }
 
 bool PX4CtrlFSM::toggle_offboard_mode(bool on_off)

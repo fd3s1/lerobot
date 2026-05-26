@@ -12,6 +12,7 @@
 #include <mavros_msgs/srv/set_mode.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/u_int8.hpp>
 
@@ -77,6 +78,7 @@ public:
   State_t get_state() const { return state; }
   bool get_landed() const { return takeoff_land.landed; }
   void manual_flag_cb(const std_msgs::msg::UInt8::SharedPtr msg);
+  void attitude_soft_mode_cb(const std_msgs::msg::Bool::SharedPtr msg, const rclcpp::Time &now);
 
 private:
   rclcpp::Node *node_;
@@ -85,6 +87,8 @@ private:
   bool have_gripper_target{false};
   double last_gripper_target{0.0};
   rclcpp::Time last_gripper_force_open_time{0, 0, RCL_ROS_TIME};
+  bool attitude_soft_mode_requested{false};
+  rclcpp::Time last_attitude_soft_mode_time{0, 0, RCL_ROS_TIME};
 
   Desired_State_t get_hover_des();
   Desired_State_t get_cmd_des();
@@ -106,6 +110,7 @@ private:
   void publish_gripper_target(double target, bool force = false);
   bool px4_mode_allows_gripper_rc() const;
   bool should_force_gripper_open(const rclcpp::Time &now_time) const;
+  bool attitude_soft_mode_active(const rclcpp::Time &now_time) const;
 
   bool toggle_offboard_mode(bool on_off);
   bool toggle_arm_disarm(bool arm);

@@ -12,6 +12,7 @@
 #include <quadrotor_msgs/msg/takeoff_land.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/battery_state.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/u_int8.hpp>
 
@@ -87,6 +88,13 @@ int main(int argc, char *argv[])
     1,
     [&fsm](const std_msgs::msg::UInt8::SharedPtr msg) {
       fsm.manual_flag_cb(msg);
+    });
+
+  auto attitude_soft_mode_sub = node->create_subscription<std_msgs::msg::Bool>(
+    param.topics.attitude_soft_mode,
+    10,
+    [&fsm, &node](const std_msgs::msg::Bool::SharedPtr msg) {
+      fsm.attitude_soft_mode_cb(msg, node->now());
     });
 
   fsm.ctrl_FCU_pub =

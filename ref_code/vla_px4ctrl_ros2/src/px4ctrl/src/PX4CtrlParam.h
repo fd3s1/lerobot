@@ -43,6 +43,7 @@ public:
     std::string expert_pose{"/px4ctrl/expert_pose"};
     std::string gripper_command{"/gripper/command"};
     std::string traj_start_trigger{"/traj_start_trigger"};
+    std::string attitude_soft_mode{"/px4ctrl/attitude_soft_mode"};
     std::string state{"/mavros/state"};
     std::string extended_state{"/mavros/extended_state"};
     std::string battery{"/mavros/battery"};
@@ -82,6 +83,13 @@ public:
     double max_acceleration{2.0};
   };
 
+  struct AttitudeSoftMode
+  {
+    double timeout{0.5};
+    double xy_gain{0.15};
+    double xy_max_error{0.25};
+  };
+
   MsgTimeout msg_timeout;
   RCReverse rc_reverse;
   AutoTakeoffLand takeoff_land;
@@ -90,6 +98,7 @@ public:
   Limits limits;
   Gripper gripper;
   CmdFeedforward cmd_feedforward;
+  AttitudeSoftMode attitude_soft_mode;
 
   double ctrl_freq_max{100.0};
   double max_manual_vel{1.0};
