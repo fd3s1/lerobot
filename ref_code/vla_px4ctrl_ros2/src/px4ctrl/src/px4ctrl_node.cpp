@@ -31,31 +31,32 @@ int main(int argc, char *argv[])
 
   LinearControl controller(param);
   PX4CtrlFSM fsm(param, controller, node.get());
+  const auto mavros_sensor_qos = rclcpp::SensorDataQoS();
 
   auto state_sub = node->create_subscription<mavros_msgs::msg::State>(
     param.topics.state,
-    10,
+    mavros_sensor_qos,
     [&fsm](const mavros_msgs::msg::State::SharedPtr msg) {
       fsm.state_data.feed(msg);
     });
 
   auto extended_state_sub = node->create_subscription<mavros_msgs::msg::ExtendedState>(
     param.topics.extended_state,
-    10,
+    mavros_sensor_qos,
     [&fsm](const mavros_msgs::msg::ExtendedState::SharedPtr msg) {
       fsm.extended_state_data.feed(msg);
     });
 
   auto odom_sub = node->create_subscription<nav_msgs::msg::Odometry>(
     param.topics.odom,
-    100,
+    mavros_sensor_qos,
     [&fsm, &node](const nav_msgs::msg::Odometry::SharedPtr msg) {
       fsm.odom_data.feed(msg, node->now());
     });
 
   auto imu_sub = node->create_subscription<sensor_msgs::msg::Imu>(
     param.topics.imu,
-    100,
+    mavros_sensor_qos,
     [&fsm, &node](const sensor_msgs::msg::Imu::SharedPtr msg) {
       fsm.imu_data.feed(msg, node->now());
     });
@@ -71,7 +72,7 @@ int main(int argc, char *argv[])
   if (!param.takeoff_land.no_RC) {
     rc_sub = node->create_subscription<mavros_msgs::msg::RCIn>(
       param.topics.rc,
-      10,
+      mavros_sensor_qos,
       [&fsm, &node](const mavros_msgs::msg::RCIn::SharedPtr msg) {
         fsm.rc_data.feed(msg, node->now());
       });
@@ -79,7 +80,7 @@ int main(int argc, char *argv[])
 
   auto bat_sub = node->create_subscription<sensor_msgs::msg::BatteryState>(
     param.topics.battery,
-    100,
+    mavros_sensor_qos,
     [&fsm, &node](const sensor_msgs::msg::BatteryState::SharedPtr msg) {
       fsm.bat_data.feed(msg, node->now());
     });
