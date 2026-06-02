@@ -74,14 +74,14 @@ px4ctrl:
       max_thrust: 0.90
 
     ude:
-      Kp_diag: [1.0, 1.0, 1.0]
-      Kd_diag: [2.0, 2.0, 2.0]
-      T_diag: [1.0, 1.0, 1.0]
-      max_f_hat: [3.0, 3.0, 3.0]
-      max_u_acc: [4.0, 4.0, 4.0]
+      Kp_diag: [1.3, 1.3, 1.3]
+      Kd_diag: [1.8, 1.8, 1.8]
+      T_diag: [0.5, 0.5, 0.5]
+      max_f_hat: [5.0, 5.0, 5.0]
+      max_u_acc: [5.0, 5.0, 5.0]
 
     attitude:
-      KAng_diag: [8.0, 8.0, 4.0]
+      KAng_diag: [6.0, 6.0, 3.0]
 
     thrust_model:
       hover_thrust: 0.35
