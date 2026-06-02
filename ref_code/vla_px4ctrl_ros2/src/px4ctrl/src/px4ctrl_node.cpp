@@ -28,6 +28,10 @@ int main(int argc, char *argv[])
 
   Parameter_t param;
   param.config_from_ros_node(*node);
+  RCLCPP_INFO(
+    node->get_logger(),
+    "[PX4CTRL] FCU setpoint mode: %s",
+    param.use_bodyrate_ctrl ? "BODYRATE" : "ATTITUDE");
 
   LinearControl controller(param);
   PX4CtrlFSM fsm(param, controller, node.get());

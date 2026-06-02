@@ -1,4 +1,4 @@
-# PX4Ctrl UDE Bodyrate Controller Data Flow
+# PX4Ctrl UDE Bodyrate / Attitude Controller Data Flow
 
 This document describes the current ROS2 controller data flow in:
 
@@ -15,15 +15,21 @@ Controller_Output_t LinearControl::calculateControl(
   const rclcpp::Time &now)
 ```
 
-The controller output used by PX4 is:
+The controller output computed by `calculateControl()` is:
 
 ```text
 bodyrates = [p_rate, q_rate, r_rate]
+q         = desired attitude quaternion
 thrust    = normalized collective thrust
 ```
 
-`u.q` is kept as an aligned/debug attitude output, but PX4 receives bodyrates
-and thrust through `mavros_msgs/msg/AttitudeTarget` with `IGNORE_ATTITUDE`.
+PX4 receives `mavros_msgs/msg/AttitudeTarget` on `/mavros/setpoint_raw/attitude`.
+The final setpoint mode is selected by `use_bodyrate_ctrl`:
+
+```text
+true  -> body_rate + thrust, IGNORE_ATTITUDE
+false -> orientation + thrust, IGNORE_ROLL_RATE | IGNORE_PITCH_RATE | IGNORE_YAW_RATE
+```
 
 ## Top Level Flow
 
@@ -51,8 +57,9 @@ flowchart TD
   ATT_FB --> BODYRATE_SUM["bodyrates = feedforward + feedback<br/>axis clamp"]
   LIMIT_ACC --> THRUST["computeDesiredCollectiveThrustSignal()<br/>current attitude projection"]
 
-  BODYRATE_SUM --> OUT["Controller_Output_t u<br/>u.bodyrates, u.thrust, u.q"]
+  BODYRATE_SUM --> OUT["Controller_Output_t u<br/>u.bodyrates, u.q, u.thrust"]
   THRUST --> OUT
+  OUT --> PUB["PX4CtrlFSM::publish_ctrl()<br/>select bodyrate or attitude output by use_bodyrate_ctrl"]
 ```
 
 ## UDE Outer Loop
@@ -182,6 +189,18 @@ flowchart TD
   FF["feedforward_bodyrates"] --> SUM["bodyrates = feedforward + feedback"]
   FB --> SUM
   SUM --> CLAMP["clamp x/y/z by max_bodyrate_x/y/z"]
+```
+
+## Setpoint Publishing
+
+```mermaid
+flowchart TD
+  U["Controller_Output_t u<br/>q, bodyrates, thrust"] --> MODE{"use_bodyrate_ctrl?"}
+  MODE -- "true" --> BR["type_mask = IGNORE_ATTITUDE<br/>body_rate = u.bodyrates<br/>thrust = u.thrust"]
+  MODE -- "false" --> ATT["type_mask = IGNORE_ROLL_RATE | IGNORE_PITCH_RATE | IGNORE_YAW_RATE<br/>orientation = u.q<br/>body_rate = 0<br/>thrust = u.thrust"]
+  BR --> MSG["mavros_msgs/msg/AttitudeTarget"]
+  ATT --> MSG
+  MSG --> PX4["/mavros/setpoint_raw/attitude"]
 ```
 
 Variable mapping:

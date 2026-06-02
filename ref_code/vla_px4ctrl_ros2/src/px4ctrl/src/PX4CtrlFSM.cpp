@@ -250,7 +250,7 @@ void PX4CtrlFSM::process()
     } else {
       u = controller.calculateControl(safe_des, odom_data, imu_data, now_time);
     }
-    publish_bodyrate_ctrl(u, now_time);
+    publish_ctrl(u, now_time);
     publish_expert_pose(safe_des, now_time);
   }
 
@@ -436,7 +436,7 @@ bool PX4CtrlFSM::recv_new_odom()
   return false;
 }
 
-void PX4CtrlFSM::publish_bodyrate_ctrl(const Controller_Output_t &u, const rclcpp::Time &stamp)
+void PX4CtrlFSM::publish_ctrl(const Controller_Output_t &u, const rclcpp::Time &stamp)
 {
   if (!ctrl_FCU_pub) {
     return;
@@ -445,10 +445,24 @@ void PX4CtrlFSM::publish_bodyrate_ctrl(const Controller_Output_t &u, const rclcp
   AttitudeTarget msg;
   msg.header.stamp = stamp;
   msg.header.frame_id = param.frame_id;
-  msg.type_mask = AttitudeTarget::IGNORE_ATTITUDE;
-  msg.body_rate.x = u.bodyrates.x();
-  msg.body_rate.y = u.bodyrates.y();
-  msg.body_rate.z = u.bodyrates.z();
+  if (param.use_bodyrate_ctrl) {
+    msg.type_mask = AttitudeTarget::IGNORE_ATTITUDE;
+    msg.body_rate.x = u.bodyrates.x();
+    msg.body_rate.y = u.bodyrates.y();
+    msg.body_rate.z = u.bodyrates.z();
+  } else {
+    msg.type_mask =
+      AttitudeTarget::IGNORE_ROLL_RATE |
+      AttitudeTarget::IGNORE_PITCH_RATE |
+      AttitudeTarget::IGNORE_YAW_RATE;
+    msg.orientation.x = u.q.x();
+    msg.orientation.y = u.q.y();
+    msg.orientation.z = u.q.z();
+    msg.orientation.w = u.q.w();
+    msg.body_rate.x = 0.0;
+    msg.body_rate.y = 0.0;
+    msg.body_rate.z = 0.0;
+  }
   msg.thrust = static_cast<float>(std::clamp(u.thrust, 0.0, 1.0));
   ctrl_FCU_pub->publish(msg);
 }

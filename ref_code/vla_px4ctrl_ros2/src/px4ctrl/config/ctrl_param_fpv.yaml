@@ -3,7 +3,7 @@ px4ctrl:
     ctrl_freq_max: 100.0
     max_manual_vel: 1.5
     frame_id: map
-    use_bodyrate_ctrl: true
+    use_bodyrate_ctrl: false
 
     topics:
       rc: /mavros/rc/in
@@ -86,7 +86,7 @@ px4ctrl:
     thrust_model:
       hover_thrust: 0.35
       enable_estimation: true
-      print_value: true
+      print_value: false
       rho2: 0.998
       min_thr2acc: 5.0
       max_thr2acc: 40.0

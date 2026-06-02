@@ -99,7 +99,7 @@ private:
   void set_start_pose_for_takeoff_land(const Odom_Data_t &odom);
   void set_hov_with_odom();
   void set_hov_with_rc();
-  void publish_bodyrate_ctrl(const Controller_Output_t &u, const rclcpp::Time &stamp);
+  void publish_ctrl(const Controller_Output_t &u, const rclcpp::Time &stamp);
   void publish_expert_pose(const Desired_State_t &des, const rclcpp::Time &stamp);
   void publish_trigger(const Odom_Data_t &odom, const rclcpp::Time &stamp);
   void publish_fsm_state();
