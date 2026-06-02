@@ -8,6 +8,7 @@ START_STACK="${START_STACK:-true}"
 START_PX4CTRL="${START_PX4CTRL:-true}"
 STACK_STARTUP_WAIT_S="${STACK_STARTUP_WAIT_S:-8}"
 CLEANUP_STACK_ON_EXIT="${CLEANUP_STACK_ON_EXIT:-auto}"
+KEEP_STACK_ON_INTERRUPT="${KEEP_STACK_ON_INTERRUPT:-false}"
 TEST_ENTER_CMD="${TEST_ENTER_CMD:-false}"
 TEST_AUTO_CONFIRM="${TEST_AUTO_CONFIRM:-false}"
 
@@ -33,8 +34,13 @@ cleanup_stack() {
 
 on_interrupt() {
   echo
-  echo "[ude-test] interrupted; leaving the stack running by default"
-  CLEANUP_STACK_ON_EXIT="false"
+  if [[ "${KEEP_STACK_ON_INTERRUPT}" == "true" ]]; then
+    echo "[ude-test] interrupted; leaving the stack running because KEEP_STACK_ON_INTERRUPT=true"
+    CLEANUP_STACK_ON_EXIT="false"
+  else
+    echo "[ude-test] interrupted; stopping the stack"
+    CLEANUP_STACK_ON_EXIT="true"
+  fi
   HELPER_STATUS=130
   exit 130
 }
