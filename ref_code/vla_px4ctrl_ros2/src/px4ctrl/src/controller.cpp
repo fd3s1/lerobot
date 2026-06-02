@@ -6,6 +6,7 @@
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
+constexpr double kMaxThr2AccStepRatio = 0.05;
 
 double finite_or(double value, double fallback)
 {
@@ -80,13 +81,24 @@ bool LinearControl::estimateThrustModel(
       return false;
     }
 
+    const double sample_thr2acc = measured_acc_z / thrust;
+    if (!std::isfinite(sample_thr2acc) ||
+        sample_thr2acc < param_.thrust_model.min_thr2acc ||
+        sample_thr2acc > param_.thrust_model.max_thr2acc) {
+      return false;
+    }
+
     const double rho2 = std::clamp(param_.thrust_model.rho2, 0.90, 0.9999);
     const double gamma = 1.0 / (rho2 + thrust * P_ * thrust);
     const double gain = gamma * P_ * thrust;
     const double updated_thr2acc = thr2acc_ + gain * (measured_acc_z - thrust * thr2acc_);
     if (std::isfinite(updated_thr2acc)) {
+      const double max_step =
+        std::max(0.1, std::abs(thr2acc_) * kMaxThr2AccStepRatio);
+      const double bounded_thr2acc =
+        thr2acc_ + std::clamp(updated_thr2acc - thr2acc_, -max_step, max_step);
       thr2acc_ = std::clamp(
-        updated_thr2acc,
+        bounded_thr2acc,
         param_.thrust_model.min_thr2acc,
         param_.thrust_model.max_thr2acc);
     }

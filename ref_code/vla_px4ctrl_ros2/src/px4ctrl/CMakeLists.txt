@@ -50,6 +50,7 @@ install(PROGRAMS
   scripts/fly_x_gripper_test.py
   scripts/gripper_soft_grasp_lib.py
   scripts/handheld_grasp_tune.py
+  scripts/ude_takeoff_hover_test.py
   scripts/vrpn_to_mavros_vision_bridge.py
   DESTINATION lib/${PROJECT_NAME}
 )
