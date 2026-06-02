@@ -8,7 +8,7 @@
 #include <quadrotor_msgs/msg/takeoff_land.hpp>
 #include <uav_utils/utils.h>
 
-using mavros_msgs::msg::PositionTarget;
+using mavros_msgs::msg::AttitudeTarget;
 
 namespace {
 
@@ -54,7 +54,7 @@ void PX4CtrlFSM::process()
           break;
         }
 
-        state = AUTO_HOVER;
+        change_state(AUTO_HOVER);
         set_hov_with_odom();
         toggle_offboard_mode(true);
         RCLCPP_INFO(node_->get_logger(), "\033[32m[px4ctrl] MANUAL_CTRL(L1) --> AUTO_HOVER(L2)\033[0m");
@@ -84,7 +84,7 @@ void PX4CtrlFSM::process()
           }
         }
 
-        state = AUTO_TAKEOFF;
+        change_state(AUTO_TAKEOFF);
         set_start_pose_for_takeoff_land(odom_data);
         toggle_offboard_mode(true);
         if (param.takeoff_land.enable_auto_arm) {
@@ -107,20 +107,20 @@ void PX4CtrlFSM::process()
 
     case AUTO_HOVER: {
       if (!rc_data.is_hover_mode || !odom_is_received(now_time)) {
-        state = MANUAL_CTRL;
+        change_state(MANUAL_CTRL);
         toggle_offboard_mode(false);
         publish_gripper_force_open(now_time);
         RCLCPP_WARN(node_->get_logger(), "\033[31m[px4ctrl] AUTO_HOVER(L2) --> MANUAL_CTRL(L1)\033[0m");
       } else if (rc_data.is_command_mode && cmd_is_received(now_time)) {
         if (state_data.current_state.mode == "OFFBOARD") {
-          state = CMD_CTRL;
+          change_state(CMD_CTRL);
           des = get_cmd_des();
           RCLCPP_INFO(node_->get_logger(), "\033[31m[px4ctrl] AUTO_HOVER(L2) --> CMD_CTRL(L3)\033[0m");
         }
       } else if (
         takeoff_land_data.triggered &&
         takeoff_land_data.takeoff_land_cmd == quadrotor_msgs::msg::TakeoffLand::LAND) {
-        state = AUTO_LAND;
+        change_state(AUTO_LAND);
         set_start_pose_for_takeoff_land(odom_data);
         publish_gripper_target(param.gripper.open_position, true);
         RCLCPP_INFO(node_->get_logger(), "\033[31m[px4ctrl] AUTO_HOVER(L2) --> AUTO_LAND\033[0m");
@@ -132,7 +132,7 @@ void PX4CtrlFSM::process()
           (takeoff_land.delay_trigger &&
            (now_time - takeoff_land.delay_trigger_time).seconds() > 0.0)) {
           takeoff_land.delay_trigger = false;
-          publish_trigger(odom_data.msg);
+          publish_trigger(odom_data, now_time);
           RCLCPP_INFO(node_->get_logger(), "[px4ctrl] TRIGGER sent, allow user command.");
         }
       }
@@ -141,11 +141,11 @@ void PX4CtrlFSM::process()
 
     case CMD_CTRL: {
       if (!rc_data.is_hover_mode || !odom_is_received(now_time)) {
-        state = MANUAL_CTRL;
+        change_state(MANUAL_CTRL);
         toggle_offboard_mode(false);
         RCLCPP_WARN(node_->get_logger(), "[px4ctrl] CMD_CTRL(L3) --> MANUAL_CTRL(L1)");
       } else if (!rc_data.is_command_mode || !cmd_is_received(now_time)) {
-        state = AUTO_HOVER;
+        change_state(AUTO_HOVER);
         set_hov_with_odom();
         des = get_hover_des();
         RCLCPP_INFO(node_->get_logger(), "\033[32m[px4ctrl] CMD_CTRL(L3) --> AUTO_HOVER(L2)\033[0m");
@@ -165,7 +165,7 @@ void PX4CtrlFSM::process()
 
     case AUTO_TAKEOFF: {
       if (!odom_is_received(now_time)) {
-        state = MANUAL_CTRL;
+        change_state(MANUAL_CTRL);
         toggle_offboard_mode(false);
         RCLCPP_WARN(node_->get_logger(), "[px4ctrl] AUTO_TAKEOFF --> MANUAL_CTRL, odom timeout.");
       } else if (
@@ -173,7 +173,7 @@ void PX4CtrlFSM::process()
         AutoTakeoffLand_t::MOTORS_SPEEDUP_TIME) {
         des = get_rotor_speed_up_des(now_time);
       } else if (odom_data.p(2) >= takeoff_land.start_pose(2) + param.takeoff_land.height) {
-        state = AUTO_HOVER;
+        change_state(AUTO_HOVER);
         set_hov_with_odom();
         takeoff_land.delay_trigger = true;
         takeoff_land.delay_trigger_time =
@@ -187,11 +187,11 @@ void PX4CtrlFSM::process()
 
     case AUTO_LAND: {
       if (!rc_data.is_hover_mode || !odom_is_received(now_time)) {
-        state = MANUAL_CTRL;
+        change_state(MANUAL_CTRL);
         toggle_offboard_mode(false);
         RCLCPP_WARN(node_->get_logger(), "[px4ctrl] AUTO_LAND --> MANUAL_CTRL(L1)");
       } else if (!rc_data.is_command_mode) {
-        state = AUTO_HOVER;
+        change_state(AUTO_HOVER);
         set_hov_with_odom();
         des = get_hover_des();
         RCLCPP_INFO(node_->get_logger(), "\033[32m[px4ctrl] AUTO_LAND --> AUTO_HOVER(L2)\033[0m");
@@ -203,7 +203,7 @@ void PX4CtrlFSM::process()
           extended_state_data.current_extended_state.landed_state ==
           mavros_msgs::msg::ExtendedState::LANDED_STATE_ON_GROUND) {
           if (toggle_arm_disarm(false)) {
-            state = MANUAL_CTRL;
+            change_state(MANUAL_CTRL);
             toggle_offboard_mode(false);
             RCLCPP_INFO(node_->get_logger(), "[px4ctrl] AUTO_LAND --> MANUAL_CTRL(L1)");
           }
@@ -219,10 +219,38 @@ void PX4CtrlFSM::process()
 
   publish_gripper_safety(now_time);
 
-  if (odom_is_received(now_time)) {
+  const bool control_feedback_valid = odom_is_received(now_time) && imu_is_received(now_time);
+  if (!control_feedback_valid) {
+    if (had_valid_control_feedback) {
+      controller.resetControlState();
+    }
+    had_valid_control_feedback = false;
+  } else {
+    if (!had_valid_control_feedback) {
+      controller.resetControlState();
+    }
+    had_valid_control_feedback = true;
+
+    if (
+      param.thrust_model.enable_estimation &&
+      (state == AUTO_HOVER || state == CMD_CTRL)) {
+      controller.estimateThrustModel(imu_data.a, now_time);
+    }
+
     const Desired_State_t safe_des = clamp_desired(des);
-    const Controller_Output_t u = controller.calculateControl(safe_des, odom_data);
-    publish_position_ctrl(u, now_time);
+    Controller_Output_t u;
+    if (state == MANUAL_CTRL || rotor_low_speed_during_land) {
+      u.q = odom_data.q;
+      u.bodyrates.setZero();
+      u.thrust = clamp(
+        param.thrust_model.hover_thrust,
+        param.controller.min_thrust,
+        param.controller.max_thrust);
+      controller.resetControlState();
+    } else {
+      u = controller.calculateControl(safe_des, odom_data, imu_data, now_time);
+    }
+    publish_bodyrate_ctrl(u, now_time);
     publish_expert_pose(safe_des, now_time);
   }
 
@@ -333,16 +361,8 @@ void PX4CtrlFSM::manual_flag_cb(const std_msgs::msg::UInt8::SharedPtr msg)
   now_pose.pose.position.x = odom_data.p.x();
   now_pose.pose.position.y = odom_data.p.y();
   now_pose.pose.position.z = odom_data.p.z();
-  now_pose.pose.orientation = odom_data.msg.pose.orientation;
+  now_pose.pose.orientation = odom_data.msg.pose.pose.orientation;
   traj_start_trigger_pub->publish(now_pose);
-}
-
-void PX4CtrlFSM::attitude_soft_mode_cb(
-  const std_msgs::msg::Bool::SharedPtr msg,
-  const rclcpp::Time &now)
-{
-  attitude_soft_mode_requested = msg->data;
-  last_attitude_soft_mode_time = now;
 }
 
 void PX4CtrlFSM::set_start_pose_for_takeoff_land(const Odom_Data_t &odom)
@@ -397,6 +417,11 @@ bool PX4CtrlFSM::odom_is_received(const rclcpp::Time &now_time) const
   return odom_data.is_received(now_time, param.msg_timeout.odom);
 }
 
+bool PX4CtrlFSM::imu_is_received(const rclcpp::Time &now_time) const
+{
+  return imu_data.is_received(now_time, param.msg_timeout.imu);
+}
+
 bool PX4CtrlFSM::bat_is_received(const rclcpp::Time &now_time) const
 {
   return bat_data.is_received(now_time, param.msg_timeout.bat);
@@ -411,59 +436,20 @@ bool PX4CtrlFSM::recv_new_odom()
   return false;
 }
 
-void PX4CtrlFSM::publish_position_ctrl(const Controller_Output_t &u, const rclcpp::Time &stamp)
+void PX4CtrlFSM::publish_bodyrate_ctrl(const Controller_Output_t &u, const rclcpp::Time &stamp)
 {
   if (!ctrl_FCU_pub) {
     return;
   }
 
-  PositionTarget msg;
+  AttitudeTarget msg;
   msg.header.stamp = stamp;
   msg.header.frame_id = param.frame_id;
-  msg.coordinate_frame = PositionTarget::FRAME_LOCAL_NED;
-  msg.type_mask =
-    PositionTarget::IGNORE_YAW_RATE;
-  if (!param.cmd_feedforward.enable) {
-    msg.type_mask |=
-      PositionTarget::IGNORE_VX |
-      PositionTarget::IGNORE_VY |
-      PositionTarget::IGNORE_VZ |
-      PositionTarget::IGNORE_AFX |
-      PositionTarget::IGNORE_AFY |
-      PositionTarget::IGNORE_AFZ;
-  }
-  const bool soft_mode = state == CMD_CTRL && attitude_soft_mode_active(stamp);
-  if (soft_mode) {
-    msg.type_mask |=
-      PositionTarget::IGNORE_VX |
-      PositionTarget::IGNORE_VY |
-      PositionTarget::IGNORE_VZ |
-      PositionTarget::IGNORE_AFX |
-      PositionTarget::IGNORE_AFY |
-      PositionTarget::IGNORE_AFZ;
-  }
-
-  if (soft_mode && odom_data.received) {
-    Eigen::Vector2d xy_error = (u.position - odom_data.p).head<2>();
-    const double error_norm = xy_error.norm();
-    if (error_norm > param.attitude_soft_mode.xy_max_error && error_norm > 1e-6) {
-      xy_error *= param.attitude_soft_mode.xy_max_error / error_norm;
-    }
-    xy_error *= std::clamp(param.attitude_soft_mode.xy_gain, 0.0, 1.0);
-    msg.position.x = odom_data.p.x() + xy_error.x();
-    msg.position.y = odom_data.p.y() + xy_error.y();
-  } else {
-    msg.position.x = u.position.x();
-    msg.position.y = u.position.y();
-  }
-  msg.position.z = u.position.z();
-  msg.velocity.x = u.velocity.x();
-  msg.velocity.y = u.velocity.y();
-  msg.velocity.z = u.velocity.z();
-  msg.acceleration_or_force.x = u.acceleration.x();
-  msg.acceleration_or_force.y = u.acceleration.y();
-  msg.acceleration_or_force.z = u.acceleration.z();
-  msg.yaw = static_cast<float>(uav_utils::normalize_angle(u.yaw));
+  msg.type_mask = AttitudeTarget::IGNORE_ATTITUDE;
+  msg.body_rate.x = u.bodyrates.x();
+  msg.body_rate.y = u.bodyrates.y();
+  msg.body_rate.z = u.bodyrates.z();
+  msg.thrust = static_cast<float>(std::clamp(u.thrust, 0.0, 1.0));
   ctrl_FCU_pub->publish(msg);
 }
 
@@ -489,12 +475,19 @@ void PX4CtrlFSM::publish_expert_pose(const Desired_State_t &des, const rclcpp::T
   expert_pose_pub->publish(msg);
 }
 
-void PX4CtrlFSM::publish_trigger(const geometry_msgs::msg::PoseStamped &odom_msg)
+void PX4CtrlFSM::publish_trigger(const Odom_Data_t &odom, const rclcpp::Time &stamp)
 {
   if (!traj_start_trigger_pub) {
     return;
   }
-  traj_start_trigger_pub->publish(odom_msg);
+  geometry_msgs::msg::PoseStamped msg;
+  msg.header.stamp = stamp;
+  msg.header.frame_id = param.frame_id;
+  msg.pose.position.x = odom.p.x();
+  msg.pose.position.y = odom.p.y();
+  msg.pose.position.z = odom.p.z();
+  msg.pose.orientation = odom.msg.pose.pose.orientation;
+  traj_start_trigger_pub->publish(msg);
 }
 
 void PX4CtrlFSM::publish_fsm_state()
@@ -600,10 +593,13 @@ bool PX4CtrlFSM::should_force_gripper_open(const rclcpp::Time &now_time) const
          !state_data.current_state.armed || !px4_mode_allows_gripper_rc();
 }
 
-bool PX4CtrlFSM::attitude_soft_mode_active(const rclcpp::Time &now_time) const
+void PX4CtrlFSM::change_state(State_t new_state)
 {
-  return attitude_soft_mode_requested &&
-         (now_time - last_attitude_soft_mode_time).seconds() <= param.attitude_soft_mode.timeout;
+  if (state != new_state) {
+    controller.resetControlState();
+    had_valid_control_feedback = false;
+  }
+  state = new_state;
 }
 
 bool PX4CtrlFSM::toggle_offboard_mode(bool on_off)

@@ -972,8 +972,7 @@ GRIPPER_X_OFFSET_M=0.08 bash shflies/auto_record_grasp_place.sh
 - 到达目标上方、下降到抓取高度、带载起吊、到达箱子上方、下降到投放高度后，脚本都会额外用动捕检查无人机实际位置是否到位。默认 `WAYPOINT_ARRIVAL_TOLERANCE_M=0.08`、`WAYPOINT_ARRIVAL_SETTLE_S=0.3`、`WAYPOINT_ARRIVAL_TIMEOUT_S=5.0`。这避免把“命令轨迹已经走完”误认为“飞机实际已到达关键点”。
 - 如果启用了起飞后的 `TAKEOFF_FORWARD_COMP_M` 或 `TAKEOFF_COMP_X/Y/Z` 重定位，record gate 打开前也会先等待动捕确认实际到位，避免把起飞后的重定位过程录进数据集开头。
 - 到达目标上方后，进入下降、闭合夹爪、抬升阶段，这些阶段可能遮挡草莓熊刚体；脚本会锁存最后一次新鲜目标位姿，避免遮挡导致 waypoint 跳变。
-- 夹爪闭合和带载起吊阶段的 XY 是软约束：Z 方向继续按轨迹上升，XY 允许在 `GRASP_COMPLIANCE_RADIUS_M` 内被负载扰动带着移动，同时用 `GRASP_COMPLIANCE_ELASTIC_GAIN` 给一个弱回拉。起吊后不会立刻硬拉回原 XY 点。
-- 同一阶段会发布 `/px4ctrl/attitude_soft_mode=true`。px4ctrl 在该模式下继续保持 `CMD_CTRL`，但发给 PX4 的 `x/y` 位置目标会变成弱约束：目标点跟随当前动捕位置，只保留一小部分指向任务目标的回拉量。默认 `attitude_soft_mode.xy_gain=0.15`、`xy_max_error=0.25m`，即最大横向位置误差只转换成约 `3.75cm` 的位置回拉。高度 `z` 和 `yaw` 仍保持。该信号有 `0.5s` 超时保护，自动脚本异常退出后会自动恢复普通位置控制。
+- 夹爪闭合和带载起吊阶段不再启用位置放松或姿态控制。px4ctrl 始终通过 `/mavros/setpoint_raw/local` 发送 `PositionTarget`，自动脚本只发布 `/position_cmd` 和夹爪命令。更换力控舵机后，夹持策略需要重新从地面测试开始标定。
 - 飞向盒子上方时，脚本会持续读取 `/box1/pose`，实时刷新盒子上方 waypoint。
 - 到达盒子上方后，进入下降投放阶段，可能遮挡盒子刚体；脚本会锁存最后一次新鲜盒子位姿。
 - 如果接近阶段短暂看不到目标或盒子，脚本会继续使用锁存位置，并打印 `Using latched ... pose`。如果从未获得过可用锁存位姿，则会报错退出。
@@ -1029,16 +1028,12 @@ bash shflies/auto_record_grasp_place.sh
 夹爪软夹持：
 
 - 当前 STS3215 仍使用位置伺服模式，不是真正硬件力控。
-- 当前默认抓取模式是折中测试用的 `GRASP_MODE=continuous_center`：夹爪不根据 load/current 判断接触，而是在抓取高度以固定时长连续、左右对称地闭合到中间，同时无人机 `x/y` 保持顺从。
+- 当前默认抓取模式是 `GRASP_MODE=continuous_center`：夹爪不根据 load/current 判断接触，而是在抓取高度以固定时长连续、左右对称地闭合到中间。
 - 连续闭合默认从 `100.0` 到 `GRIPPER_CLOSED=0.0`，闭合时长 `GRIPPER_CLOSE_DURATION_S=4.0 s`。如果反作用力仍大，先加长到 `5~6 s` 或把 `GRIPPER_CLOSED` 提高到 `10~20`；如果夹不住，再降低 `GRIPPER_CLOSED`。
-- 抓取顺从不是完全放开位置环：默认 `GRASP_COMPLIANCE_ELASTIC_GAIN=0.15`，即保留约 15% 的 XY 偏移作为弱弹性回拉，剩余偏移允许飞机跟随夹爪反作用移动。
-- 如果 roll/pitch 超过 `GRASP_ATTITUDE_SOFT_RAD=0.30 rad`，脚本会逐步加大 XY 回拉，鼓励飞机恢复水平；超过 `GRASP_ABORT_ATTITUDE_RAD=0.65 rad` 才开夹退出。
 - 如果需要切回基于反馈的软夹持，使用 `GRASP_MODE=soft bash shflies/auto_record_grasp_place.sh`。
 - 在 `continuous_center` 模式下，脚本通过 `/gripper/command_pair` 连续发布左右相同的目标开度，不使用接触判断。
 - 在 `soft` 模式下，gripper manager 以 `/gripper/feedback` 发布左右位置、load、current、位置误差；自动脚本用这些反馈判断接触。
 - gripper manager 退出时默认再次写入全开位置：`open_on_shutdown=true`、`shutdown_open_position=100.0`、`shutdown_open_repeats=3`。
-- 抓取阶段 `z/yaw` 保持，`x/y` 做顺从保持：允许无人机在小半径内让开夹爪反作用力，避免位置环硬拉导致机体倾斜放大。
-- 如果抓取阶段平面漂移超过 `GRASP_ABORT_DRIFT_M`，脚本会打开夹爪并退出。
 - 软夹持目标是“刚好抓住”，不是把草莓熊强行拖到几何中心。抓到后会做少量左右负载均衡。
 
 默认参数：
@@ -1070,11 +1065,6 @@ GRASP_BALANCE_LOAD_DIFF=60
 GRASP_BALANCE_STEP=1.5
 GRASP_MAX_BALANCE_STEPS=8
 GRASP_ANGLE_BALANCE_DIFF=5.0
-GRASP_COMPLIANCE_RADIUS_M=0.35
-GRASP_COMPLIANCE_ELASTIC_GAIN=0.15
-GRASP_ABORT_DRIFT_M=0.80
-GRASP_ATTITUDE_SOFT_RAD=0.30
-GRASP_ABORT_ATTITUDE_RAD=0.65
 ```
 
 这些参数集中在 `shflies/grasp_params.env`。`auto_record_grasp_place.sh` 和手持调参脚本都会 source 同一个文件，所以你在这里稳定下来的参数会默认同步到真实自动飞行。命令行环境变量优先级更高，只影响本次运行：
@@ -1089,8 +1079,6 @@ GRASP_STEP_SIZE=2.0 GRASP_CLOSE_MIN=25.0 bash shflies/auto_record_grasp_place.sh
 GRASP_STEP_SIZE=1.0 \
 GRASP_STEP_SETTLE_S=0.25 \
 GRASP_CLOSE_MIN=30.0 \
-GRASP_COMPLIANCE_RADIUS_M=0.16 \
-GRASP_ABORT_DRIFT_M=0.24 \
 bash shflies/auto_record_grasp_place.sh
 ```
 

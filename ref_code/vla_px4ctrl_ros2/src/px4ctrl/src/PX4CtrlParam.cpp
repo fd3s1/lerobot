@@ -1,5 +1,37 @@
 #include "PX4CtrlParam.h"
 
+#include <array>
+#include <string>
+#include <vector>
+
+namespace {
+
+std::vector<double> array_to_vector(const std::array<double, 3> &value)
+{
+  return {value[0], value[1], value[2]};
+}
+
+void declare_diag_parameter(
+  rclcpp::Node &node,
+  const std::string &name,
+  std::array<double, 3> &value)
+{
+  const auto param_value =
+    node.declare_parameter<std::vector<double>>(name, array_to_vector(value));
+  if (param_value.size() != value.size()) {
+    RCLCPP_ERROR(
+      node.get_logger(),
+      "Parameter %s must have exactly 3 elements; keeping defaults.",
+      name.c_str());
+    return;
+  }
+  for (std::size_t i = 0; i < value.size(); ++i) {
+    value[i] = param_value[i];
+  }
+}
+
+}  // namespace
+
 void Parameter_t::config_from_ros_node(rclcpp::Node &node)
 {
   ctrl_freq_max = node.declare_parameter<double>("ctrl_freq_max", ctrl_freq_max);
@@ -9,6 +41,7 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
 
   topics.rc = node.declare_parameter<std::string>("topics.rc", topics.rc);
   topics.odom = node.declare_parameter<std::string>("topics.odom", topics.odom);
+  topics.imu = node.declare_parameter<std::string>("topics.imu", topics.imu);
   topics.cmd = node.declare_parameter<std::string>("topics.cmd", topics.cmd);
   topics.takeoff_land = node.declare_parameter<std::string>("topics.takeoff_land", topics.takeoff_land);
   topics.setpoint = node.declare_parameter<std::string>("topics.setpoint", topics.setpoint);
@@ -17,8 +50,6 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
     node.declare_parameter<std::string>("topics.gripper_command", topics.gripper_command);
   topics.traj_start_trigger =
     node.declare_parameter<std::string>("topics.traj_start_trigger", topics.traj_start_trigger);
-  topics.attitude_soft_mode =
-    node.declare_parameter<std::string>("topics.attitude_soft_mode", topics.attitude_soft_mode);
   topics.state = node.declare_parameter<std::string>("topics.state", topics.state);
   topics.extended_state =
     node.declare_parameter<std::string>("topics.extended_state", topics.extended_state);
@@ -29,6 +60,7 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
   services.command = node.declare_parameter<std::string>("services.command", services.command);
 
   msg_timeout.odom = node.declare_parameter<double>("msg_timeout.odom", msg_timeout.odom);
+  msg_timeout.imu = node.declare_parameter<double>("msg_timeout.imu", msg_timeout.imu);
   msg_timeout.rc = node.declare_parameter<double>("msg_timeout.rc", msg_timeout.rc);
   msg_timeout.cmd = node.declare_parameter<double>("msg_timeout.cmd", msg_timeout.cmd);
   msg_timeout.bat = node.declare_parameter<double>("msg_timeout.bat", msg_timeout.bat);
@@ -73,12 +105,40 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
   cmd_feedforward.max_acceleration =
     node.declare_parameter<double>("cmd_feedforward.max_acceleration", cmd_feedforward.max_acceleration);
 
-  attitude_soft_mode.timeout =
-    node.declare_parameter<double>("attitude_soft_mode.timeout", attitude_soft_mode.timeout);
-  attitude_soft_mode.xy_gain =
-    node.declare_parameter<double>("attitude_soft_mode.xy_gain", attitude_soft_mode.xy_gain);
-  attitude_soft_mode.xy_max_error =
-    node.declare_parameter<double>("attitude_soft_mode.xy_max_error", attitude_soft_mode.xy_max_error);
+  controller.gravity =
+    node.declare_parameter<double>("controller.gravity", controller.gravity);
+  controller.max_angle_deg =
+    node.declare_parameter<double>("controller.max_angle_deg", controller.max_angle_deg);
+  controller.max_bodyrate_x =
+    node.declare_parameter<double>("controller.max_bodyrate_x", controller.max_bodyrate_x);
+  controller.max_bodyrate_y =
+    node.declare_parameter<double>("controller.max_bodyrate_y", controller.max_bodyrate_y);
+  controller.max_bodyrate_z =
+    node.declare_parameter<double>("controller.max_bodyrate_z", controller.max_bodyrate_z);
+  controller.min_thrust =
+    node.declare_parameter<double>("controller.min_thrust", controller.min_thrust);
+  controller.max_thrust =
+    node.declare_parameter<double>("controller.max_thrust", controller.max_thrust);
+
+  declare_diag_parameter(node, "ude.Kp_diag", ude.Kp_diag);
+  declare_diag_parameter(node, "ude.Kd_diag", ude.Kd_diag);
+  declare_diag_parameter(node, "ude.T_diag", ude.T_diag);
+  declare_diag_parameter(node, "ude.max_f_hat", ude.max_f_hat);
+  declare_diag_parameter(node, "ude.max_u_acc", ude.max_u_acc);
+  declare_diag_parameter(node, "attitude.KAng_diag", attitude.KAng_diag);
+
+  thrust_model.hover_thrust =
+    node.declare_parameter<double>("thrust_model.hover_thrust", thrust_model.hover_thrust);
+  thrust_model.enable_estimation =
+    node.declare_parameter<bool>("thrust_model.enable_estimation", thrust_model.enable_estimation);
+  thrust_model.print_value =
+    node.declare_parameter<bool>("thrust_model.print_value", thrust_model.print_value);
+  thrust_model.rho2 =
+    node.declare_parameter<double>("thrust_model.rho2", thrust_model.rho2);
+  thrust_model.min_thr2acc =
+    node.declare_parameter<double>("thrust_model.min_thr2acc", thrust_model.min_thr2acc);
+  thrust_model.max_thr2acc =
+    node.declare_parameter<double>("thrust_model.max_thr2acc", thrust_model.max_thr2acc);
 
   if (takeoff_land.enable_auto_arm && !takeoff_land.enable) {
     takeoff_land.enable_auto_arm = false;

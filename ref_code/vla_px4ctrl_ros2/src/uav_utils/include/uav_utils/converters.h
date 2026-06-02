@@ -33,6 +33,20 @@ inline void extract_odometry(
 }
 
 inline void extract_odometry(
+  const nav_msgs::msg::Odometry &msg,
+  Eigen::Vector3d &p,
+  Eigen::Vector3d &v,
+  Eigen::Quaterniond &q,
+  Eigen::Vector3d &w)
+{
+  extract_odometry(msg, p, v, q);
+
+  w(0) = msg.twist.twist.angular.x;
+  w(1) = msg.twist.twist.angular.y;
+  w(2) = msg.twist.twist.angular.z;
+}
+
+inline void extract_odometry(
   const geometry_msgs::msg::PoseStamped &msg,
   Eigen::Vector3d &p,
   Eigen::Quaterniond &q)

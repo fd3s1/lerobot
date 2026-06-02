@@ -3,18 +3,18 @@ px4ctrl:
     ctrl_freq_max: 60.0
     max_manual_vel: 1.0
     frame_id: map
-    use_bodyrate_ctrl: false
+    use_bodyrate_ctrl: true
 
     topics:
       rc: /mavros/rc/in
-      odom: /mavros/vision_pose/pose
+      odom: /mavros/local_position/odom
+      imu: /mavros/imu/data
       cmd: /position_cmd
       takeoff_land: /px4ctrl/takeoff_land
-      setpoint: /mavros/setpoint_raw/local
+      setpoint: /mavros/setpoint_raw/attitude
       expert_pose: /px4ctrl/expert_pose
       gripper_command: /gripper/command
       traj_start_trigger: /traj_start_trigger
-      attitude_soft_mode: /px4ctrl/attitude_soft_mode
       state: /mavros/state
       extended_state: /mavros/extended_state
       battery: /mavros/battery
@@ -25,6 +25,7 @@ px4ctrl:
 
     msg_timeout:
       odom: 0.5
+      imu: 0.5
       rc: 0.5
       cmd: 0.5
       bat: 0.5
@@ -63,10 +64,32 @@ px4ctrl:
       max_velocity: 0.5
       max_acceleration: 0.8
 
-    attitude_soft_mode:
-      timeout: 0.5
-      xy_gain: 0.15
-      xy_max_error: 0.25
+    controller:
+      gravity: 9.81
+      max_angle_deg: 25.0
+      max_bodyrate_x: 2.0
+      max_bodyrate_y: 2.0
+      max_bodyrate_z: 1.5
+      min_thrust: 0.05
+      max_thrust: 0.90
+
+    ude:
+      Kp_diag: [1.0, 1.0, 1.0]
+      Kd_diag: [2.0, 2.0, 2.0]
+      T_diag: [1.0, 1.0, 1.0]
+      max_f_hat: [3.0, 3.0, 3.0]
+      max_u_acc: [4.0, 4.0, 4.0]
+
+    attitude:
+      KAng_diag: [8.0, 8.0, 4.0]
+
+    thrust_model:
+      hover_thrust: 0.5
+      enable_estimation: false
+      print_value: false
+      rho2: 0.998
+      min_thr2acc: 5.0
+      max_thr2acc: 40.0
 
 feetech_gripper_node:
   ros__parameters:

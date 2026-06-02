@@ -1,6 +1,7 @@
 #ifndef PX4CTRL_PARAM_H
 #define PX4CTRL_PARAM_H
 
+#include <array>
 #include <string>
 
 #include <rclcpp/rclcpp.hpp>
@@ -11,6 +12,7 @@ public:
   struct MsgTimeout
   {
     double odom{0.5};
+    double imu{0.5};
     double rc{0.5};
     double cmd{0.5};
     double bat{0.5};
@@ -36,14 +38,14 @@ public:
   struct Topics
   {
     std::string rc{"/mavros/rc/in"};
-    std::string odom{"/mavros/vision_pose/pose"};
+    std::string odom{"/mavros/local_position/odom"};
+    std::string imu{"/mavros/imu/data"};
     std::string cmd{"/position_cmd"};
     std::string takeoff_land{"/px4ctrl/takeoff_land"};
-    std::string setpoint{"/mavros/setpoint_raw/local"};
+    std::string setpoint{"/mavros/setpoint_raw/attitude"};
     std::string expert_pose{"/px4ctrl/expert_pose"};
     std::string gripper_command{"/gripper/command"};
     std::string traj_start_trigger{"/traj_start_trigger"};
-    std::string attitude_soft_mode{"/px4ctrl/attitude_soft_mode"};
     std::string state{"/mavros/state"};
     std::string extended_state{"/mavros/extended_state"};
     std::string battery{"/mavros/battery"};
@@ -83,11 +85,39 @@ public:
     double max_acceleration{2.0};
   };
 
-  struct AttitudeSoftMode
+  struct Controller
   {
-    double timeout{0.5};
-    double xy_gain{0.15};
-    double xy_max_error{0.25};
+    double gravity{9.81};
+    double max_angle_deg{25.0};
+    double max_bodyrate_x{2.0};
+    double max_bodyrate_y{2.0};
+    double max_bodyrate_z{1.5};
+    double min_thrust{0.05};
+    double max_thrust{0.90};
+  };
+
+  struct Ude
+  {
+    std::array<double, 3> Kp_diag{1.0, 1.0, 1.0};
+    std::array<double, 3> Kd_diag{2.0, 2.0, 2.0};
+    std::array<double, 3> T_diag{1.0, 1.0, 1.0};
+    std::array<double, 3> max_f_hat{3.0, 3.0, 3.0};
+    std::array<double, 3> max_u_acc{4.0, 4.0, 4.0};
+  };
+
+  struct Attitude
+  {
+    std::array<double, 3> KAng_diag{8.0, 8.0, 4.0};
+  };
+
+  struct ThrustModel
+  {
+    double hover_thrust{0.5};
+    bool enable_estimation{false};
+    bool print_value{false};
+    double rho2{0.998};
+    double min_thr2acc{5.0};
+    double max_thr2acc{40.0};
   };
 
   MsgTimeout msg_timeout;
@@ -98,11 +128,14 @@ public:
   Limits limits;
   Gripper gripper;
   CmdFeedforward cmd_feedforward;
-  AttitudeSoftMode attitude_soft_mode;
+  Controller controller;
+  Ude ude;
+  Attitude attitude;
+  ThrustModel thrust_model;
 
   double ctrl_freq_max{100.0};
   double max_manual_vel{1.0};
-  bool use_bodyrate_ctrl{false};
+  bool use_bodyrate_ctrl{true};
   std::string frame_id{"map"};
 
   Parameter_t() = default;

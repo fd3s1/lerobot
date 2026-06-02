@@ -2,17 +2,18 @@
 #include <memory>
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <mavros_msgs/msg/attitude_target.hpp>
 #include <mavros_msgs/msg/extended_state.hpp>
-#include <mavros_msgs/msg/position_target.hpp>
 #include <mavros_msgs/msg/rc_in.hpp>
 #include <mavros_msgs/msg/state.hpp>
 #include <mavros_msgs/srv/command_bool.hpp>
 #include <mavros_msgs/srv/command_long.hpp>
 #include <mavros_msgs/srv/set_mode.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 #include <quadrotor_msgs/msg/takeoff_land.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/battery_state.hpp>
-#include <std_msgs/msg/bool.hpp>
+#include <sensor_msgs/msg/imu.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/u_int8.hpp>
 
@@ -45,11 +46,18 @@ int main(int argc, char *argv[])
       fsm.extended_state_data.feed(msg);
     });
 
-  auto odom_sub = node->create_subscription<geometry_msgs::msg::PoseStamped>(
+  auto odom_sub = node->create_subscription<nav_msgs::msg::Odometry>(
     param.topics.odom,
     100,
-    [&fsm, &node](const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+    [&fsm, &node](const nav_msgs::msg::Odometry::SharedPtr msg) {
       fsm.odom_data.feed(msg, node->now());
+    });
+
+  auto imu_sub = node->create_subscription<sensor_msgs::msg::Imu>(
+    param.topics.imu,
+    100,
+    [&fsm, &node](const sensor_msgs::msg::Imu::SharedPtr msg) {
+      fsm.imu_data.feed(msg, node->now());
     });
 
   auto cmd_sub = node->create_subscription<geometry_msgs::msg::PoseStamped>(
@@ -90,15 +98,8 @@ int main(int argc, char *argv[])
       fsm.manual_flag_cb(msg);
     });
 
-  auto attitude_soft_mode_sub = node->create_subscription<std_msgs::msg::Bool>(
-    param.topics.attitude_soft_mode,
-    10,
-    [&fsm, &node](const std_msgs::msg::Bool::SharedPtr msg) {
-      fsm.attitude_soft_mode_cb(msg, node->now());
-    });
-
   fsm.ctrl_FCU_pub =
-    node->create_publisher<mavros_msgs::msg::PositionTarget>(param.topics.setpoint, 10);
+    node->create_publisher<mavros_msgs::msg::AttitudeTarget>(param.topics.setpoint, 10);
   fsm.expert_pose_pub =
     node->create_publisher<geometry_msgs::msg::PoseStamped>(param.topics.expert_pose, 10);
   fsm.traj_start_trigger_pub =

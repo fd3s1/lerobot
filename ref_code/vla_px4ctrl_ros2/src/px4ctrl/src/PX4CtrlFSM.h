@@ -6,13 +6,12 @@
 #include <Eigen/Dense>
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
-#include <mavros_msgs/msg/position_target.hpp>
+#include <mavros_msgs/msg/attitude_target.hpp>
 #include <mavros_msgs/srv/command_bool.hpp>
 #include <mavros_msgs/srv/command_long.hpp>
 #include <mavros_msgs/srv/set_mode.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/float64.hpp>
-#include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/u_int8.hpp>
 
@@ -49,6 +48,7 @@ public:
   State_Data_t state_data;
   ExtendedState_Data_t extended_state_data;
   Odom_Data_t odom_data;
+  Imu_Data_t imu_data;
   Command_Data_t cmd_data;
   Battery_Data_t bat_data;
   Takeoff_Land_Data_t takeoff_land_data;
@@ -57,7 +57,7 @@ public:
 
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr traj_start_trigger_pub;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr expert_pose_pub;
-  rclcpp::Publisher<mavros_msgs::msg::PositionTarget>::SharedPtr ctrl_FCU_pub;
+  rclcpp::Publisher<mavros_msgs::msg::AttitudeTarget>::SharedPtr ctrl_FCU_pub;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr gripper_cmd_pub;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr fsm_state_pub;
   rclcpp::Client<mavros_msgs::srv::SetMode>::SharedPtr set_FCU_mode_srv;
@@ -73,12 +73,12 @@ public:
   bool rc_is_received(const rclcpp::Time &now_time) const;
   bool cmd_is_received(const rclcpp::Time &now_time) const;
   bool odom_is_received(const rclcpp::Time &now_time) const;
+  bool imu_is_received(const rclcpp::Time &now_time) const;
   bool bat_is_received(const rclcpp::Time &now_time) const;
   bool recv_new_odom();
   State_t get_state() const { return state; }
   bool get_landed() const { return takeoff_land.landed; }
   void manual_flag_cb(const std_msgs::msg::UInt8::SharedPtr msg);
-  void attitude_soft_mode_cb(const std_msgs::msg::Bool::SharedPtr msg, const rclcpp::Time &now);
 
 private:
   rclcpp::Node *node_;
@@ -87,8 +87,7 @@ private:
   bool have_gripper_target{false};
   double last_gripper_target{0.0};
   rclcpp::Time last_gripper_force_open_time{0, 0, RCL_ROS_TIME};
-  bool attitude_soft_mode_requested{false};
-  rclcpp::Time last_attitude_soft_mode_time{0, 0, RCL_ROS_TIME};
+  bool had_valid_control_feedback{false};
 
   Desired_State_t get_hover_des();
   Desired_State_t get_cmd_des();
@@ -100,9 +99,9 @@ private:
   void set_start_pose_for_takeoff_land(const Odom_Data_t &odom);
   void set_hov_with_odom();
   void set_hov_with_rc();
-  void publish_position_ctrl(const Controller_Output_t &u, const rclcpp::Time &stamp);
+  void publish_bodyrate_ctrl(const Controller_Output_t &u, const rclcpp::Time &stamp);
   void publish_expert_pose(const Desired_State_t &des, const rclcpp::Time &stamp);
-  void publish_trigger(const geometry_msgs::msg::PoseStamped &odom_msg);
+  void publish_trigger(const Odom_Data_t &odom, const rclcpp::Time &stamp);
   void publish_fsm_state();
   void publish_gripper_safety(const rclcpp::Time &now_time);
   void publish_gripper_from_rc();
@@ -110,7 +109,7 @@ private:
   void publish_gripper_target(double target, bool force = false);
   bool px4_mode_allows_gripper_rc() const;
   bool should_force_gripper_open(const rclcpp::Time &now_time) const;
-  bool attitude_soft_mode_active(const rclcpp::Time &now_time) const;
+  void change_state(State_t new_state);
 
   bool toggle_offboard_mode(bool on_off);
   bool toggle_arm_disarm(bool arm);

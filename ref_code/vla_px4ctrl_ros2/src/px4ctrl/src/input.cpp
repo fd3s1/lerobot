@@ -115,11 +115,20 @@ double RC_Data_t::channel_pwm(std::size_t one_based_channel, double default_valu
 }
 
 void Odom_Data_t::feed(
-  const geometry_msgs::msg::PoseStamped::SharedPtr pMsg,
+  const nav_msgs::msg::Odometry::SharedPtr pMsg,
   const rclcpp::Time &now)
 {
   msg = *pMsg;
-  uav_utils::extract_odometry(msg, p, q);
+  uav_utils::extract_odometry(msg, p, v, q, w);
+  if (q.norm() > 1e-6) {
+    q.normalize();
+  } else {
+    q.setIdentity();
+  }
+
+  // Odometry twist is expressed in child_frame_id; use world/ENU velocity downstream.
+  v = q * v;
+
   rcv_stamp = now;
   recv_new_msg = true;
   received = true;
@@ -138,6 +147,39 @@ void State_Data_t::feed(const mavros_msgs::msg::State::SharedPtr pMsg)
 void ExtendedState_Data_t::feed(const mavros_msgs::msg::ExtendedState::SharedPtr pMsg)
 {
   current_extended_state = *pMsg;
+}
+
+void Imu_Data_t::feed(
+  const sensor_msgs::msg::Imu::SharedPtr pMsg,
+  const rclcpp::Time &now)
+{
+  msg = *pMsg;
+  rcv_stamp = now;
+  received = true;
+
+  q.w() = msg.orientation.w;
+  q.x() = msg.orientation.x;
+  q.y() = msg.orientation.y;
+  q.z() = msg.orientation.z;
+  if (q.norm() > 1e-6) {
+    q.normalize();
+  } else {
+    q.setIdentity();
+  }
+
+  w = Eigen::Vector3d(
+    msg.angular_velocity.x,
+    msg.angular_velocity.y,
+    msg.angular_velocity.z);
+  a = Eigen::Vector3d(
+    msg.linear_acceleration.x,
+    msg.linear_acceleration.y,
+    msg.linear_acceleration.z);
+}
+
+bool Imu_Data_t::is_received(const rclcpp::Time &now_time, double timeout_s) const
+{
+  return received && (now_time - rcv_stamp).seconds() < timeout_s;
 }
 
 void Command_Data_t::feed(

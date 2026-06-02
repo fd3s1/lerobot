@@ -1,0 +1,4 @@
+e = {p_d} - p
+{u_0} = {u_d} + {K_p}e + {K_d}\dot e
+u = {u_0} - \hat f
+\hat f = {T^{ - 1}}\left( {v - \int {{u_0}} } \right)

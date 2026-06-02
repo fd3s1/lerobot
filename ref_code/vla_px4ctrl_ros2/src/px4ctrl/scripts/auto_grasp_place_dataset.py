@@ -15,7 +15,7 @@ from quadrotor_msgs.msg import GripperCommandPair, GripperFeedback, TakeoffLand
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.utilities import remove_ros_args
-from std_msgs.msg import Bool, Float64, String
+from std_msgs.msg import Float64, String
 
 from gripper_soft_grasp_lib import GripperFeedbackState, SoftGraspConfig, SoftGraspController
 
@@ -79,7 +79,6 @@ class AutoConfig:
     gripper_feedback_topic: str
     takeoff_land_topic: str
     px4ctrl_state_topic: str
-    attitude_soft_mode_topic: str
     record_status_topic: str
     record_gate_topic: str
     record_gate_value: str
@@ -164,11 +163,6 @@ class AutoConfig:
     grasp_balance_step: float
     grasp_max_balance_steps: int
     grasp_angle_balance_diff: float
-    grasp_compliance_radius_m: float
-    grasp_compliance_elastic_gain: float
-    grasp_abort_drift_m: float
-    grasp_attitude_soft_rad: float
-    grasp_abort_attitude_rad: float
     release_retreat_up_m: float
     release_retreat_forward_m: float
     retreat_speed: float
@@ -214,7 +208,6 @@ class AutoGraspPlaceDataset(Node):
         self.gripper_pair_pub = self.create_publisher(GripperCommandPair, config.gripper_command_pair_topic, 10)
         self.takeoff_land_pub = self.create_publisher(TakeoffLand, config.takeoff_land_topic, 10)
         self.record_gate_pub = self.create_publisher(String, config.record_gate_topic, 10)
-        self.attitude_soft_mode_pub = self.create_publisher(Bool, config.attitude_soft_mode_topic, 10)
 
     def _create_pose_subscription(self, key: str, topic: str) -> None:
         # A BEST_EFFORT subscription is compatible with both VRPN BEST_EFFORT
@@ -372,11 +365,6 @@ class AutoGraspPlaceDataset(Node):
         msg.pose.orientation.z = qz
         msg.pose.orientation.w = qw
         self.cmd_pub.publish(msg)
-
-    def publish_attitude_soft_mode(self, enabled: bool) -> None:
-        msg = Bool()
-        msg.data = enabled
-        self.attitude_soft_mode_pub.publish(msg)
 
     def publish_gripper(self, target: float, repeats: int = 1, interval_s: float = 0.05) -> None:
         msg = Float64()
@@ -640,46 +628,6 @@ class AutoGraspPlaceDataset(Node):
 
         return end
 
-    def fly_segment_compliant_xy(
-        self,
-        start: PoseSample,
-        end: PoseSample,
-        speed: float,
-        label: str,
-    ) -> PoseSample:
-        distance = math.dist((start.x, start.y, start.z), (end.x, end.y, end.z))
-        duration_scale = 1.5 if self.config.smooth_trajectory else 1.0
-        duration = max(distance / max(speed, 1e-3) * duration_scale, 1.0 / self.config.rate_hz)
-        steps = max(1, int(math.ceil(duration * self.config.rate_hz)))
-        period = 1.0 / self.config.rate_hz
-        latest = start
-        self.get_logger().info(
-            f"{label}: compliant XY, distance={distance:.3f}m speed_limit={speed:.3f}m/s duration={duration:.2f}s."
-        )
-
-        next_tick = time.monotonic()
-        for i in range(steps + 1):
-            rclpy.spin_once(self, timeout_sec=0.0)
-            t = i / steps
-            alpha = (10.0 * t**3 - 15.0 * t**4 + 6.0 * t**5) if self.config.smooth_trajectory else t
-            yaw_delta = normalize_angle(end.yaw - start.yaw)
-            reference = self.checked_pose(
-                x=start.x + (end.x - start.x) * alpha,
-                y=start.y + (end.y - start.y) * alpha,
-                z=start.z + (end.z - start.z) * alpha,
-                yaw=normalize_angle(start.yaw + yaw_delta * alpha),
-            )
-            latest = self.compliant_pose(reference)
-            self.publish_cmd(latest)
-            self.publish_attitude_soft_mode(True)
-            next_tick += period
-            time.sleep(max(0.0, next_tick - time.monotonic()))
-
-            if self.px4ctrl_state != "CMD_CTRL":
-                raise RuntimeError(f"px4ctrl left CMD_CTRL during {label}; latest={self.px4ctrl_state!r}.")
-
-        return latest
-
     def fly_to_live_waypoint(
         self,
         start: PoseSample,
@@ -807,78 +755,6 @@ class AutoGraspPlaceDataset(Node):
             raise RuntimeError(f"{label}: actual drone did not arrive before timeout; final err={err:.3f}m.")
         raise RuntimeError(f"{label}: no fresh drone pose while waiting for actual arrival.")
 
-    def compliant_pose(self, reference: PoseSample) -> PoseSample:
-        drone = self.poses.get("drone")
-        if drone is None or not self.pose_fresh("drone"):
-            return reference
-
-        attitude = max(abs(drone.roll), abs(drone.pitch))
-        if attitude > self.config.grasp_abort_attitude_rad:
-            self.publish_gripper(self.config.gripper_open, repeats=5)
-            raise RuntimeError(
-                f"Drone attitude too large during compliant grasp: "
-                f"roll={drone.roll:.3f}rad pitch={drone.pitch:.3f}rad, "
-                f"threshold={self.config.grasp_abort_attitude_rad:.3f}rad."
-            )
-
-        dx = drone.x - reference.x
-        dy = drone.y - reference.y
-        drift_xy = math.hypot(dx, dy)
-        if drift_xy > self.config.grasp_abort_drift_m:
-            self.publish_gripper(self.config.gripper_open, repeats=5)
-            raise RuntimeError(
-                f"Drone drifted {drift_xy:.3f}m during compliant grasp; "
-                f"abort threshold is {self.config.grasp_abort_drift_m:.3f}m."
-            )
-
-        elastic_gain = self.config.grasp_compliance_elastic_gain
-        if attitude > self.config.grasp_attitude_soft_rad:
-            attitude_span = max(
-                self.config.grasp_abort_attitude_rad - self.config.grasp_attitude_soft_rad,
-                1e-6,
-            )
-            attitude_ratio = clamp(
-                (attitude - self.config.grasp_attitude_soft_rad) / attitude_span,
-                0.0,
-                1.0,
-            )
-            # As attitude grows, leave more XY error for the position controller
-            # so the vehicle is encouraged to level instead of following the load.
-            elastic_gain = min(1.0, elastic_gain + (1.0 - elastic_gain) * attitude_ratio)
-
-        free_radius = self.config.grasp_compliance_radius_m
-        if drift_xy <= free_radius:
-            allowed = (1.0 - elastic_gain) * drift_xy
-        else:
-            overflow = drift_xy - free_radius
-            allowed = min(
-                drift_xy,
-                (1.0 - elastic_gain) * free_radius
-                + (1.0 - 0.5 * elastic_gain) * overflow,
-            )
-        if drift_xy > 1e-6:
-            scale = allowed / drift_xy
-            x = reference.x + dx * scale
-            y = reference.y + dy * scale
-        else:
-            x = reference.x
-            y = reference.y
-        return self.checked_pose(x, y, reference.z, reference.yaw)
-
-    def hold_cmd_compliant(self, reference: PoseSample, duration_s: float) -> PoseSample:
-        period = 1.0 / self.config.rate_hz
-        deadline = time.monotonic() + max(0.0, duration_s)
-        latest = reference
-        while rclpy.ok() and time.monotonic() < deadline:
-            rclpy.spin_once(self, timeout_sec=0.0)
-            latest = self.compliant_pose(reference)
-            self.publish_cmd(latest)
-            self.publish_attitude_soft_mode(True)
-            time.sleep(period)
-            if self.px4ctrl_state != "CMD_CTRL":
-                raise RuntimeError(f"px4ctrl left CMD_CTRL during compliant hold; latest={self.px4ctrl_state!r}.")
-        return latest
-
     def _hold_pair_step(
         self,
         reference: PoseSample,
@@ -888,20 +764,18 @@ class AutoGraspPlaceDataset(Node):
     ) -> PoseSample:
         period = 1.0 / self.config.rate_hz
         deadline = time.monotonic() + max(0.0, duration_s)
-        latest = reference
         while rclpy.ok() and time.monotonic() < deadline:
             rclpy.spin_once(self, timeout_sec=0.0)
-            latest = self.compliant_pose(reference)
-            self.publish_cmd(latest)
-            self.publish_attitude_soft_mode(True)
+            self.publish_cmd(reference)
             self.publish_gripper_pair(left_goal, right_goal)
             time.sleep(period)
             if self.px4ctrl_state != "CMD_CTRL":
                 raise RuntimeError(f"px4ctrl left CMD_CTRL during soft grasp; latest={self.px4ctrl_state!r}.")
-        return latest
+        return reference
 
     def soft_grasp(self, reference: PoseSample) -> PoseSample:
-        latest: PoseSample = self.hold_cmd_compliant(reference, 0.3)
+        self.hold_cmd(reference, 0.3)
+        latest: PoseSample = reference
 
         if self.config.grasp_mode == "continuous_center":
             return self.continuous_center_grasp(latest)
@@ -953,17 +827,15 @@ class AutoGraspPlaceDataset(Node):
         self.get_logger().info(
             "Continuous center grasp: closing symmetrically "
             f"{cfg.gripper_open:.1f}->{cfg.gripper_closed:.1f} over {duration_s:.2f}s "
-            "while XY remains compliant."
+            "while holding the grasp pose."
         )
         next_tick = time.monotonic()
         for i in range(steps + 1):
             rclpy.spin_once(self, timeout_sec=0.0)
-            latest = self.compliant_pose(reference)
             t = i / steps
             alpha = 10.0 * t**3 - 15.0 * t**4 + 6.0 * t**5
             target = cfg.gripper_open + (cfg.gripper_closed - cfg.gripper_open) * alpha
-            self.publish_cmd(latest)
-            self.publish_attitude_soft_mode(True)
+            self.publish_cmd(reference)
             self.publish_gripper_pair(target, target)
             next_tick += period
             time.sleep(max(0.0, next_tick - time.monotonic()))
@@ -971,7 +843,7 @@ class AutoGraspPlaceDataset(Node):
                 raise RuntimeError(
                     f"px4ctrl left CMD_CTRL during continuous center grasp; latest={self.px4ctrl_state!r}."
                 )
-        return latest
+        return reference
 
     def finish_with_cmd_landing(self, current: PoseSample, pre_takeoff_drone: PoseSample, gate_s: float) -> None:
         landing_z = (
@@ -1168,12 +1040,11 @@ class AutoGraspPlaceDataset(Node):
         current = self.soft_grasp(current)
         if self.config.post_grasp_settle_s > 0.0:
             self.get_logger().info(f"Holding after grasp for {self.config.post_grasp_settle_s:.2f}s to let payload settle.")
-            current = self.hold_cmd_compliant(current, self.config.post_grasp_settle_s)
-        current = self.fly_segment_compliant_xy(current, target_lift, self.config.payload_lift_speed, "Lift object")
+            self.hold_cmd(current, self.config.post_grasp_settle_s)
+        current = self.fly_segment(current, target_lift, self.config.payload_lift_speed, "Lift object")
         if self.config.post_lift_settle_s > 0.0:
             self.get_logger().info(f"Holding after lift for {self.config.post_lift_settle_s:.2f}s to damp payload swing.")
-            current = self.hold_cmd_compliant(current, self.config.post_lift_settle_s)
-        self.publish_attitude_soft_mode(False)
+            self.hold_cmd(current, self.config.post_lift_settle_s)
         current = self.fly_to_live_waypoint(
             current,
             box_hover_waypoint,
@@ -1237,7 +1108,6 @@ class AutoGraspPlaceDataset(Node):
 
     def emergency_open_and_land(self) -> None:
         self.get_logger().warn("Emergency cleanup: opening gripper.")
-        self.publish_attitude_soft_mode(False)
         self.publish_gripper(self.config.gripper_open, repeats=5)
         if not self.config.no_land:
             self.publish_land()
@@ -1254,7 +1124,6 @@ def parse_args() -> AutoConfig:
     parser.add_argument("--gripper-feedback-topic", default="/gripper/feedback")
     parser.add_argument("--takeoff-land-topic", default="/px4ctrl/takeoff_land")
     parser.add_argument("--px4ctrl-state-topic", default="/px4ctrl/state")
-    parser.add_argument("--attitude-soft-mode-topic", default="/px4ctrl/attitude_soft_mode")
     parser.add_argument("--record-status-topic", default="/lerobot_record/status")
     parser.add_argument("--record-gate-topic", default="/auto_grasp_dataset/record_gate")
     parser.add_argument("--record-gate-value", default="START")
@@ -1389,11 +1258,6 @@ def parse_args() -> AutoConfig:
     parser.add_argument("--grasp-balance-step", type=float, default=1.5)
     parser.add_argument("--grasp-max-balance-steps", type=int, default=8)
     parser.add_argument("--grasp-angle-balance-diff", type=float, default=5.0)
-    parser.add_argument("--grasp-compliance-radius-m", type=float, default=0.35)
-    parser.add_argument("--grasp-compliance-elastic-gain", type=float, default=0.15)
-    parser.add_argument("--grasp-abort-drift-m", type=float, default=0.80)
-    parser.add_argument("--grasp-attitude-soft-rad", type=float, default=0.30)
-    parser.add_argument("--grasp-abort-attitude-rad", type=float, default=0.65)
     parser.add_argument(
         "--release-retreat-up-m",
         type=float,
@@ -1489,20 +1353,6 @@ def parse_args() -> AutoConfig:
         raise ValueError("--grasp-max-balance-steps must be >= 0.")
     if args.grasp_angle_balance_diff < 0.0:
         raise ValueError("--grasp-angle-balance-diff must be non-negative.")
-    if (
-        args.grasp_compliance_radius_m < 0.0
-        or not 0.0 <= args.grasp_compliance_elastic_gain <= 1.0
-        or args.grasp_abort_drift_m <= 0.0
-        or args.grasp_attitude_soft_rad < 0.0
-        or args.grasp_abort_attitude_rad <= 0.0
-        or args.grasp_attitude_soft_rad >= args.grasp_abort_attitude_rad
-    ):
-        raise ValueError(
-            "--grasp-compliance-radius-m must be non-negative, "
-            "--grasp-compliance-elastic-gain must be in [0, 1], "
-            "and attitude/drift thresholds must be positive and ordered."
-        )
-
     return AutoConfig(**vars(args))
 
 

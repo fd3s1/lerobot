@@ -10,9 +10,11 @@
 #include <mavros_msgs/msg/extended_state.hpp>
 #include <mavros_msgs/msg/rc_in.hpp>
 #include <mavros_msgs/msg/state.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 #include <quadrotor_msgs/msg/takeoff_land.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/battery_state.hpp>
+#include <sensor_msgs/msg/imu.hpp>
 #include <uav_utils/utils.h>
 
 #include "PX4CtrlParam.h"
@@ -59,14 +61,16 @@ public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
   Eigen::Vector3d p{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d v{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d w{Eigen::Vector3d::Zero()};
   Eigen::Quaterniond q{Eigen::Quaterniond::Identity()};
 
-  geometry_msgs::msg::PoseStamped msg;
+  nav_msgs::msg::Odometry msg;
   rclcpp::Time rcv_stamp{0, 0, RCL_ROS_TIME};
   bool recv_new_msg{false};
   bool received{false};
 
-  void feed(const geometry_msgs::msg::PoseStamped::SharedPtr pMsg, const rclcpp::Time &now);
+  void feed(const nav_msgs::msg::Odometry::SharedPtr pMsg, const rclcpp::Time &now);
   bool is_received(const rclcpp::Time &now_time, double timeout_s) const;
 };
 
@@ -85,6 +89,23 @@ public:
   mavros_msgs::msg::ExtendedState current_extended_state;
 
   void feed(const mavros_msgs::msg::ExtendedState::SharedPtr pMsg);
+};
+
+class Imu_Data_t
+{
+public:
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+  Eigen::Quaterniond q{Eigen::Quaterniond::Identity()};
+  Eigen::Vector3d w{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d a{Eigen::Vector3d::Zero()};
+
+  sensor_msgs::msg::Imu msg;
+  rclcpp::Time rcv_stamp{0, 0, RCL_ROS_TIME};
+  bool received{false};
+
+  void feed(const sensor_msgs::msg::Imu::SharedPtr pMsg, const rclcpp::Time &now);
+  bool is_received(const rclcpp::Time &now_time, double timeout_s) const;
 };
 
 class Command_Data_t
