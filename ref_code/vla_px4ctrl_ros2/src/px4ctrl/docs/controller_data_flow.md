@@ -31,6 +31,17 @@ true  -> body_rate + thrust, IGNORE_ATTITUDE
 false -> orientation + thrust, IGNORE_ROLL_RATE | IGNORE_PITCH_RATE | IGNORE_YAW_RATE
 ```
 
+The same setpoint is also mirrored for Simulink as a standard
+`nav_msgs/msg/Odometry` on `/px4ctrl/simulink/attitude_target`:
+
+```text
+pose.pose.orientation = commanded quaternion
+twist.twist.angular   = commanded body_rate
+twist.twist.linear.x  = normalized thrust
+twist.twist.linear.y  = AttitudeTarget type_mask
+twist.twist.linear.z  = output mode, 1 bodyrate, 0 attitude
+```
+
 ## Top Level Flow
 
 ```mermaid
@@ -201,6 +212,7 @@ flowchart TD
   BR --> MSG["mavros_msgs/msg/AttitudeTarget"]
   ATT --> MSG
   MSG --> PX4["/mavros/setpoint_raw/attitude"]
+  MSG --> SIM["/px4ctrl/simulink/attitude_target<br/>nav_msgs/msg/Odometry"]
 ```
 
 Variable mapping:

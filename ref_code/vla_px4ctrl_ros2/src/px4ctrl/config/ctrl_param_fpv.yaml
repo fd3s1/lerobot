@@ -12,6 +12,7 @@ px4ctrl:
       cmd: /position_cmd
       takeoff_land: /px4ctrl/takeoff_land
       setpoint: /mavros/setpoint_raw/attitude
+      simulink_setpoint: /px4ctrl/simulink/attitude_target
       expert_pose: /px4ctrl/expert_pose
       gripper_command: /gripper/command
       traj_start_trigger: /traj_start_trigger
@@ -84,12 +85,12 @@ px4ctrl:
       KAng_diag: [6.0, 6.0, 3.0]
 
     thrust_model:
-      hover_thrust: 0.35
+      hover_thrust: 0.30
       enable_estimation: true
       print_value: false
-      rho2: 0.998
+      rho2: 0.999
       min_thr2acc: 5.0
-      max_thr2acc: 40.0
+      max_thr2acc: 30.0
 
 feetech_gripper_node:
   ros__parameters:

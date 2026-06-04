@@ -465,6 +465,18 @@ void PX4CtrlFSM::publish_ctrl(const Controller_Output_t &u, const rclcpp::Time &
   }
   msg.thrust = static_cast<float>(std::clamp(u.thrust, 0.0, 1.0));
   ctrl_FCU_pub->publish(msg);
+
+  if (simulink_setpoint_pub) {
+    nav_msgs::msg::Odometry out;
+    out.header = msg.header;
+    out.child_frame_id = param.use_bodyrate_ctrl ? "bodyrate_setpoint" : "attitude_setpoint";
+    out.pose.pose.orientation = msg.orientation;
+    out.twist.twist.angular = msg.body_rate;
+    out.twist.twist.linear.x = static_cast<double>(msg.thrust);
+    out.twist.twist.linear.y = static_cast<double>(msg.type_mask);
+    out.twist.twist.linear.z = param.use_bodyrate_ctrl ? 1.0 : 0.0;
+    simulink_setpoint_pub->publish(out);
+  }
 }
 
 void PX4CtrlFSM::publish_expert_pose(const Desired_State_t &des, const rclcpp::Time &stamp)

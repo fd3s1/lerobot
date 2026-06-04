@@ -10,6 +10,7 @@
 #include <mavros_msgs/srv/command_bool.hpp>
 #include <mavros_msgs/srv/command_long.hpp>
 #include <mavros_msgs/srv/set_mode.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/string.hpp>
@@ -58,6 +59,7 @@ public:
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr traj_start_trigger_pub;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr expert_pose_pub;
   rclcpp::Publisher<mavros_msgs::msg::AttitudeTarget>::SharedPtr ctrl_FCU_pub;
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr simulink_setpoint_pub;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr gripper_cmd_pub;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr fsm_state_pub;
   rclcpp::Client<mavros_msgs::srv::SetMode>::SharedPtr set_FCU_mode_srv;
