@@ -1016,7 +1016,7 @@ def results_to_record(side, servo_id, results):
 
 
 def read_dynamic_row(packet, sides):
-    row = {"utc_time": utc_now()}
+    row = {"time_utc": datetime.now(timezone.utc).strftime("%H:%M:%S")}
     for side, servo_id in sides:
         results = {
             result["label"]: result
@@ -1033,17 +1033,19 @@ def print_watch_header():
         "\nWatching present positions every cycle. Move the gripper by hand and record present_pos. "
         "Press Ctrl+C to stop."
     )
+    print("-" * 70)
     print(
-        "%-27s %10s %10s %10s %10s %8s %8s"
-        % ("utc_time", "left_pos", "right_pos", "left_cur", "right_cur", "L_temp", "R_temp")
+        "%-10s | %8s %8s | %7s %7s | %5s %5s"
+        % ("time_utc", "L_pos", "R_pos", "L_cur", "R_cur", "L_tmp", "R_tmp")
     )
+    print("-" * 70)
 
 
 def print_watch_row(row):
     print(
-        "%-27s %10s %10s %10s %10s %8s %8s"
+        "%-10s | %8s %8s | %7s %7s | %5s %5s"
         % (
-            row["utc_time"],
+            row["time_utc"],
             row["left_pos"],
             row["right_pos"],
             row["left_current"],
