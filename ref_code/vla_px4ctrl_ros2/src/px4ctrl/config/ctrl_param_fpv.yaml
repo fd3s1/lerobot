@@ -1,7 +1,7 @@
 px4ctrl:
   ros__parameters:
     ctrl_freq_max: 100.0
-    max_manual_vel: 1.5
+    max_manual_vel: 2.0
     frame_id: map
     use_bodyrate_ctrl: false
 
@@ -62,14 +62,14 @@ px4ctrl:
 
     cmd_feedforward:
       enable: false
-      max_velocity: 1.5
-      max_acceleration: 1.0
+      max_velocity: 2.0
+      max_acceleration: 2.0
 
     controller:
       gravity: 9.81
-      max_angle_deg: 25.0
-      max_bodyrate_x: 2.0
-      max_bodyrate_y: 2.0
+      max_angle_deg: 35.0
+      max_bodyrate_x: 2.5
+      max_bodyrate_y: 2.5
       max_bodyrate_z: 1.5
       min_thrust: 0.05
       max_thrust: 0.90
@@ -88,7 +88,7 @@ px4ctrl:
       hover_thrust: 0.30
       enable_estimation: true
       print_value: false
-      rho2: 0.995
+      rho2: 0.998
       min_thr2acc: 5.0
       max_thr2acc: 40.0
 
