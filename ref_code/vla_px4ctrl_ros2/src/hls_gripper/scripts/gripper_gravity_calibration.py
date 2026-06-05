@@ -971,6 +971,90 @@ def print_read_result(result):
         print("  %-18s FAILED %s" % (label + ":", result["error"]))
 
 
+def result_value_text(result):
+    if result["ok"]:
+        return str(result["value"])
+    return "ERR"
+
+
+def read_servo_registers(packet, servo_id, include_limits):
+    results = [
+        read_optional(packet, "model_l", lambda servo_id=servo_id: packet.read1ByteTxRx(servo_id, HLS_MODEL_L)),
+        read_optional(packet, "id_register", lambda servo_id=servo_id: packet.read1ByteTxRx(servo_id, HLS_ID)),
+        read_optional(packet, "baud_register", lambda servo_id=servo_id: packet.read1ByteTxRx(servo_id, HLS_BAUD_RATE)),
+        read_optional(packet, "mode", lambda servo_id=servo_id: packet.read1ByteTxRx(servo_id, HLS_MODE)),
+        read_optional(packet, "present_pos", lambda servo_id=servo_id: packet.ReadPos(servo_id)),
+        read_optional(packet, "current", lambda servo_id=servo_id: packet.ReadCurrent(servo_id)),
+        read_optional(packet, "temperature", lambda servo_id=servo_id: packet.ReadTemper(servo_id)),
+    ]
+    if include_limits:
+        results.extend(
+            [
+                read_optional(
+                    packet,
+                    "min_limit_raw",
+                    lambda servo_id=servo_id: packet.read2ByteTxRx(servo_id, HLS_MIN_ANGLE_LIMIT_L),
+                ),
+                read_optional(
+                    packet,
+                    "max_limit_raw",
+                    lambda servo_id=servo_id: packet.read2ByteTxRx(servo_id, HLS_MAX_ANGLE_LIMIT_L),
+                ),
+            ]
+        )
+    return results
+
+
+def results_to_record(side, servo_id, results):
+    record = {"side": side, "id": servo_id}
+    for result in results:
+        record[result["label"]] = result["value"]
+        record[result["label"] + "_ok"] = result["ok"]
+        if result["error"]:
+            record[result["label"] + "_error"] = result["error"]
+    return record
+
+
+def read_dynamic_row(packet, sides):
+    row = {"utc_time": utc_now()}
+    for side, servo_id in sides:
+        results = {
+            result["label"]: result
+            for result in read_servo_registers(packet, servo_id, include_limits=False)
+        }
+        row[f"{side}_pos"] = result_value_text(results["present_pos"])
+        row[f"{side}_current"] = result_value_text(results["current"])
+        row[f"{side}_temp"] = result_value_text(results["temperature"])
+    return row
+
+
+def print_watch_header():
+    print(
+        "\nWatching present positions every cycle. Move the gripper by hand and record present_pos. "
+        "Press Ctrl+C to stop."
+    )
+    print(
+        "%-27s %10s %10s %10s %10s %8s %8s"
+        % ("utc_time", "left_pos", "right_pos", "left_cur", "right_cur", "L_temp", "R_temp")
+    )
+
+
+def print_watch_row(row):
+    print(
+        "%-27s %10s %10s %10s %10s %8s %8s"
+        % (
+            row["utc_time"],
+            row["left_pos"],
+            row["right_pos"],
+            row["left_current"],
+            row["right_current"],
+            row["left_temp"],
+            row["right_temp"],
+        ),
+        flush=True,
+    )
+
+
 def read_limits(args):
     load_sdk(args.sdk_root)
     port = PortHandler(args.port)
@@ -988,33 +1072,21 @@ def read_limits(args):
         print("read-limits is read-only: it does not change mode, torque, or position.")
         for side, servo_id in sides:
             print("\n%s id=%s" % (side, servo_id))
-            results = [
-                read_optional(packet, "model_l", lambda servo_id=servo_id: packet.read1ByteTxRx(servo_id, HLS_MODEL_L)),
-                read_optional(packet, "id_register", lambda servo_id=servo_id: packet.read1ByteTxRx(servo_id, HLS_ID)),
-                read_optional(packet, "baud_register", lambda servo_id=servo_id: packet.read1ByteTxRx(servo_id, HLS_BAUD_RATE)),
-                read_optional(packet, "mode", lambda servo_id=servo_id: packet.read1ByteTxRx(servo_id, HLS_MODE)),
-                read_optional(packet, "present_pos", lambda servo_id=servo_id: packet.ReadPos(servo_id)),
-                read_optional(packet, "current", lambda servo_id=servo_id: packet.ReadCurrent(servo_id)),
-                read_optional(packet, "temperature", lambda servo_id=servo_id: packet.ReadTemper(servo_id)),
-                read_optional(
-                    packet,
-                    "min_limit_raw",
-                    lambda servo_id=servo_id: packet.read2ByteTxRx(servo_id, HLS_MIN_ANGLE_LIMIT_L),
-                ),
-                read_optional(
-                    packet,
-                    "max_limit_raw",
-                    lambda servo_id=servo_id: packet.read2ByteTxRx(servo_id, HLS_MAX_ANGLE_LIMIT_L),
-                ),
-            ]
-            record = {"side": side, "id": servo_id}
+            results = read_servo_registers(packet, servo_id, include_limits=True)
             for result in results:
                 print_read_result(result)
-                record[result["label"]] = result["value"]
-                record[result["label"] + "_ok"] = result["ok"]
-                if result["error"]:
-                    record[result["label"] + "_error"] = result["error"]
-            records.append(record)
+            records.append(results_to_record(side, servo_id, results))
+
+        if args.watch:
+            if args.watch_period <= 0.0:
+                raise RuntimeError("--watch-period must be positive")
+            print_watch_header()
+            try:
+                while True:
+                    print_watch_row(read_dynamic_row(packet, sides))
+                    time.sleep(args.watch_period)
+            except KeyboardInterrupt:
+                print("\nwatch stopped")
     finally:
         port.closePort()
 
@@ -1197,6 +1269,8 @@ def add_read_limits_args(subparsers):
     parser.add_argument("--left-id", type=int, default=1)
     parser.add_argument("--right-id", type=int, default=2)
     parser.add_argument("--output-json", default="")
+    parser.add_argument("--watch", action="store_true", help="keep printing present positions until Ctrl+C")
+    parser.add_argument("--watch-period", type=float, default=2.0, help="seconds between watch updates")
     parser.set_defaults(func=read_limits)
 
 

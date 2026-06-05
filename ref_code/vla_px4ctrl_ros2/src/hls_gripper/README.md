@@ -48,6 +48,12 @@ current, temperature, and stored min/max angle limit registers:
 GRIPPER_PORT=/dev/ttyACM1 bash shflies/gripper_gravity_calibration.sh read-limits
 ```
 
+To watch live positions while manually moving the fingers:
+
+```bash
+GRIPPER_PORT=/dev/ttyACM1 bash shflies/gripper_gravity_calibration.sh read-limits --watch
+```
+
 The min/max registers reflect the limits configured in the Windows tool, but
 they do not tell which endpoint is physically open or closed. Use
 `present_pos` while placing the fingers at the actual mechanical open, clear,
