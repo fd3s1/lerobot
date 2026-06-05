@@ -8,9 +8,10 @@ ROS2 launch/config files, and the future flight gripper force-control node.
 
 ## Gravity Calibration
 
-The calibration tool has three subcommands:
+The calibration tool has four subcommands:
 
 ```bash
+python3 src/hls_gripper/scripts/gripper_gravity_calibration.py read-limits --help
 python3 src/hls_gripper/scripts/gripper_gravity_calibration.py collect --help
 python3 src/hls_gripper/scripts/gripper_gravity_calibration.py collect-full --help
 python3 src/hls_gripper/scripts/gripper_gravity_calibration.py fit --help
@@ -20,6 +21,7 @@ For field use, prefer the workspace wrapper because it follows the existing
 `shflies` convention and sources ROS2 before collection:
 
 ```bash
+bash shflies/gripper_gravity_calibration.sh read-limits --help
 bash shflies/gripper_gravity_calibration.sh collect --help
 bash shflies/gripper_gravity_calibration.sh collect-full --help
 bash shflies/gripper_gravity_calibration.sh fit --help
@@ -38,6 +40,19 @@ Override the gripper serial for one run with:
 ```bash
 GRIPPER_PORT=/dev/ttyUSB0 bash shflies/gripper_gravity_calibration.sh collect ...
 ```
+
+`read-limits` is a read-only helper for checking HLS IDs, present positions,
+current, temperature, and stored min/max angle limit registers:
+
+```bash
+GRIPPER_PORT=/dev/ttyACM1 bash shflies/gripper_gravity_calibration.sh read-limits
+```
+
+The min/max registers reflect the limits configured in the Windows tool, but
+they do not tell which endpoint is physically open or closed. Use
+`present_pos` while placing the fingers at the actual mechanical open, clear,
+and max postures to fill `--left-open`, `--left-clear`, `--left-max`,
+`--right-open`, `--right-clear`, and `--right-max`.
 
 `collect` sweeps the empty gripper through calibrated open/close limits and
 records position, current, load, temperature, and optional ROS2 attitude. Keep

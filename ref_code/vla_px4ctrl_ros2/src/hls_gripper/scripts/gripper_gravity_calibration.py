@@ -38,6 +38,12 @@ HLS_PRESENT_VOLTAGE = None
 HLS_PRESENT_TEMPERATURE = None
 HLS_MOVING = None
 HLS_PRESENT_CURRENT_L = None
+HLS_MODEL_L = None
+HLS_ID = None
+HLS_BAUD_RATE = None
+HLS_MIN_ANGLE_LIMIT_L = None
+HLS_MAX_ANGLE_LIMIT_L = None
+HLS_MODE = None
 
 
 SCHEMA_VERSION = 1
@@ -111,6 +117,12 @@ def load_sdk(sdk_root=None):
     global HLS_PRESENT_TEMPERATURE
     global HLS_MOVING
     global HLS_PRESENT_CURRENT_L
+    global HLS_MODEL_L
+    global HLS_ID
+    global HLS_BAUD_RATE
+    global HLS_MIN_ANGLE_LIMIT_L
+    global HLS_MAX_ANGLE_LIMIT_L
+    global HLS_MODE
 
     if SDK_LOADED:
         return
@@ -144,6 +156,12 @@ def load_sdk(sdk_root=None):
     HLS_PRESENT_TEMPERATURE = sdk.HLS_PRESENT_TEMPERATURE
     HLS_MOVING = sdk.HLS_MOVING
     HLS_PRESENT_CURRENT_L = sdk.HLS_PRESENT_CURRENT_L
+    HLS_MODEL_L = sdk.HLS_MODEL_L
+    HLS_ID = sdk.HLS_ID
+    HLS_BAUD_RATE = sdk.HLS_BAUD_RATE
+    HLS_MIN_ANGLE_LIMIT_L = sdk.HLS_MIN_ANGLE_LIMIT_L
+    HLS_MAX_ANGLE_LIMIT_L = sdk.HLS_MAX_ANGLE_LIMIT_L
+    HLS_MODE = sdk.HLS_MODE
     SDK_LOADED = True
 
 
@@ -924,6 +942,106 @@ def fit(args):
     write_compensation_outputs(table, args.output, args.curve_csv)
 
 
+def comm_error_text(packet, result, error):
+    parts = []
+    if result != COMM_SUCCESS:
+        parts.append(packet.getTxRxResult(result))
+    if error:
+        parts.append(packet.getRxPacketError(error))
+    return "; ".join(parts) if parts else ""
+
+
+def read_optional(packet, label, read_fn):
+    value, result, error = read_fn()
+    if result == COMM_SUCCESS and error == 0:
+        return {"label": label, "ok": True, "value": value, "error": ""}
+    return {
+        "label": label,
+        "ok": False,
+        "value": None,
+        "error": comm_error_text(packet, result, error),
+    }
+
+
+def print_read_result(result):
+    label = result["label"]
+    if result["ok"]:
+        print("  %-18s %s" % (label + ":", result["value"]))
+    else:
+        print("  %-18s FAILED %s" % (label + ":", result["error"]))
+
+
+def read_limits(args):
+    load_sdk(args.sdk_root)
+    port = PortHandler(args.port)
+    packet = hls(port)
+
+    if not port.openPort():
+        raise RuntimeError("failed to open port %s" % args.port)
+    if not port.setBaudRate(args.baud):
+        raise RuntimeError("failed to set baudrate %s" % args.baud)
+
+    sides = (("left", args.left_id), ("right", args.right_id))
+    records = []
+    try:
+        print("port=%s baud=%s" % (args.port, args.baud))
+        print("read-limits is read-only: it does not change mode, torque, or position.")
+        for side, servo_id in sides:
+            print("\n%s id=%s" % (side, servo_id))
+            results = [
+                read_optional(packet, "model_l", lambda servo_id=servo_id: packet.read1ByteTxRx(servo_id, HLS_MODEL_L)),
+                read_optional(packet, "id_register", lambda servo_id=servo_id: packet.read1ByteTxRx(servo_id, HLS_ID)),
+                read_optional(packet, "baud_register", lambda servo_id=servo_id: packet.read1ByteTxRx(servo_id, HLS_BAUD_RATE)),
+                read_optional(packet, "mode", lambda servo_id=servo_id: packet.read1ByteTxRx(servo_id, HLS_MODE)),
+                read_optional(packet, "present_pos", lambda servo_id=servo_id: packet.ReadPos(servo_id)),
+                read_optional(packet, "current", lambda servo_id=servo_id: packet.ReadCurrent(servo_id)),
+                read_optional(packet, "temperature", lambda servo_id=servo_id: packet.ReadTemper(servo_id)),
+                read_optional(
+                    packet,
+                    "min_limit_raw",
+                    lambda servo_id=servo_id: packet.read2ByteTxRx(servo_id, HLS_MIN_ANGLE_LIMIT_L),
+                ),
+                read_optional(
+                    packet,
+                    "max_limit_raw",
+                    lambda servo_id=servo_id: packet.read2ByteTxRx(servo_id, HLS_MAX_ANGLE_LIMIT_L),
+                ),
+            ]
+            record = {"side": side, "id": servo_id}
+            for result in results:
+                print_read_result(result)
+                record[result["label"]] = result["value"]
+                record[result["label"] + "_ok"] = result["ok"]
+                if result["error"]:
+                    record[result["label"] + "_error"] = result["error"]
+            records.append(record)
+    finally:
+        port.closePort()
+
+    if args.output_json:
+        ensure_parent(args.output_json)
+        with open(args.output_json, "w") as json_file:
+            json.dump(
+                {
+                    "schema_version": 1,
+                    "utc_time": utc_now(),
+                    "port": args.port,
+                    "baud": args.baud,
+                    "servos": records,
+                },
+                json_file,
+                indent=2,
+                sort_keys=True,
+            )
+            json_file.write("\n")
+        print("\nwrote readback JSON: %s" % args.output_json)
+
+    print(
+        "\nUse present_pos to record open/clear/max at the actual mechanical posture. "
+        "min_limit_raw and max_limit_raw are only the stored Windows angle limits."
+    )
+
+
 def write_curve_csv(path, table):
     ensure_parent(path)
     fields = [
@@ -1061,11 +1179,33 @@ def add_fit_args(subparsers):
     parser.set_defaults(func=fit)
 
 
+def add_read_limits_args(subparsers):
+    parser = subparsers.add_parser(
+        "read-limits",
+        help="read HLS present positions and stored angle limit registers without writing to servos",
+    )
+    parser.add_argument("--port", default="/dev/ttyACM1")
+    parser.add_argument("--baud", type=int, default=1000000)
+    parser.add_argument(
+        "--sdk-root",
+        default="",
+        help=(
+            "Path containing scservo_sdk. Defaults to the FT-servo reference SDK "
+            "next to this ROS2 workspace."
+        ),
+    )
+    parser.add_argument("--left-id", type=int, default=1)
+    parser.add_argument("--right-id", type=int, default=2)
+    parser.add_argument("--output-json", default="")
+    parser.set_defaults(func=read_limits)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Collect and fit HLS two-finger gripper gravity compensation data."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+    add_read_limits_args(subparsers)
     add_collect_args(subparsers)
     add_collect_full_args(subparsers)
     add_fit_args(subparsers)

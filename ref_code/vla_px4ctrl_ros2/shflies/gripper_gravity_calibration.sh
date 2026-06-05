@@ -35,6 +35,12 @@ command="$1"
 shift
 
 case "${command}" in
+  read-limits)
+    echo "[gripper-gravity-calibration] port: ${GRIPPER_PORT}"
+    python3 "${CALIBRATION_SCRIPT}" read-limits \
+      --port "${GRIPPER_PORT}" \
+      "$@"
+    ;;
   collect)
     echo "[gripper-gravity-calibration] port: ${GRIPPER_PORT}"
     echo "[gripper-gravity-calibration] attitude: ${ATTITUDE_SOURCE} ${ATTITUDE_TOPIC}"
@@ -61,7 +67,7 @@ case "${command}" in
     ;;
   *)
     echo "[gripper-gravity-calibration] unknown command: ${command}" >&2
-    echo "[gripper-gravity-calibration] expected: collect, collect-full, or fit" >&2
+    echo "[gripper-gravity-calibration] expected: read-limits, collect, collect-full, or fit" >&2
     exit 2
     ;;
 esac
