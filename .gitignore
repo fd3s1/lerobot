@@ -176,6 +176,7 @@ outputs/
 *.stl
 *.urdf
 *.xml
+!**/package.xml
 *.part
 
 # Local credentials; never commit GitHub tokens or passwords.
