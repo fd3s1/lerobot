@@ -1,0 +1,339 @@
+#!/usr/bin/python3
+
+from __future__ import annotations
+
+import argparse
+import math
+import sys
+import time
+from dataclasses import dataclass, replace
+
+import rclpy
+from rclpy.utilities import remove_ros_args
+from std_msgs.msg import Bool, Float64, String
+
+from auto_grasp_place_dataset import AutoConfig, AutoGraspPlaceDataset, PoseSample, parse_args as parse_auto_args
+
+
+HLS_PRE_LIFT_STATES = {
+    "SEARCH_OBJECT",
+    "LEFT_CONTACT",
+    "RIGHT_CONTACT",
+    "BOTH_CONTACT",
+    "CENTERING",
+    "CENTERED",
+    "FINAL_GRIP",
+}
+
+HLS_CENTERING_STATES = {"BOTH_CONTACT", "CENTERING"}
+
+
+@dataclass(frozen=True)
+class HlsTaskConfig:
+    hls_status_topic: str
+    hls_status_timeout_s: float
+    hls_grasp_timeout_s: float
+    open_command: float
+    close_command: float
+    center_deadband_m: float
+    center_kp: float
+    center_vmax_mps: float
+    center_offset_max_m: float
+    center_command_sign: float
+    single_contact_vmax_mps: float
+    single_contact_offset_max_m: float
+    single_contact_body_y_sign: float
+    abort_rise_m: float
+    abort_rise_speed: float
+
+
+@dataclass
+class StandardHlsStatus:
+    state: str = "UNKNOWN"
+    center_error_m: float = 0.0
+    safe_to_lift: bool = False
+    fault: bool = False
+    fault_reason: str = ""
+    left_contact: bool = False
+    right_contact: bool = False
+    single_contact_need_motion: bool = False
+    single_contact_direction: float = 0.0
+    left_at_close_limit: bool = False
+    right_at_close_limit: bool = False
+
+
+def status_prefix_from_topic(topic: str) -> str:
+    topic = topic.rstrip("/")
+    if topic.endswith("/status"):
+        return topic[: -len("/status")]
+    return topic
+
+
+class AutoHlsGraspPlace(AutoGraspPlaceDataset):
+    def __init__(self, config: AutoConfig, hls_config: HlsTaskConfig) -> None:
+        super().__init__(config)
+        self.hls_config = hls_config
+        self.status_prefix = status_prefix_from_topic(hls_config.hls_status_topic)
+        self.hls_status = StandardHlsStatus()
+        self.hls_status_stamps: dict[str, float] = {}
+        self.create_subscription(String, f"{self.status_prefix}/state", self._string_cb("state"), 10)
+        self.create_subscription(String, f"{self.status_prefix}/fault_reason", self._string_cb("fault_reason"), 10)
+        self.create_subscription(Float64, f"{self.status_prefix}/center_error_m", self._float_cb("center_error_m"), 10)
+        self.create_subscription(
+            Float64,
+            f"{self.status_prefix}/single_contact_direction",
+            self._float_cb("single_contact_direction"),
+            10,
+        )
+        for name in (
+            "safe_to_lift",
+            "fault",
+            "left_contact",
+            "right_contact",
+            "single_contact_need_motion",
+            "left_at_close_limit",
+            "right_at_close_limit",
+        ):
+            self.create_subscription(Bool, f"{self.status_prefix}/{name}", self._bool_cb(name), 10)
+        self.get_logger().info(
+            "Auto HLS grasp/place started without dataset recording. "
+            f"status_prefix={self.status_prefix}"
+        )
+
+    def _string_cb(self, name: str):
+        def callback(msg: String) -> None:
+            setattr(self.hls_status, name, str(msg.data))
+            self.hls_status_stamps[name] = time.monotonic()
+
+        return callback
+
+    def _float_cb(self, name: str):
+        def callback(msg: Float64) -> None:
+            setattr(self.hls_status, name, float(msg.data))
+            self.hls_status_stamps[name] = time.monotonic()
+
+        return callback
+
+    def _bool_cb(self, name: str):
+        def callback(msg: Bool) -> None:
+            setattr(self.hls_status, name, bool(msg.data))
+            self.hls_status_stamps[name] = time.monotonic()
+
+        return callback
+
+    def wait_for_record_ready(self) -> None:
+        return
+
+    def publish_record_gate(self) -> None:
+        return
+
+    def hls_status_fresh(self) -> bool:
+        now = time.monotonic()
+        for name in ("state", "center_error_m", "safe_to_lift", "fault", "single_contact_need_motion", "single_contact_direction"):
+            stamp = self.hls_status_stamps.get(name)
+            if stamp is None or now - stamp > self.hls_config.hls_status_timeout_s:
+                return False
+        return True
+
+    def latest_hls_status_or_raise(self) -> StandardHlsStatus:
+        if self.hls_status_fresh():
+            return self.hls_status
+        raise RuntimeError(f"No fresh HLS gripper standard status under {self.status_prefix}.")
+
+    def wait_for_hls_status(self) -> StandardHlsStatus:
+        deadline = time.monotonic() + max(0.5, self.config.state_timeout_s)
+        while rclpy.ok() and time.monotonic() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.05)
+            if self.hls_status_fresh():
+                return self.hls_status
+        raise RuntimeError(f"Timed out waiting for HLS gripper standard status under {self.status_prefix}.")
+
+    def pose_with_body_y_offset(self, reference: PoseSample, body_y_offset_m: float) -> PoseSample:
+        return self.checked_pose(
+            x=reference.x - math.sin(reference.yaw) * body_y_offset_m,
+            y=reference.y + math.cos(reference.yaw) * body_y_offset_m,
+            z=reference.z,
+            yaw=reference.yaw,
+        )
+
+    def abort_before_lift(self, current: PoseSample, reference: PoseSample, reason: str) -> PoseSample:
+        self.get_logger().error(f"HLS grasp failed before lift: {reason}")
+        self.publish_gripper(self.hls_config.open_command, repeats=5)
+        abort_z = min(self.config.z_max, max(current.z, reference.z + self.hls_config.abort_rise_m))
+        abort_pose = self.checked_pose(current.x, current.y, abort_z, current.yaw)
+        self.get_logger().warn(
+            f"Opening gripper and rising away from target: z={abort_pose.z:.3f} speed={self.hls_config.abort_rise_speed:.3f}."
+        )
+        return self.fly_segment(current, abort_pose, self.hls_config.abort_rise_speed, "Abort rise after failed HLS grasp")
+
+    def soft_grasp(self, reference: PoseSample) -> PoseSample:
+        self.wait_for_hls_status()
+        self.hold_cmd(reference, 0.3)
+        self.publish_gripper(self.hls_config.close_command, repeats=5)
+
+        period = 1.0 / self.config.rate_hz
+        deadline = time.monotonic() + self.hls_config.hls_grasp_timeout_s
+        latest = reference
+        center_offset_m = 0.0
+        single_contact_offset_m = 0.0
+        last_t = time.monotonic()
+        last_log_s = 0.0
+
+        self.get_logger().info(
+            "HLS force grasp requested. Holding pre-grasp pose, using slow body-y motion for single-side "
+            "contact if requested, then applying small body-y centering corrections."
+        )
+
+        while rclpy.ok() and time.monotonic() < deadline:
+            now = time.monotonic()
+            dt = max(1e-3, now - last_t)
+            last_t = now
+            rclpy.spin_once(self, timeout_sec=0.0)
+
+            if self.px4ctrl_state != "CMD_CTRL":
+                raise RuntimeError(f"px4ctrl left CMD_CTRL during HLS grasp; latest={self.px4ctrl_state!r}.")
+
+            try:
+                status = self.latest_hls_status_or_raise()
+            except RuntimeError as exc:
+                latest = self.abort_before_lift(latest, reference, str(exc))
+                raise
+
+            if status.fault:
+                latest = self.abort_before_lift(latest, reference, status.fault_reason or "HLS fault")
+                raise RuntimeError(f"HLS gripper fault: {status.fault_reason}")
+
+            if status.safe_to_lift or status.state == "LIFT_READY":
+                self.get_logger().info("HLS reports safe_to_lift; automatic lift may start.")
+                return latest
+
+            if status.state in ("LEFT_CONTACT", "RIGHT_CONTACT") and status.single_contact_need_motion:
+                direction = max(-1.0, min(1.0, float(status.single_contact_direction)))
+                vy = self.hls_config.single_contact_body_y_sign * direction * self.hls_config.single_contact_vmax_mps
+                single_contact_offset_m += vy * dt
+                single_contact_offset_m = max(
+                    -self.hls_config.single_contact_offset_max_m,
+                    min(self.hls_config.single_contact_offset_max_m, single_contact_offset_m),
+                )
+                if abs(single_contact_offset_m) >= self.hls_config.single_contact_offset_max_m:
+                    latest = self.pose_with_body_y_offset(reference, single_contact_offset_m + center_offset_m)
+                    latest = self.abort_before_lift(latest, reference, "single-contact body-y search offset limit")
+                    raise RuntimeError("HLS single-contact search reached body-y offset limit before two-sided contact.")
+                latest = self.pose_with_body_y_offset(reference, single_contact_offset_m + center_offset_m)
+            elif status.state in HLS_CENTERING_STATES:
+                error_m = float(status.center_error_m)
+                if abs(error_m) > self.hls_config.center_deadband_m:
+                    vy = self.hls_config.center_command_sign * self.hls_config.center_kp * error_m
+                    vy = max(-self.hls_config.center_vmax_mps, min(self.hls_config.center_vmax_mps, vy))
+                    center_offset_m += vy * dt
+                    center_offset_m = max(
+                        -self.hls_config.center_offset_max_m,
+                        min(self.hls_config.center_offset_max_m, center_offset_m),
+                    )
+                latest = self.pose_with_body_y_offset(reference, single_contact_offset_m + center_offset_m)
+            elif status.state in ("CENTERED", "FINAL_GRIP"):
+                latest = self.pose_with_body_y_offset(reference, single_contact_offset_m + center_offset_m)
+            elif status.state in HLS_PRE_LIFT_STATES:
+                latest = self.pose_with_body_y_offset(reference, single_contact_offset_m + center_offset_m)
+            else:
+                latest = self.pose_with_body_y_offset(reference, single_contact_offset_m + center_offset_m)
+
+            self.publish_cmd(latest)
+            self.publish_gripper(self.hls_config.close_command, repeats=1, interval_s=0.0)
+
+            if now - last_log_s >= 0.5:
+                last_log_s = now
+                self.get_logger().info(
+                    f"HLS state={status.state} center={status.center_error_m:+.4f}m "
+                    f"body_y_offset={single_contact_offset_m + center_offset_m:+.4f}m "
+                    f"single={single_contact_offset_m:+.4f}m center_trim={center_offset_m:+.4f}m "
+                    f"motion={int(status.single_contact_need_motion)} dir={status.single_contact_direction:+.0f} "
+                    f"contact=({int(status.left_contact)},{int(status.right_contact)})"
+                )
+            time.sleep(period)
+
+        latest = self.abort_before_lift(latest, reference, "HLS grasp timeout")
+        raise RuntimeError("HLS grasp timed out before safe_to_lift.")
+
+    def emergency_open_and_land(self) -> None:
+        self.get_logger().warn("Emergency cleanup: opening HLS gripper.")
+        self.publish_gripper(self.hls_config.open_command, repeats=5)
+        if not self.config.no_land:
+            self.get_logger().warn(
+                f"Stopping position commands for {self.config.command_stop_before_land_s:.1f}s before LAND."
+            )
+            self.spin_sleep(self.config.command_stop_before_land_s)
+            self.publish_land()
+
+
+def parse_configs() -> tuple[AutoConfig, HlsTaskConfig]:
+    raw_args = remove_ros_args(args=sys.argv)[1:]
+    hls_parser = argparse.ArgumentParser(add_help=False)
+    hls_parser.add_argument("--hls-status-topic", default="/hls_gripper/status")
+    hls_parser.add_argument("--hls-status-timeout-s", type=float, default=0.8)
+    hls_parser.add_argument("--hls-grasp-timeout-s", type=float, default=12.0)
+    hls_parser.add_argument("--open-command", type=float, default=100.0)
+    hls_parser.add_argument("--close-command", type=float, default=0.0)
+    hls_parser.add_argument("--center-deadband-m", type=float, default=0.005)
+    hls_parser.add_argument("--center-kp", type=float, default=0.8)
+    hls_parser.add_argument("--center-vmax-mps", type=float, default=0.03)
+    hls_parser.add_argument("--center-offset-max-m", type=float, default=0.08)
+    hls_parser.add_argument("--center-command-sign", type=float, default=1.0)
+    hls_parser.add_argument("--single-contact-vmax-mps", type=float, default=0.015)
+    hls_parser.add_argument("--single-contact-offset-max-m", type=float, default=0.10)
+    hls_parser.add_argument("--single-contact-body-y-sign", type=float, default=1.0)
+    hls_parser.add_argument("--abort-rise-m", type=float, default=0.25)
+    hls_parser.add_argument("--abort-rise-speed", type=float, default=0.12)
+    hls_args, remaining = hls_parser.parse_known_args(raw_args)
+
+    old_argv = sys.argv
+    try:
+        sys.argv = [old_argv[0], *remaining]
+        auto_config = parse_auto_args()
+    finally:
+        sys.argv = old_argv
+
+    auto_config = replace(
+        auto_config,
+        record_status_topic="",
+        record_gate_topic="/auto_hls_grasp_place/unused_record_gate",
+        record_duration_s=0.1,
+        record_start_hold_s=0.0,
+    )
+    hls_config = HlsTaskConfig(**vars(hls_args))
+    if hls_config.hls_status_timeout_s <= 0.0:
+        raise ValueError("--hls-status-timeout-s must be positive.")
+    if hls_config.hls_grasp_timeout_s <= 0.0:
+        raise ValueError("--hls-grasp-timeout-s must be positive.")
+    if hls_config.center_kp < 0.0 or hls_config.center_vmax_mps <= 0.0 or hls_config.center_offset_max_m <= 0.0:
+        raise ValueError("--center-kp must be non-negative; center speed/offset limits must be positive.")
+    if hls_config.single_contact_vmax_mps <= 0.0 or hls_config.single_contact_offset_max_m <= 0.0:
+        raise ValueError("--single-contact-vmax-mps and --single-contact-offset-max-m must be positive.")
+    if hls_config.single_contact_body_y_sign == 0.0:
+        raise ValueError("--single-contact-body-y-sign must be non-zero.")
+    if hls_config.abort_rise_m < 0.0 or hls_config.abort_rise_speed <= 0.0:
+        raise ValueError("--abort-rise-m must be non-negative and --abort-rise-speed must be positive.")
+    return auto_config, hls_config
+
+
+def main() -> None:
+    auto_config, hls_config = parse_configs()
+    rclpy.init()
+    node = AutoHlsGraspPlace(auto_config, hls_config)
+    try:
+        node.run_sequence()
+    except KeyboardInterrupt:
+        node.emergency_open_and_land()
+        raise
+    except Exception as exc:
+        node.get_logger().error(f"Automatic HLS sequence failed: {exc}")
+        node.emergency_open_and_land()
+        raise
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()

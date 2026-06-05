@@ -1,0 +1,1025 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import importlib
+import json
+import math
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal
+
+import rclpy
+from quadrotor_msgs.msg import GripperCommandPair, GripperFeedback
+from rclpy.node import Node
+from sensor_msgs.msg import Imu
+from std_msgs.msg import Bool, Float64, String
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PACKAGE_DIR = SCRIPT_DIR.parent
+REF_CODE_DIR = PACKAGE_DIR.parent.parent.parent
+
+SDK_LOADED = False
+COMM_SUCCESS = None
+PortHandler = None
+hls = None
+HLS_PRESENT_POSITION_L = None
+HLS_PRESENT_CURRENT_H = None
+HLS_PRESENT_SPEED_L = None
+HLS_PRESENT_LOAD_L = None
+HLS_PRESENT_VOLTAGE = None
+HLS_PRESENT_TEMPERATURE = None
+HLS_MOVING = None
+HLS_PRESENT_CURRENT_L = None
+
+
+STATE_OPEN = "OPEN"
+STATE_SEARCH_OBJECT = "SEARCH_OBJECT"
+STATE_LEFT_CONTACT = "LEFT_CONTACT"
+STATE_RIGHT_CONTACT = "RIGHT_CONTACT"
+STATE_BOTH_CONTACT = "BOTH_CONTACT"
+STATE_CENTERING = "CENTERING"
+STATE_CENTERED = "CENTERED"
+STATE_FINAL_GRIP = "FINAL_GRIP"
+STATE_LIFT_READY = "LIFT_READY"
+STATE_FAULT = "FAULT"
+
+SIDE_LEFT = "left"
+SIDE_RIGHT = "right"
+
+
+@dataclass(frozen=True)
+class ServoCalibration:
+    servo_id: int
+    open_pos: int
+    clear_pos: int
+    close_pos: int
+    inward_sign: int
+
+
+@dataclass
+class ServoFeedback:
+    pos: float
+    close_ratio: float
+    speed: float
+    load: float
+    voltage: float
+    temp: float
+    moving: float
+    current: float
+    baseline_current: float = 0.0
+    residual_current: float = 0.0
+
+
+@dataclass(frozen=True)
+class CommandIntent:
+    mode: Literal["open", "grasp", "hold"]
+    value: float
+
+
+def clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def quaternion_to_euler_deg(x: float, y: float, z: float, w: float) -> tuple[float, float, float]:
+    sinr_cosp = 2.0 * (w * x + y * z)
+    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+
+    sinp = 2.0 * (w * y - z * x)
+    if abs(sinp) >= 1.0:
+        pitch = math.copysign(math.pi / 2.0, sinp)
+    else:
+        pitch = math.asin(sinp)
+
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+    return math.degrees(roll), math.degrees(pitch), math.degrees(yaw)
+
+
+def default_sdk_candidates() -> list[Path]:
+    return [
+        REF_CODE_DIR / "FT-servo" / "FTServo_Python-main" / "FTServo_Python-main",
+        Path.cwd() / "lerobot" / "ref_code" / "FT-servo" / "FTServo_Python-main" / "FTServo_Python-main",
+        Path.cwd() / "FT-servo" / "FTServo_Python-main" / "FTServo_Python-main",
+    ]
+
+
+def load_sdk(sdk_root: str = "") -> None:
+    global SDK_LOADED
+    global COMM_SUCCESS
+    global PortHandler
+    global hls
+    global HLS_PRESENT_POSITION_L
+    global HLS_PRESENT_CURRENT_H
+    global HLS_PRESENT_SPEED_L
+    global HLS_PRESENT_LOAD_L
+    global HLS_PRESENT_VOLTAGE
+    global HLS_PRESENT_TEMPERATURE
+    global HLS_MOVING
+    global HLS_PRESENT_CURRENT_L
+
+    if SDK_LOADED:
+        return
+
+    candidates: list[Path] = []
+    if sdk_root:
+        candidates.append(Path(sdk_root).expanduser())
+    candidates.extend(default_sdk_candidates())
+
+    for sdk_path in candidates:
+        if (sdk_path / "scservo_sdk").is_dir():
+            sys.path.insert(0, str(sdk_path))
+            break
+
+    try:
+        sdk = importlib.import_module("scservo_sdk")
+    except ImportError as exc:
+        raise RuntimeError(
+            "HLS gripper node requires the FTServo Python SDK. Pass sdk_root if the SDK is not "
+            "under lerobot/ref_code/FT-servo/FTServo_Python-main/FTServo_Python-main. "
+            f"Import error: {exc}"
+        ) from exc
+
+    COMM_SUCCESS = sdk.COMM_SUCCESS
+    PortHandler = sdk.PortHandler
+    hls = sdk.hls
+    HLS_PRESENT_POSITION_L = sdk.HLS_PRESENT_POSITION_L
+    HLS_PRESENT_CURRENT_H = sdk.HLS_PRESENT_CURRENT_H
+    HLS_PRESENT_SPEED_L = sdk.HLS_PRESENT_SPEED_L
+    HLS_PRESENT_LOAD_L = sdk.HLS_PRESENT_LOAD_L
+    HLS_PRESENT_VOLTAGE = sdk.HLS_PRESENT_VOLTAGE
+    HLS_PRESENT_TEMPERATURE = sdk.HLS_PRESENT_TEMPERATURE
+    HLS_MOVING = sdk.HLS_MOVING
+    HLS_PRESENT_CURRENT_L = sdk.HLS_PRESENT_CURRENT_L
+    SDK_LOADED = True
+
+
+def default_compensation_candidates() -> list[Path]:
+    candidates = [
+        PACKAGE_DIR / "config" / "gravity_compensation.json",
+        Path.cwd() / "src" / "hls_gripper" / "config" / "gravity_compensation.json",
+        Path.cwd() / "lerobot" / "ref_code" / "vla_px4ctrl_ros2" / "src" / "hls_gripper" / "config" / "gravity_compensation.json",
+    ]
+    try:
+        from ament_index_python.packages import get_package_share_directory
+
+        candidates.append(Path(get_package_share_directory("hls_gripper")) / "config" / "gravity_compensation.json")
+    except Exception:
+        pass
+    return candidates
+
+
+def resolve_compensation_path(configured_path: str) -> Path | None:
+    if configured_path:
+        path = Path(configured_path).expanduser()
+        return path if path.is_file() else None
+    for path in default_compensation_candidates():
+        if path.is_file():
+            return path
+    return None
+
+
+def ratio_to_pos(open_pos: int, close_pos: int, ratio: float) -> int:
+    ratio = clamp(ratio, 0.0, 1.0)
+    return int(round(open_pos + (close_pos - open_pos) * ratio))
+
+
+def pos_to_ratio(open_pos: int, close_pos: int, pos: float) -> float:
+    span = close_pos - open_pos
+    if span == 0:
+        return 0.0
+    return clamp((float(pos) - open_pos) / float(span), 0.0, 1.0)
+
+
+def int_from_mapping(mapping: dict, key: str, default: int) -> int:
+    value = mapping.get(key, default)
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+class GravityCompensationTable:
+    def __init__(self, path: Path | None) -> None:
+        self.path = path
+        self.table = None
+        self.points: dict[str, list[dict]] = {SIDE_LEFT: [], SIDE_RIGHT: []}
+        self.calibration: dict[str, ServoCalibration] = {}
+        if path is not None:
+            with open(path) as json_file:
+                self.table = json.load(json_file)
+            self._load_table(self.table)
+
+    @property
+    def loaded(self) -> bool:
+        return self.table is not None
+
+    def _load_table(self, table: dict) -> None:
+        servos = table.get("servos", {})
+        for side in (SIDE_LEFT, SIDE_RIGHT):
+            servo = servos.get(side, {})
+            servo_id = int_from_mapping(servo, "id", 1 if side == SIDE_LEFT else 2)
+            open_pos = int_from_mapping(servo, "open_pos", -1)
+            close_pos = int_from_mapping(servo, "close_pos", -1)
+            clear_pos = int_from_mapping(servo, "clear_pos", close_pos)
+            inward_sign = int_from_mapping(servo, "inward_sign", 1 if side == SIDE_LEFT else -1)
+            if open_pos >= 0 and close_pos >= 0 and open_pos != close_pos:
+                self.calibration[side] = ServoCalibration(
+                    servo_id=servo_id,
+                    open_pos=open_pos,
+                    clear_pos=clear_pos if clear_pos >= 0 else close_pos,
+                    close_pos=close_pos,
+                    inward_sign=1 if inward_sign >= 0 else -1,
+                )
+            self.points[side] = list(servo.get("points", []))
+
+    def baseline_current(self, side: str, close_ratio: float, roll_deg: float, pitch_deg: float) -> float:
+        points = self.points.get(side, [])
+        if not points:
+            return 0.0
+
+        close_ratio = clamp(close_ratio, 0.0, 1.0)
+        if not math.isfinite(roll_deg):
+            roll_deg = 0.0
+        if not math.isfinite(pitch_deg):
+            pitch_deg = 0.0
+
+        best_point = points[0]
+        best_score = float("inf")
+        for point in points:
+            try:
+                ratio = float(point.get("close_ratio", 0.0))
+                roll = float(point.get("roll_bin_deg", 0.0) or 0.0)
+                pitch = float(point.get("pitch_bin_deg", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue
+
+            score = abs(ratio - close_ratio) / 0.05 + abs(roll - roll_deg) / 5.0 + abs(pitch - pitch_deg) / 5.0
+            if score < best_score:
+                best_score = score
+                best_point = point
+
+        try:
+            return float(best_point.get("current_median", 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+
+
+class HlsBus:
+    def __init__(self, port_name: str, baudrate: int, sdk_root: str = "") -> None:
+        load_sdk(sdk_root)
+        self.port_name = port_name
+        self.baudrate = baudrate
+        self.port = PortHandler(port_name)
+        self.packet = hls(self.port)
+        self.mode: dict[int, str] = {}
+
+    def connect(self) -> None:
+        if not self.port.openPort():
+            raise RuntimeError(f"failed to open HLS port {self.port_name}")
+        if not self.port.setBaudRate(self.baudrate):
+            raise RuntimeError(f"failed to set HLS baudrate {self.baudrate}")
+
+    def close(self) -> None:
+        self.port.closePort()
+
+    def _check(self, result: int, error: int, label: str) -> None:
+        if result != COMM_SUCCESS:
+            raise RuntimeError(f"{label}: {self.packet.getTxRxResult(result)}")
+        if error:
+            raise RuntimeError(f"{label}: {self.packet.getRxPacketError(error)}")
+
+    def ping(self, servo_id: int) -> None:
+        _model, result, error = self.packet.ping(servo_id)
+        self._check(result, error, f"ping id={servo_id}")
+
+    def set_position_mode(self, servo_id: int) -> None:
+        if self.mode.get(servo_id) == "position":
+            return
+        result, error = self.packet.EnableTorque(servo_id, 0)
+        self._check(result, error, f"disable torque id={servo_id}")
+        result, error = self.packet.ServoMode(servo_id)
+        self._check(result, error, f"ServoMode id={servo_id}")
+        result, error = self.packet.EnableTorque(servo_id, 1)
+        self._check(result, error, f"enable torque id={servo_id}")
+        self.mode[servo_id] = "position"
+
+    def set_ele_mode(self, servo_id: int) -> None:
+        if self.mode.get(servo_id) == "ele":
+            return
+        result, error = self.packet.EnableTorque(servo_id, 0)
+        self._check(result, error, f"disable torque id={servo_id}")
+        result, error = self.packet.EleMode(servo_id)
+        self._check(result, error, f"EleMode id={servo_id}")
+        result, error = self.packet.EnableTorque(servo_id, 1)
+        self._check(result, error, f"enable torque id={servo_id}")
+        self.mode[servo_id] = "ele"
+
+    def write_position(self, servo_id: int, position: int, speed: int, acc: int, torque_limit: int) -> None:
+        self.set_position_mode(servo_id)
+        result, error = self.packet.WritePosEx(servo_id, int(position), int(speed), int(acc), int(torque_limit))
+        self._check(result, error, f"WritePosEx id={servo_id}")
+
+    def write_current(self, servo_id: int, current: int) -> None:
+        self.set_ele_mode(servo_id)
+        result, error = self.packet.WriteEle(servo_id, int(current))
+        self._check(result, error, f"WriteEle id={servo_id}")
+
+    def read_feedback(self, servo_id: int, cal: ServoCalibration) -> ServoFeedback:
+        length = HLS_PRESENT_CURRENT_H - HLS_PRESENT_POSITION_L + 1
+        data, result, error = self.packet.readTxRx(servo_id, HLS_PRESENT_POSITION_L, length)
+        self._check(result, error, f"read feedback id={servo_id}")
+
+        def word(addr: int) -> int:
+            offset = addr - HLS_PRESENT_POSITION_L
+            return self.packet.scs_makeword(data[offset], data[offset + 1])
+
+        pos = float(self.packet.scs_tohost(word(HLS_PRESENT_POSITION_L), 15))
+        return ServoFeedback(
+            pos=pos,
+            close_ratio=pos_to_ratio(cal.open_pos, cal.close_pos, pos),
+            speed=float(self.packet.scs_tohost(word(HLS_PRESENT_SPEED_L), 15)),
+            load=float(self.packet.scs_tohost(word(HLS_PRESENT_LOAD_L), 10)),
+            voltage=float(data[HLS_PRESENT_VOLTAGE - HLS_PRESENT_POSITION_L]),
+            temp=float(data[HLS_PRESENT_TEMPERATURE - HLS_PRESENT_POSITION_L]),
+            moving=float(data[HLS_MOVING - HLS_PRESENT_POSITION_L]),
+            current=float(self.packet.scs_tohost(word(HLS_PRESENT_CURRENT_L), 15)),
+        )
+
+
+class HlsGripperNode(Node):
+    def __init__(self) -> None:
+        super().__init__("hls_gripper_node")
+
+        self.command_topic = str(self.declare_parameter("command_topic", "/gripper/command").value)
+        self.command_pair_topic = str(self.declare_parameter("command_pair_topic", "/gripper/command_pair").value)
+        self.feedback_topic = str(self.declare_parameter("feedback_topic", "/gripper/feedback").value)
+        legacy_status_topic = str(self.declare_parameter("status_topic", "/hls_gripper/status").value)
+        status_prefix_param = str(self.declare_parameter("status_prefix", "").value)
+        if status_prefix_param:
+            self.status_prefix = status_prefix_param.rstrip("/")
+        elif legacy_status_topic.endswith("/status"):
+            self.status_prefix = legacy_status_topic[: -len("/status")]
+        else:
+            self.status_prefix = legacy_status_topic.rstrip("/")
+        self.attitude_topic = str(self.declare_parameter("attitude_topic", "/mavros/imu/data").value)
+        self.port = str(self.declare_parameter("port", "/dev/ttyACM1").value)
+        self.baud = int(self.declare_parameter("baud", 1000000).value)
+        self.sdk_root = str(self.declare_parameter("sdk_root", "").value)
+        self.dry_run = bool(self.declare_parameter("dry_run", False).value)
+
+        self.left_id = int(self.declare_parameter("left_id", -1).value)
+        self.right_id = int(self.declare_parameter("right_id", -1).value)
+        self.left_open = int(self.declare_parameter("left_open", -1).value)
+        self.left_clear = int(self.declare_parameter("left_clear", -1).value)
+        self.left_close = int(self.declare_parameter("left_close", -1).value)
+        self.right_open = int(self.declare_parameter("right_open", -1).value)
+        self.right_clear = int(self.declare_parameter("right_clear", -1).value)
+        self.right_close = int(self.declare_parameter("right_close", -1).value)
+        self.left_inward_sign = int(self.declare_parameter("left_inward_sign", 0).value)
+        self.right_inward_sign = int(self.declare_parameter("right_inward_sign", 0).value)
+
+        self.gravity_comp_path_param = str(self.declare_parameter("gravity_comp_path", "").value)
+        self.control_rate_hz = float(self.declare_parameter("control_rate_hz", 30.0).value)
+        self.feedback_rate_hz = float(self.declare_parameter("feedback_rate_hz", 20.0).value)
+        self.open_enter_threshold = float(self.declare_parameter("open_enter_threshold", 80.0).value)
+        self.close_enter_threshold = float(self.declare_parameter("close_enter_threshold", 20.0).value)
+        self.search_speed = int(self.declare_parameter("search_speed", 10).value)
+        self.search_acc = int(self.declare_parameter("search_acc", 5).value)
+        self.search_torque_limit = int(self.declare_parameter("search_torque_limit", 120).value)
+        self.open_speed = int(self.declare_parameter("open_speed", 40).value)
+        self.open_acc = int(self.declare_parameter("open_acc", 10).value)
+        self.open_torque_limit = int(self.declare_parameter("open_torque_limit", 300).value)
+        self.low_current = int(self.declare_parameter("low_current", 40).value)
+        self.lift_current = int(self.declare_parameter("lift_current", 120).value)
+        self.final_grip_ramp_s = float(self.declare_parameter("final_grip_ramp_s", 1.2).value)
+        self.contact_current_threshold = float(self.declare_parameter("contact_current_threshold", 35.0).value)
+        self.contact_confirm_cycles = int(self.declare_parameter("contact_confirm_cycles", 3).value)
+        self.max_current = float(self.declare_parameter("max_current", 600.0).value)
+        self.max_temp = float(self.declare_parameter("max_temp", 70.0).value)
+        self.feedback_timeout_s = float(self.declare_parameter("feedback_timeout_s", 0.5).value)
+        self.attitude_timeout_s = float(self.declare_parameter("attitude_timeout_s", 0.5).value)
+        self.command_timeout_s = float(self.declare_parameter("command_timeout_s", 0.0).value)
+        self.search_timeout_s = float(self.declare_parameter("search_timeout_s", 5.0).value)
+        self.single_contact_timeout_s = float(self.declare_parameter("single_contact_timeout_s", 20.0).value)
+        self.single_contact_limit_ratio = float(self.declare_parameter("single_contact_limit_ratio", 0.97).value)
+        self.center_timeout_s = float(self.declare_parameter("center_timeout_s", 8.0).value)
+        self.final_grip_timeout_s = float(self.declare_parameter("final_grip_timeout_s", 3.0).value)
+        self.center_deadband_m = float(self.declare_parameter("center_deadband_m", 0.005).value)
+        self.center_stable_time_s = float(self.declare_parameter("center_stable_time_s", 0.5).value)
+        self.finger_length_m = float(self.declare_parameter("finger_length_m", 0.19).value)
+        self.servo_ticks_per_rev = float(self.declare_parameter("servo_ticks_per_rev", 4096.0).value)
+        self.center_bias = float(self.declare_parameter("center_bias", 0.0).value)
+        self.center_sign = float(self.declare_parameter("center_sign", 1.0).value)
+        self.center_gain_override = float(self.declare_parameter("center_gain_m_per_ratio", 0.0).value)
+        self.dry_run_contact_pattern = str(self.declare_parameter("dry_run_contact_pattern", "both").value)
+
+        comp_path = resolve_compensation_path(self.gravity_comp_path_param)
+        self.compensation = GravityCompensationTable(comp_path)
+        self.calibration = self._build_calibration()
+        self.center_gain_m_per_ratio = self._compute_center_gain()
+
+        self.bus: HlsBus | None = None
+        self.state = STATE_OPEN
+        self.fault_reason = ""
+        self.state_started_s = time.monotonic()
+        self.centered_since_s: float | None = None
+        self.left_contact_cycles = 0
+        self.right_contact_cycles = 0
+        self.left_contact = False
+        self.right_contact = False
+        self.last_feedback_s: float | None = None
+        self.last_command_s: float | None = None
+        self.last_open_write_s = 0.0
+        self.last_search_write_s = 0.0
+        self.last_ele_write_s = 0.0
+        self.latest_roll_deg = 0.0
+        self.latest_pitch_deg = 0.0
+        self.latest_yaw_deg = 0.0
+        self.latest_attitude_s: float | None = None
+        self.feedback: dict[str, ServoFeedback] = self._initial_feedback()
+        self.goal_left_pos = 100.0
+        self.goal_right_pos = 100.0
+
+        if not self.dry_run:
+            self.bus = HlsBus(self.port, self.baud, self.sdk_root)
+            self.bus.connect()
+            for cal in self.calibration.values():
+                self.bus.ping(cal.servo_id)
+
+        self.create_subscription(Float64, self.command_topic, self._command_cb, 10)
+        self.create_subscription(GripperCommandPair, self.command_pair_topic, self._command_pair_cb, 10)
+        self.create_subscription(Imu, self.attitude_topic, self._imu_cb, 10)
+        self.feedback_pub = self.create_publisher(GripperFeedback, self.feedback_topic, 10)
+        self.state_pub = self.create_publisher(String, f"{self.status_prefix}/state", 10)
+        self.fault_reason_pub = self.create_publisher(String, f"{self.status_prefix}/fault_reason", 10)
+        self.float_status_pubs = {
+            name: self.create_publisher(Float64, f"{self.status_prefix}/{name}", 10)
+            for name in (
+                "left_close_ratio",
+                "right_close_ratio",
+                "center_error_ratio",
+                "center_error_m",
+                "left_current",
+                "right_current",
+                "left_current_baseline",
+                "right_current_baseline",
+                "left_current_residual",
+                "right_current_residual",
+                "single_contact_direction",
+                "roll_deg",
+                "pitch_deg",
+            )
+        }
+        self.bool_status_pubs = {
+            name: self.create_publisher(Bool, f"{self.status_prefix}/{name}", 10)
+            for name in (
+                "left_contact",
+                "right_contact",
+                "both_contact",
+                "centered",
+                "safe_to_lift",
+                "fault",
+                "single_contact_need_motion",
+                "left_at_close_limit",
+                "right_at_close_limit",
+            )
+        }
+        self.timer = self.create_timer(1.0 / self.control_rate_hz, self._control_timer_cb)
+
+        comp_label = str(comp_path) if comp_path is not None else "<none>"
+        self.get_logger().info(
+            "HLS gripper node started: "
+            f"port={self.port} dry_run={self.dry_run} compensation={comp_label} "
+            f"center_gain={self.center_gain_m_per_ratio:.5f}m/ratio "
+            f"status_prefix={self.status_prefix}"
+        )
+        self._enter_state(STATE_OPEN)
+
+    def _build_calibration(self) -> dict[str, ServoCalibration]:
+        from_table = dict(self.compensation.calibration)
+
+        left_table = from_table.get(SIDE_LEFT)
+        right_table = from_table.get(SIDE_RIGHT)
+
+        left_id = self.left_id if self.left_id >= 0 else (left_table.servo_id if left_table else 1)
+        right_id = self.right_id if self.right_id >= 0 else (right_table.servo_id if right_table else 2)
+
+        left_open = self.left_open if self.left_open >= 0 else (left_table.open_pos if left_table else -1)
+        left_clear = self.left_clear if self.left_clear >= 0 else (left_table.clear_pos if left_table else -1)
+        left_close = self.left_close if self.left_close >= 0 else (left_table.close_pos if left_table else -1)
+        right_open = self.right_open if self.right_open >= 0 else (right_table.open_pos if right_table else -1)
+        right_clear = self.right_clear if self.right_clear >= 0 else (right_table.clear_pos if right_table else -1)
+        right_close = self.right_close if self.right_close >= 0 else (right_table.close_pos if right_table else -1)
+
+        if left_clear < 0:
+            left_clear = left_close
+        if right_clear < 0:
+            right_clear = right_close
+
+        left_inward = self.left_inward_sign if self.left_inward_sign != 0 else (left_table.inward_sign if left_table else 1)
+        right_inward = self.right_inward_sign if self.right_inward_sign != 0 else (right_table.inward_sign if right_table else -1)
+
+        if min(left_open, left_clear, left_close, right_open, right_clear, right_close) < 0 or left_open == left_close or right_open == right_close:
+            if not self.dry_run:
+                raise RuntimeError(
+                    "HLS open/clear/close limits are required. Provide gravity_comp_path generated by "
+                    "gripper_gravity_calibration.py collect-full, or set open/clear/close parameters."
+                )
+            left_open, left_clear, left_close = 0, 700, 1000
+            right_open, right_clear, right_close = 0, 700, 1000
+
+        return {
+            SIDE_LEFT: ServoCalibration(
+                servo_id=left_id,
+                open_pos=left_open,
+                clear_pos=left_clear,
+                close_pos=left_close,
+                inward_sign=1 if left_inward >= 0 else -1,
+            ),
+            SIDE_RIGHT: ServoCalibration(
+                servo_id=right_id,
+                open_pos=right_open,
+                clear_pos=right_clear,
+                close_pos=right_close,
+                inward_sign=1 if right_inward >= 0 else -1,
+            ),
+        }
+
+    def _compute_center_gain(self) -> float:
+        if self.center_gain_override > 0.0:
+            return self.center_gain_override
+        left = self.calibration[SIDE_LEFT]
+        right = self.calibration[SIDE_RIGHT]
+        left_delta = abs(left.close_pos - left.open_pos)
+        right_delta = abs(right.close_pos - right.open_pos)
+        delta_ticks = 0.5 * (left_delta + right_delta)
+        delta_theta = delta_ticks * 2.0 * math.pi / max(self.servo_ticks_per_rev, 1.0)
+        return 0.5 * self.finger_length_m * delta_theta
+
+    def _initial_feedback(self) -> dict[str, ServoFeedback]:
+        return {
+            SIDE_LEFT: ServoFeedback(
+                pos=float(self.calibration[SIDE_LEFT].open_pos),
+                close_ratio=0.0,
+                speed=0.0,
+                load=0.0,
+                voltage=0.0,
+                temp=25.0,
+                moving=0.0,
+                current=0.0,
+            ),
+            SIDE_RIGHT: ServoFeedback(
+                pos=float(self.calibration[SIDE_RIGHT].open_pos),
+                close_ratio=0.0,
+                speed=0.0,
+                load=0.0,
+                voltage=0.0,
+                temp=25.0,
+                moving=0.0,
+                current=0.0,
+            ),
+        }
+
+    def _imu_cb(self, msg: Imu) -> None:
+        q = msg.orientation
+        self.latest_roll_deg, self.latest_pitch_deg, self.latest_yaw_deg = quaternion_to_euler_deg(q.x, q.y, q.z, q.w)
+        self.latest_attitude_s = time.monotonic()
+
+    def _command_cb(self, msg: Float64) -> None:
+        self._handle_command(CommandIntent(self._classify_scalar(float(msg.data)), float(msg.data)))
+
+    def _command_pair_cb(self, msg: GripperCommandPair) -> None:
+        left = clamp(float(msg.left_pos), 0.0, 100.0)
+        right = clamp(float(msg.right_pos), 0.0, 100.0)
+        if left >= self.open_enter_threshold or right >= self.open_enter_threshold:
+            mode: Literal["open", "grasp", "hold"] = "open"
+        elif left <= self.close_enter_threshold and right <= self.close_enter_threshold:
+            mode = "grasp"
+        else:
+            mode = "hold"
+        self._handle_command(CommandIntent(mode, 0.5 * (left + right)))
+
+    def _classify_scalar(self, value: float) -> Literal["open", "grasp", "hold"]:
+        value = clamp(value, 0.0, 100.0)
+        if value >= self.open_enter_threshold:
+            return "open"
+        if value <= self.close_enter_threshold:
+            return "grasp"
+        return "hold"
+
+    def _handle_command(self, intent: CommandIntent) -> None:
+        self.last_command_s = time.monotonic()
+        if intent.mode == "open":
+            self.fault_reason = ""
+            self._enter_state(STATE_OPEN)
+        elif intent.mode == "grasp":
+            if self.state in (STATE_OPEN, STATE_FAULT):
+                self.fault_reason = ""
+                self._enter_state(STATE_SEARCH_OBJECT)
+
+    def _enter_state(self, state: str, reason: str = "") -> None:
+        if state == self.state and state != STATE_FAULT:
+            return
+        self.state = state
+        self.state_started_s = time.monotonic()
+        self.centered_since_s = None
+        if state in (STATE_OPEN, STATE_SEARCH_OBJECT, STATE_FAULT):
+            self.left_contact_cycles = 0
+            self.right_contact_cycles = 0
+            self.left_contact = False
+            self.right_contact = False
+        if state == STATE_FAULT:
+            self.fault_reason = reason or self.fault_reason or "fault"
+            self.get_logger().error(f"HLS gripper fault: {self.fault_reason}")
+        else:
+            self.get_logger().info(f"HLS gripper state -> {state}")
+
+    def _set_fault(self, reason: str) -> None:
+        self._enter_state(STATE_FAULT, reason)
+
+    def _control_timer_cb(self) -> None:
+        try:
+            self._update_feedback()
+            self._check_safety()
+            self._run_state_machine()
+        except Exception as exc:
+            self._set_fault(str(exc))
+        finally:
+            self._publish_feedback()
+            self._publish_standard_status()
+
+    def _update_feedback(self) -> None:
+        if self.dry_run:
+            self._update_dry_run_feedback()
+        else:
+            if self.bus is None:
+                raise RuntimeError("HLS bus is not connected")
+            self.feedback[SIDE_LEFT] = self.bus.read_feedback(self.calibration[SIDE_LEFT].servo_id, self.calibration[SIDE_LEFT])
+            self.feedback[SIDE_RIGHT] = self.bus.read_feedback(self.calibration[SIDE_RIGHT].servo_id, self.calibration[SIDE_RIGHT])
+
+        for side in (SIDE_LEFT, SIDE_RIGHT):
+            fb = self.feedback[side]
+            fb.baseline_current = self.compensation.baseline_current(
+                side,
+                fb.close_ratio,
+                self.latest_roll_deg,
+                self.latest_pitch_deg,
+            )
+            fb.residual_current = fb.current - fb.baseline_current
+        self.last_feedback_s = time.monotonic()
+
+    def _update_dry_run_feedback(self) -> None:
+        dt = 1.0 / max(self.control_rate_hz, 1.0)
+        elapsed = time.monotonic() - self.state_started_s
+        pattern = self.dry_run_contact_pattern.strip().lower()
+        for side in (SIDE_LEFT, SIDE_RIGHT):
+            fb = self.feedback[side]
+            target_ratio = 0.0
+            if self.state == STATE_SEARCH_OBJECT:
+                target_ratio = 1.0
+            elif self.state == STATE_LEFT_CONTACT:
+                target_ratio = fb.close_ratio if side == SIDE_LEFT else 1.0
+            elif self.state == STATE_RIGHT_CONTACT:
+                target_ratio = 1.0 if side == SIDE_LEFT else fb.close_ratio
+            elif self.state in (STATE_BOTH_CONTACT, STATE_CENTERING, STATE_CENTERED, STATE_FINAL_GRIP, STATE_LIFT_READY):
+                target_ratio = 0.45
+            fb.close_ratio += clamp(target_ratio - fb.close_ratio, -0.35 * dt, 0.35 * dt)
+            fb.pos = ratio_to_pos(
+                self.calibration[side].open_pos,
+                self.calibration[side].close_pos,
+                fb.close_ratio,
+            )
+            fb.speed = 0.0 if abs(target_ratio - fb.close_ratio) < 0.01 else 5.0
+            if pattern == "none":
+                contact_sim = False
+            elif pattern == "left_only":
+                contact_sim = (
+                    side == SIDE_LEFT
+                    and self.state != STATE_OPEN
+                    and (elapsed > 0.8 or self.state != STATE_SEARCH_OBJECT)
+                )
+            elif pattern == "right_only":
+                contact_sim = (
+                    side == SIDE_RIGHT
+                    and self.state != STATE_OPEN
+                    and (elapsed > 0.8 or self.state != STATE_SEARCH_OBJECT)
+                )
+            else:
+                contact_sim = self.state not in (STATE_OPEN, STATE_SEARCH_OBJECT) or elapsed > 0.8
+            fb.current = self.calibration[side].inward_sign * (self.low_current + 20.0 if contact_sim else 0.0)
+            fb.load = fb.current
+            fb.temp = 25.0
+
+    def _check_safety(self) -> None:
+        now = time.monotonic()
+        if self.last_feedback_s is not None and now - self.last_feedback_s > self.feedback_timeout_s:
+            raise RuntimeError("feedback timeout")
+        if (
+            self.latest_attitude_s is not None
+            and self.attitude_timeout_s > 0.0
+            and now - self.latest_attitude_s > self.attitude_timeout_s
+        ):
+            raise RuntimeError("attitude timeout")
+        if (
+            self.command_timeout_s > 0.0
+            and self.last_command_s is not None
+            and now - self.last_command_s > self.command_timeout_s
+            and self.state != STATE_OPEN
+        ):
+            raise RuntimeError("command timeout")
+
+        for side in (SIDE_LEFT, SIDE_RIGHT):
+            fb = self.feedback[side]
+            if self.max_current > 0.0 and abs(fb.current) > self.max_current:
+                raise RuntimeError(f"{side} current limit reached: {fb.current:.0f}")
+            if self.max_temp > 0.0 and fb.temp >= self.max_temp:
+                raise RuntimeError(f"{side} temperature limit reached: {fb.temp:.0f}")
+
+    def _run_state_machine(self) -> None:
+        now = time.monotonic()
+        if self.state == STATE_OPEN:
+            self._write_open_if_due(now)
+            return
+        if self.state == STATE_FAULT:
+            self._write_open_if_due(now)
+            return
+        if self.state == STATE_SEARCH_OBJECT:
+            if now - self.state_started_s > self.search_timeout_s:
+                self._set_fault("search timeout")
+                return
+            self._update_contacts()
+            self._write_search_commands_if_due(now)
+            if self.left_contact and self.right_contact:
+                self._enter_state(STATE_BOTH_CONTACT)
+            elif self.left_contact:
+                self._enter_state(STATE_LEFT_CONTACT)
+            elif self.right_contact:
+                self._enter_state(STATE_RIGHT_CONTACT)
+            return
+        if self.state in (STATE_LEFT_CONTACT, STATE_RIGHT_CONTACT):
+            if now - self.state_started_s > self.single_contact_timeout_s:
+                self._set_fault("single contact timeout")
+                return
+            self._update_contacts()
+            self._write_asymmetric_contact_commands(now)
+            if self.left_contact and self.right_contact:
+                self._enter_state(STATE_BOTH_CONTACT)
+            return
+        if self.state == STATE_BOTH_CONTACT:
+            self._write_low_current_if_due(now)
+            self._enter_state(STATE_CENTERING)
+            return
+        if self.state == STATE_CENTERING:
+            if now - self.state_started_s > self.center_timeout_s:
+                self._set_fault("centering timeout")
+                return
+            self._write_low_current_if_due(now)
+            if self._is_centered(now):
+                self._enter_state(STATE_CENTERED)
+            return
+        if self.state == STATE_CENTERED:
+            self._write_low_current_if_due(now)
+            if now - self.state_started_s >= 0.2:
+                self._enter_state(STATE_FINAL_GRIP)
+            return
+        if self.state == STATE_FINAL_GRIP:
+            if now - self.state_started_s > max(self.final_grip_timeout_s, self.final_grip_ramp_s + 0.5):
+                self._set_fault("final grip timeout")
+                return
+            self._write_final_grip_current(now)
+            if now - self.state_started_s >= self.final_grip_ramp_s:
+                self._enter_state(STATE_LIFT_READY)
+            return
+        if self.state == STATE_LIFT_READY:
+            self._write_lift_current_if_due(now)
+
+    def _write_open_if_due(self, now: float) -> None:
+        if now - self.last_open_write_s < 0.25:
+            return
+        self.last_open_write_s = now
+        self.goal_left_pos = 100.0
+        self.goal_right_pos = 100.0
+        if self.dry_run:
+            return
+        assert self.bus is not None
+        for side in (SIDE_LEFT, SIDE_RIGHT):
+            cal = self.calibration[side]
+            self.bus.write_position(cal.servo_id, cal.open_pos, self.open_speed, self.open_acc, self.open_torque_limit)
+
+    def _write_search_commands_if_due(self, now: float) -> None:
+        if now - self.last_search_write_s < 0.15:
+            return
+        self.last_search_write_s = now
+        self.goal_left_pos = 0.0
+        self.goal_right_pos = 0.0
+        if self.dry_run:
+            return
+        assert self.bus is not None
+        for side in (SIDE_LEFT, SIDE_RIGHT):
+            cal = self.calibration[side]
+            self.bus.write_position(cal.servo_id, cal.close_pos, self.search_speed, self.search_acc, self.search_torque_limit)
+
+    def _write_asymmetric_contact_commands(self, now: float) -> None:
+        if now - min(self.last_ele_write_s, self.last_search_write_s) < 0.10:
+            return
+        if self.dry_run:
+            return
+        assert self.bus is not None
+        if self.left_contact:
+            cal = self.calibration[SIDE_LEFT]
+            self.bus.write_current(cal.servo_id, cal.inward_sign * self.low_current)
+        else:
+            cal = self.calibration[SIDE_LEFT]
+            self.bus.write_position(cal.servo_id, cal.close_pos, self.search_speed, self.search_acc, self.search_torque_limit)
+
+        if self.right_contact:
+            cal = self.calibration[SIDE_RIGHT]
+            self.bus.write_current(cal.servo_id, cal.inward_sign * self.low_current)
+        else:
+            cal = self.calibration[SIDE_RIGHT]
+            self.bus.write_position(cal.servo_id, cal.close_pos, self.search_speed, self.search_acc, self.search_torque_limit)
+        self.last_ele_write_s = now
+        self.last_search_write_s = now
+
+    def _write_low_current_if_due(self, now: float) -> None:
+        if now - self.last_ele_write_s < 0.08:
+            return
+        self.last_ele_write_s = now
+        self.goal_left_pos = self._compat_pos(self.feedback[SIDE_LEFT].close_ratio)
+        self.goal_right_pos = self._compat_pos(self.feedback[SIDE_RIGHT].close_ratio)
+        if self.dry_run:
+            return
+        assert self.bus is not None
+        for side in (SIDE_LEFT, SIDE_RIGHT):
+            cal = self.calibration[side]
+            self.bus.write_current(cal.servo_id, cal.inward_sign * self.low_current)
+
+    def _write_final_grip_current(self, now: float) -> None:
+        alpha = clamp((now - self.state_started_s) / max(self.final_grip_ramp_s, 1e-3), 0.0, 1.0)
+        current = int(round(self.low_current + (self.lift_current - self.low_current) * alpha))
+        self._write_current_pair(current, now)
+
+    def _write_lift_current_if_due(self, now: float) -> None:
+        self._write_current_pair(self.lift_current, now)
+
+    def _write_current_pair(self, current: int, now: float) -> None:
+        if now - self.last_ele_write_s < 0.08:
+            return
+        self.last_ele_write_s = now
+        if self.dry_run:
+            return
+        assert self.bus is not None
+        for side in (SIDE_LEFT, SIDE_RIGHT):
+            cal = self.calibration[side]
+            self.bus.write_current(cal.servo_id, cal.inward_sign * current)
+
+    def _update_contacts(self) -> None:
+        left_metric = self._contact_metric(SIDE_LEFT)
+        right_metric = self._contact_metric(SIDE_RIGHT)
+        self.left_contact_cycles = self.left_contact_cycles + 1 if left_metric >= self.contact_current_threshold else 0
+        self.right_contact_cycles = self.right_contact_cycles + 1 if right_metric >= self.contact_current_threshold else 0
+        self.left_contact = self.left_contact_cycles >= self.contact_confirm_cycles
+        self.right_contact = self.right_contact_cycles >= self.contact_confirm_cycles
+
+    def _contact_metric(self, side: str) -> float:
+        cal = self.calibration[side]
+        return cal.inward_sign * self.feedback[side].residual_current
+
+    def _at_close_limit(self, side: str) -> bool:
+        return self.feedback[side].close_ratio >= self.single_contact_limit_ratio
+
+    def _single_contact_need_motion(self) -> bool:
+        if self.state == STATE_LEFT_CONTACT and self.left_contact and not self.right_contact:
+            return self._at_close_limit(SIDE_RIGHT)
+        if self.state == STATE_RIGHT_CONTACT and self.right_contact and not self.left_contact:
+            return self._at_close_limit(SIDE_LEFT)
+        return False
+
+    def _single_contact_direction(self) -> float:
+        if not self._single_contact_need_motion():
+            return 0.0
+        if self.state == STATE_LEFT_CONTACT:
+            return 1.0
+        if self.state == STATE_RIGHT_CONTACT:
+            return -1.0
+        return 0.0
+
+    def _center_error_ratio(self) -> float:
+        return self.feedback[SIDE_LEFT].close_ratio - self.feedback[SIDE_RIGHT].close_ratio - self.center_bias
+
+    def _center_error_m(self) -> float:
+        return self.center_sign * self.center_gain_m_per_ratio * self._center_error_ratio()
+
+    def _is_centered(self, now: float) -> bool:
+        if abs(self._center_error_m()) <= self.center_deadband_m and self.left_contact and self.right_contact:
+            if self.centered_since_s is None:
+                self.centered_since_s = now
+            return now - self.centered_since_s >= self.center_stable_time_s
+        self.centered_since_s = None
+        return False
+
+    def _compat_pos(self, close_ratio: float) -> float:
+        return clamp((1.0 - close_ratio) * 100.0, 0.0, 100.0)
+
+    def _publish_feedback(self) -> None:
+        msg = GripperFeedback()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = "gripper"
+        left_fb = self.feedback[SIDE_LEFT]
+        right_fb = self.feedback[SIDE_RIGHT]
+        msg.left_pos = self._compat_pos(left_fb.close_ratio)
+        msg.right_pos = self._compat_pos(right_fb.close_ratio)
+        msg.left_load = left_fb.load
+        msg.right_load = right_fb.load
+        msg.left_current = left_fb.current
+        msg.right_current = right_fb.current
+        msg.left_position_error = self.goal_left_pos - msg.left_pos
+        msg.right_position_error = self.goal_right_pos - msg.right_pos
+        msg.left_goal_pos = self.goal_left_pos
+        msg.right_goal_pos = self.goal_right_pos
+        self.feedback_pub.publish(msg)
+
+    def _publish_standard_status(self) -> None:
+        left_fb = self.feedback[SIDE_LEFT]
+        right_fb = self.feedback[SIDE_RIGHT]
+        string_msg = String()
+        string_msg.data = self.state
+        self.state_pub.publish(string_msg)
+
+        string_msg = String()
+        string_msg.data = self.fault_reason if self.state == STATE_FAULT else ""
+        self.fault_reason_pub.publish(string_msg)
+
+        values = {
+            "left_close_ratio": left_fb.close_ratio,
+            "right_close_ratio": right_fb.close_ratio,
+            "center_error_ratio": self._center_error_ratio(),
+            "center_error_m": self._center_error_m(),
+            "left_current": left_fb.current,
+            "right_current": right_fb.current,
+            "left_current_baseline": left_fb.baseline_current,
+            "right_current_baseline": right_fb.baseline_current,
+            "left_current_residual": left_fb.residual_current,
+            "right_current_residual": right_fb.residual_current,
+            "single_contact_direction": self._single_contact_direction(),
+            "roll_deg": self.latest_roll_deg,
+            "pitch_deg": self.latest_pitch_deg,
+        }
+        for name, value in values.items():
+            msg = Float64()
+            msg.data = float(value)
+            self.float_status_pubs[name].publish(msg)
+
+        flags = {
+            "left_contact": bool(self.left_contact),
+            "right_contact": bool(self.right_contact),
+            "both_contact": bool(self.left_contact and self.right_contact),
+            "centered": self.state in (STATE_CENTERED, STATE_FINAL_GRIP, STATE_LIFT_READY),
+            "safe_to_lift": self.state == STATE_LIFT_READY,
+            "fault": self.state == STATE_FAULT,
+            "single_contact_need_motion": self._single_contact_need_motion(),
+            "left_at_close_limit": self._at_close_limit(SIDE_LEFT),
+            "right_at_close_limit": self._at_close_limit(SIDE_RIGHT),
+        }
+        for name, value in flags.items():
+            msg = Bool()
+            msg.data = bool(value)
+            self.bool_status_pubs[name].publish(msg)
+
+    def destroy_node(self) -> bool:
+        try:
+            if self.bus is not None:
+                for side in (SIDE_LEFT, SIDE_RIGHT):
+                    cal = self.calibration[side]
+                    try:
+                        self.bus.write_position(cal.servo_id, cal.open_pos, self.open_speed, self.open_acc, self.open_torque_limit)
+                    except Exception as exc:
+                        self.get_logger().warn(f"failed to open {side} during shutdown: {exc}")
+                self.bus.close()
+        finally:
+            return super().destroy_node()
+
+
+def main() -> None:
+    rclpy.init()
+    node = HlsGripperNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()

@@ -88,9 +88,9 @@ px4ctrl:
       hover_thrust: 0.30
       enable_estimation: true
       print_value: false
-      rho2: 0.999
+      rho2: 0.995
       min_thr2acc: 5.0
-      max_thr2acc: 30.0
+      max_thr2acc: 40.0
 
 feetech_gripper_node:
   ros__parameters:
