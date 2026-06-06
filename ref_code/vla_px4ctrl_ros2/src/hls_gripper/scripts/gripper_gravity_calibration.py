@@ -346,6 +346,7 @@ class AttitudeReader(object):
 
         try:
             import rclpy
+            from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
             if self.source == "ros-imu":
                 from sensor_msgs.msg import Imu as MessageType
             else:
@@ -358,7 +359,12 @@ class AttitudeReader(object):
         self.rclpy = rclpy
         rclpy.init(args=None)
         self.node = rclpy.create_node("hls_gripper_gravity_calibration_attitude")
-        self.node.create_subscription(MessageType, self.topic, self._ros_callback, 10)
+        qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+        )
+        self.node.create_subscription(MessageType, self.topic, self._ros_callback, qos)
         self.thread = threading.Thread(target=self._spin, daemon=True)
         self.thread.start()
 
@@ -729,8 +735,55 @@ def move_open_between_empty_segments(packet, args, profile, label):
         open_transition_acc(args, profile),
         open_transition_torque_limit(args, profile),
     )
+    left_fb, right_fb = wait_for_position_targets(
+        packet,
+        args,
+        args.left_open,
+        args.right_open,
+        getattr(args, "inter_segment_open_timeout", 12.0),
+        getattr(args, "position_tolerance", 35.0),
+        "empty transition %s" % label,
+    )
     time.sleep(open_transition_settle_time(args))
-    print("empty transition=%s parked_open target=(%s,%s)" % (label, args.left_open, args.right_open))
+    print(
+        "empty transition=%s parked_open target=(%s,%s) pos=(%s,%s)"
+        % (label, args.left_open, args.right_open, left_fb["pos"], right_fb["pos"])
+    )
+
+
+def wait_for_position_targets(packet, args, target_left, target_right, timeout_s, tolerance_ticks, label):
+    deadline = time.monotonic() + max(0.0, timeout_s)
+    left_fb = read_feedback(packet, args.left_id)
+    right_fb = read_feedback(packet, args.right_id)
+    while True:
+        safety_check(args, left_fb, right_fb)
+        left_error = abs(float(left_fb["pos"]) - float(target_left))
+        right_error = abs(float(right_fb["pos"]) - float(target_right))
+        if left_error <= tolerance_ticks and right_error <= tolerance_ticks:
+            return left_fb, right_fb
+        if time.monotonic() >= deadline:
+            message = (
+                "%s did not settle: target=(%s,%s) pos=(%s,%s) error=(%.1f,%.1f) "
+                "tolerance=%.1f timeout=%.1fs"
+                % (
+                    label,
+                    target_left,
+                    target_right,
+                    left_fb["pos"],
+                    right_fb["pos"],
+                    left_error,
+                    right_error,
+                    tolerance_ticks,
+                    timeout_s,
+                )
+            )
+            if getattr(args, "allow_unsettled", False):
+                print("warning: %s" % message)
+                return left_fb, right_fb
+            raise RuntimeError(message)
+        time.sleep(0.05)
+        left_fb = read_feedback(packet, args.left_id)
+        right_fb = read_feedback(packet, args.right_id)
 
 
 def write_full_range_samples(packet, writer, csv_file, args, attitude, profiles, sample_index=0):
@@ -780,6 +833,16 @@ def write_full_range_samples(packet, writer, csv_file, args, attitude, profiles,
                         profile["speed"],
                         profile["acc"],
                         profile["torque_limit"],
+                    )
+                    left_fb, right_fb = wait_for_position_targets(
+                        packet,
+                        args,
+                        target_left,
+                        target_right,
+                        getattr(args, "move_timeout", 12.0),
+                        getattr(args, "position_tolerance", 35.0),
+                        "%s profile=%s cycle=%s"
+                        % (segment["name"], profile["profile_index"], cycle),
                     )
                     time.sleep(args.settle_time)
 
@@ -2009,6 +2072,10 @@ def add_collect_full_args(subparsers):
     parser.add_argument("--inter-segment-open-acc", type=int, default=3)
     parser.add_argument("--inter-segment-open-torque-limit", type=int, default=80)
     parser.add_argument("--inter-segment-open-settle-time", type=float, default=0.8)
+    parser.add_argument("--inter-segment-open-timeout", type=float, default=12.0)
+    parser.add_argument("--move-timeout", type=float, default=12.0)
+    parser.add_argument("--position-tolerance", type=float, default=35.0)
+    parser.add_argument("--allow-unsettled", action="store_true")
     parser.add_argument("--settle-time", type=float, default=0.5)
     parser.add_argument("--sample-duration", type=float, default=0.35)
     parser.add_argument("--sample-hz", type=float, default=30.0)
@@ -2071,6 +2138,10 @@ def add_calibrate_session_args(subparsers):
     parser.add_argument("--inter-segment-open-acc", type=int, default=3)
     parser.add_argument("--inter-segment-open-torque-limit", type=int, default=90)
     parser.add_argument("--inter-segment-open-settle-time", type=float, default=0.8)
+    parser.add_argument("--inter-segment-open-timeout", type=float, default=12.0)
+    parser.add_argument("--move-timeout", type=float, default=12.0)
+    parser.add_argument("--position-tolerance", type=float, default=35.0)
+    parser.add_argument("--allow-unsettled", action="store_true")
     parser.add_argument("--settle-time", type=float, default=0.5)
     parser.add_argument("--sample-duration", type=float, default=0.35)
     parser.add_argument("--sample-hz", type=float, default=30.0)

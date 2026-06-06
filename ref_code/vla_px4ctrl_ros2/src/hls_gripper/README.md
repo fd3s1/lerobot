@@ -99,7 +99,11 @@ runtime close ratio is computed over `open -> max`.
 Before and after each empty segment, the script parks both fingers at open with
 low-speed transition commands. Those transition moves are not recorded in the
 CSV, so current spikes from changing segment geometry do not pollute the
-no-load baseline.
+no-load baseline. During empty calibration, each commanded point must settle
+within `--position-tolerance` before samples are written; otherwise the command
+fails instead of saving moving-current data. Increase `--move-timeout` for very
+slow smoke tests, or increase speed/acceleration after confirming the motion is
+safe.
 
 `fit` bins the raw CSV by close ratio, roll, and pitch, then writes a JSON table
 that the runtime gripper controller can use for gravity/friction compensation.
