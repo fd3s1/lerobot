@@ -34,11 +34,17 @@ HLS_RIGHT_CLEAR="${HLS_RIGHT_CLEAR:-}"
 HLS_RIGHT_CLOSE="${HLS_RIGHT_CLOSE:-}"
 
 RATE_HZ="${RATE_HZ:-20}"
+RC_TIMEOUT_S="${RC_TIMEOUT_S:-0.8}"
+STATUS_TIMEOUT_S="${STATUS_TIMEOUT_S:-2.0}"
 CH10_INDEX="${CH10_INDEX:-9}"
 CH10_OPEN_PWM="${CH10_OPEN_PWM:-1300}"
 CH10_CLOSE_PWM="${CH10_CLOSE_PWM:-1700}"
 OPEN_COMMAND="${OPEN_COMMAND:-100.0}"
 CLOSE_COMMAND="${CLOSE_COMMAND:-0.0}"
+PUBLISH_PERIOD_S="${PUBLISH_PERIOD_S:-0.5}"
+GRASP_MODE_STABLE_S="${GRASP_MODE_STABLE_S:-0.3}"
+OPEN_MODE_STABLE_S="${OPEN_MODE_STABLE_S:-0.8}"
+RC_STALE_MODE="${RC_STALE_MODE:-hold}"
 CSV_PATH="${CSV_PATH:-}"
 
 gripper_manager_pid=""
@@ -85,6 +91,7 @@ echo "[handheld-hls-grasp-test] current: low=${HLS_LOW_CURRENT} lift=${HLS_LIFT_
 echo "[handheld-hls-grasp-test] motion profile: name=${HLS_MOTION_PROFILE:-<json-default>} index=${HLS_MOTION_PROFILE_INDEX:-<none>}"
 echo "[handheld-hls-grasp-test] center: gain=${HLS_CENTER_GAIN_M_PER_RATIO} bias=${HLS_CENTER_BIAS} sign=${HLS_CENTER_SIGN}"
 echo "[handheld-hls-grasp-test] single-contact: timeout=${HLS_SINGLE_CONTACT_TIMEOUT_S} limit_ratio=${HLS_SINGLE_CONTACT_LIMIT_RATIO} dry_run_pattern=${HLS_DRY_RUN_CONTACT_PATTERN}"
+echo "[handheld-hls-grasp-test] rc latch: stale=${RC_STALE_MODE} grasp_stable=${GRASP_MODE_STABLE_S}s open_stable=${OPEN_MODE_STABLE_S}s publish_period=${PUBLISH_PERIOD_S}s"
 echo "[handheld-hls-grasp-test] no /position_cmd, takeoff/land, or record data will be published."
 
 set +u
@@ -152,11 +159,17 @@ test_args=(
   --status-topic "${HLS_STATUS_TOPIC}"
   --command-topic "${HLS_COMMAND_TOPIC}"
   --rate-hz "${RATE_HZ}"
+  --rc-timeout-s "${RC_TIMEOUT_S}"
+  --status-timeout-s "${STATUS_TIMEOUT_S}"
   --ch10-index "${CH10_INDEX}"
   --ch10-open-pwm "${CH10_OPEN_PWM}"
   --ch10-close-pwm "${CH10_CLOSE_PWM}"
   --open-command "${OPEN_COMMAND}"
   --close-command "${CLOSE_COMMAND}"
+  --publish-period-s "${PUBLISH_PERIOD_S}"
+  --grasp-mode-stable-s "${GRASP_MODE_STABLE_S}"
+  --open-mode-stable-s "${OPEN_MODE_STABLE_S}"
+  --rc-stale-mode "${RC_STALE_MODE}"
 )
 if [[ -n "${CSV_PATH}" ]]; then
   test_args+=(--csv-path "${CSV_PATH}")

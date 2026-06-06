@@ -843,10 +843,15 @@ class HlsGripperNode(Node):
     def _handle_command(self, intent: CommandIntent) -> None:
         self.last_command_s = time.monotonic()
         if intent.mode == "open":
+            if self.state != STATE_OPEN:
+                self.get_logger().warn(
+                    f"received open command value={intent.value:.1f}; leaving state={self.state}"
+                )
             self.fault_reason = ""
             self._enter_state(STATE_OPEN)
         elif intent.mode == "grasp":
             if self.state in (STATE_OPEN, STATE_FAULT):
+                self.get_logger().info(f"received grasp command value={intent.value:.1f}")
                 self.fault_reason = ""
                 self._enter_state(STATE_SEARCH_OBJECT)
 
