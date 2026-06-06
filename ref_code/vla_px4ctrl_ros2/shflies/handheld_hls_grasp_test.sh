@@ -14,6 +14,7 @@ ATTITUDE_TOPIC="${ATTITUDE_TOPIC:-/mavros/imu/data}"
 START_GRIPPER_MANAGER="${START_GRIPPER_MANAGER:-true}"
 GRIPPER_MANAGER_PORT="${GRIPPER_MANAGER_PORT:-/dev/ttyACM1}"
 HLS_GRAVITY_COMP_PATH="${HLS_GRAVITY_COMP_PATH:-}"
+HLS_SDK_ROOT="${HLS_SDK_ROOT:-}"
 HLS_DRY_RUN="${HLS_DRY_RUN:-false}"
 HLS_LOW_CURRENT="${HLS_LOW_CURRENT:-40}"
 HLS_LIFT_CURRENT="${HLS_LIFT_CURRENT:-120}"
@@ -79,6 +80,7 @@ echo "[handheld-hls-grasp-test] command topic: ${HLS_COMMAND_TOPIC}"
 echo "[handheld-hls-grasp-test] status topic: ${HLS_STATUS_TOPIC}"
 echo "[handheld-hls-grasp-test] feedback topic: ${GRIPPER_FEEDBACK_TOPIC}"
 echo "[handheld-hls-grasp-test] manager: start=${START_GRIPPER_MANAGER} port=${GRIPPER_MANAGER_PORT} dry_run=${HLS_DRY_RUN}"
+echo "[handheld-hls-grasp-test] sdk root: ${HLS_SDK_ROOT:-<auto>}"
 echo "[handheld-hls-grasp-test] current: low=${HLS_LOW_CURRENT} lift=${HLS_LIFT_CURRENT}"
 echo "[handheld-hls-grasp-test] motion profile: name=${HLS_MOTION_PROFILE:-<json-default>} index=${HLS_MOTION_PROFILE_INDEX:-<none>}"
 echo "[handheld-hls-grasp-test] center: gain=${HLS_CENTER_GAIN_M_PER_RATIO} bias=${HLS_CENTER_BIAS} sign=${HLS_CENTER_SIGN}"
@@ -111,6 +113,9 @@ if bool_is_true "${START_GRIPPER_MANAGER}"; then
   )
   if [[ -n "${HLS_GRAVITY_COMP_PATH}" ]]; then
     hls_args+=(-p gravity_comp_path:="${HLS_GRAVITY_COMP_PATH}")
+  fi
+  if [[ -n "${HLS_SDK_ROOT}" ]]; then
+    hls_args+=(-p sdk_root:="${HLS_SDK_ROOT}")
   fi
   if [[ -n "${HLS_MOTION_PROFILE}" ]]; then
     hls_args+=(-p motion_profile:="${HLS_MOTION_PROFILE}")

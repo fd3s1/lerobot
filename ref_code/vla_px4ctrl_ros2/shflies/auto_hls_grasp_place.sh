@@ -26,6 +26,7 @@ START_GRIPPER_MANAGER="${START_GRIPPER_MANAGER:-true}"
 GRIPPER_MANAGER_TYPE="${GRIPPER_MANAGER_TYPE:-hls}"
 GRIPPER_MANAGER_PORT="${GRIPPER_MANAGER_PORT:-/dev/ttyACM1}"
 HLS_GRAVITY_COMP_PATH="${HLS_GRAVITY_COMP_PATH:-}"
+HLS_SDK_ROOT="${HLS_SDK_ROOT:-}"
 HLS_DRY_RUN="${HLS_DRY_RUN:-false}"
 HLS_LOW_CURRENT="${HLS_LOW_CURRENT:-40}"
 HLS_LIFT_CURRENT="${HLS_LIFT_CURRENT:-120}"
@@ -164,6 +165,7 @@ echo "[auto-hls-grasp-place] drone topic: ${DRONE_POSE_TOPIC}"
 echo "[auto-hls-grasp-place] cmd topic: ${CMD_TOPIC}"
 echo "[auto-hls-grasp-place] gripper topics: scalar=${GRIPPER_TOPIC} pair=${GRIPPER_COMMAND_PAIR_TOPIC} feedback=${GRIPPER_FEEDBACK_TOPIC} status=${HLS_STATUS_TOPIC}"
 echo "[auto-hls-grasp-place] manager: type=${GRIPPER_MANAGER_TYPE} start=${START_GRIPPER_MANAGER} port=${GRIPPER_MANAGER_PORT} dry_run=${HLS_DRY_RUN}"
+echo "[auto-hls-grasp-place] hls sdk root: ${HLS_SDK_ROOT:-<auto>}"
 echo "[auto-hls-grasp-place] hls current: low=${HLS_LOW_CURRENT} lift=${HLS_LIFT_CURRENT}"
 echo "[auto-hls-grasp-place] hls motion profile: name=${HLS_MOTION_PROFILE:-<json-default>} index=${HLS_MOTION_PROFILE_INDEX:-<none>}"
 echo "[auto-hls-grasp-place] centering: kp=${CENTER_KP} vmax=${CENTER_VMAX_MPS} deadband=${CENTER_DEADBAND_M} offset_max=${CENTER_OFFSET_MAX_M} sign=${CENTER_COMMAND_SIGN}"
@@ -210,6 +212,9 @@ if bool_is_true "${START_GRIPPER_MANAGER}"; then
   )
   if [[ -n "${HLS_GRAVITY_COMP_PATH}" ]]; then
     hls_args+=(-p gravity_comp_path:="${HLS_GRAVITY_COMP_PATH}")
+  fi
+  if [[ -n "${HLS_SDK_ROOT}" ]]; then
+    hls_args+=(-p sdk_root:="${HLS_SDK_ROOT}")
   fi
   if [[ -n "${HLS_MOTION_PROFILE}" ]]; then
     hls_args+=(-p motion_profile:="${HLS_MOTION_PROFILE}")

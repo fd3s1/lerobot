@@ -115,6 +115,7 @@ def quaternion_to_euler_deg(x: float, y: float, z: float, w: float) -> tuple[flo
 def default_sdk_candidates() -> list[Path]:
     return [
         REF_CODE_DIR / "FT-servo" / "FTServo_Python-main" / "FTServo_Python-main",
+        Path.cwd().parent / "FT-servo" / "FTServo_Python-main" / "FTServo_Python-main",
         Path.cwd() / "lerobot" / "ref_code" / "FT-servo" / "FTServo_Python-main" / "FTServo_Python-main",
         Path.cwd() / "FT-servo" / "FTServo_Python-main" / "FTServo_Python-main",
     ]
@@ -156,6 +157,14 @@ def load_sdk(sdk_root: str = "") -> None:
             "under lerobot/ref_code/FT-servo/FTServo_Python-main/FTServo_Python-main. "
             f"Import error: {exc}"
         ) from exc
+    if not hasattr(sdk, "hls"):
+        searched = ", ".join(str(path) for path in candidates)
+        raise RuntimeError(
+            "Imported scservo_sdk does not provide HLS support. "
+            "Pass sdk_root:=/home/user/vla_drone/lerobot/ref_code/FT-servo/"
+            "FTServo_Python-main/FTServo_Python-main or run from the vla_px4ctrl_ros2 workspace. "
+            f"Imported module={getattr(sdk, '__file__', '<unknown>')} searched={searched}"
+        )
 
     COMM_SUCCESS = sdk.COMM_SUCCESS
     PortHandler = sdk.PortHandler
