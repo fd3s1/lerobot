@@ -24,6 +24,7 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PACKAGE_DIR = SCRIPT_DIR.parent
+DEFAULT_LIMITS_PATH = PACKAGE_DIR / "config" / "hls_gripper_limits.json"
 
 SDK_LOADED = False
 COMM_SUCCESS = None
@@ -491,7 +492,62 @@ def collect(args):
     print("wrote raw samples: %s" % args.output)
 
 
+def load_limits_config(path):
+    if not path:
+        return None
+    config_path = Path(path).expanduser()
+    if not config_path.exists():
+        return None
+    with open(config_path) as json_file:
+        return json.load(json_file)
+
+
+def servo_limit_value(config, side, *names):
+    servo = config.get("servos", {}).get(side, {})
+    for name in names:
+        if name in servo and servo[name] is not None:
+            return servo[name]
+    return None
+
+
+def fill_missing_arg(args, name, value):
+    if getattr(args, name) is None and value is not None:
+        setattr(args, name, int(value))
+
+
+def apply_collect_full_limits_config(args):
+    config = load_limits_config(args.limits_json)
+    if config is None:
+        return
+
+    fill_missing_arg(args, "left_open", servo_limit_value(config, "left", "open_pos", "open"))
+    fill_missing_arg(args, "left_clear", servo_limit_value(config, "left", "clear_pos", "clear"))
+    fill_missing_arg(args, "left_max", servo_limit_value(config, "left", "close_pos", "max_pos", "max"))
+    fill_missing_arg(args, "right_open", servo_limit_value(config, "right", "open_pos", "open"))
+    fill_missing_arg(args, "right_clear", servo_limit_value(config, "right", "clear_pos", "clear"))
+    fill_missing_arg(args, "right_max", servo_limit_value(config, "right", "close_pos", "max_pos", "max"))
+
+    print("loaded gripper limits: %s" % Path(args.limits_json).expanduser())
+
+
 def validate_full_collect_args(args):
+    missing = [
+        name
+        for name in (
+            "left_open",
+            "left_clear",
+            "left_max",
+            "right_open",
+            "right_clear",
+            "right_max",
+        )
+        if getattr(args, name) is None
+    ]
+    if missing:
+        raise RuntimeError(
+            "missing collect-full position limits: %s. Pass them explicitly or provide --limits-json."
+            % ", ".join("--" + name.replace("_", "-") for name in missing)
+        )
     if args.left_open == args.left_max:
         raise RuntimeError("--left-open and --left-max must differ")
     if args.right_open == args.right_max:
@@ -511,6 +567,7 @@ def validate_full_collect_args(args):
 
 
 def collect_full(args):
+    apply_collect_full_limits_config(args)
     load_sdk(args.sdk_root)
     ensure_parent(args.output_csv)
     ensure_parent(args.output_json)
@@ -1202,12 +1259,17 @@ def add_collect_full_args(subparsers):
     )
     parser.add_argument("--left-id", type=int, default=1)
     parser.add_argument("--right-id", type=int, default=2)
-    parser.add_argument("--left-open", type=int, required=True)
-    parser.add_argument("--left-clear", type=int, required=True)
-    parser.add_argument("--left-max", type=int, required=True)
-    parser.add_argument("--right-open", type=int, required=True)
-    parser.add_argument("--right-clear", type=int, required=True)
-    parser.add_argument("--right-max", type=int, required=True)
+    parser.add_argument(
+        "--limits-json",
+        default=str(DEFAULT_LIMITS_PATH),
+        help="JSON file containing default open/clear/max positions for collect-full.",
+    )
+    parser.add_argument("--left-open", type=int, default=None)
+    parser.add_argument("--left-clear", type=int, default=None)
+    parser.add_argument("--left-max", type=int, default=None)
+    parser.add_argument("--right-open", type=int, default=None)
+    parser.add_argument("--right-clear", type=int, default=None)
+    parser.add_argument("--right-max", type=int, default=None)
     parser.add_argument("--left-inward-sign", type=int, choices=(-1, 1), default=1)
     parser.add_argument("--right-inward-sign", type=int, choices=(-1, 1), default=-1)
     parser.add_argument("--sweep-points-clear", type=int, default=31)

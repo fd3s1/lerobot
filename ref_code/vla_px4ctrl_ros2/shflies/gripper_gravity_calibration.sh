@@ -8,6 +8,7 @@ CALIBRATION_SCRIPT="${WORKSPACE_DIR}/src/hls_gripper/scripts/gripper_gravity_cal
 GRIPPER_PORT="${GRIPPER_PORT:-/dev/ttyACM1}"
 ATTITUDE_SOURCE="${ATTITUDE_SOURCE:-ros-imu}"
 ATTITUDE_TOPIC="${ATTITUDE_TOPIC:-/mavros/imu/data}"
+HLS_LIMITS_PATH="${HLS_LIMITS_PATH:-${WORKSPACE_DIR}/src/hls_gripper/config/hls_gripper_limits.json}"
 
 set +u
 if [[ -f /opt/ros/humble/setup.bash ]]; then
@@ -53,10 +54,12 @@ case "${command}" in
   collect-full)
     echo "[gripper-gravity-calibration] port: ${GRIPPER_PORT}"
     echo "[gripper-gravity-calibration] attitude: ${ATTITUDE_SOURCE} ${ATTITUDE_TOPIC}"
+    echo "[gripper-gravity-calibration] limits: ${HLS_LIMITS_PATH}"
     python3 "${CALIBRATION_SCRIPT}" collect-full \
       --port "${GRIPPER_PORT}" \
       --attitude-source "${ATTITUDE_SOURCE}" \
       --attitude-topic "${ATTITUDE_TOPIC}" \
+      --limits-json "${HLS_LIMITS_PATH}" \
       "$@"
     ;;
   fit)

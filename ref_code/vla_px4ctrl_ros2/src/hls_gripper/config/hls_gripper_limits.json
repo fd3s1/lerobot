@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "description": "Mounted HLS3625 gripper mechanical position limits. Raw positions were read on 2026-06-05.",
+  "notes": {
+    "open_pos": "Finger fully open, near horizontal.",
+    "clear_pos": "Near vertical no-self-contact midpoint for both fingers.",
+    "close_pos": "Actual inward mechanical limit used as collect-full max."
+  },
+  "servos": {
+    "left": {
+      "id": 1,
+      "open_pos": 2057,
+      "clear_pos": 952,
+      "close_pos": 675,
+      "inward_sign": 1
+    },
+    "right": {
+      "id": 2,
+      "open_pos": 2085,
+      "clear_pos": 964,
+      "close_pos": 679,
+      "inward_sign": -1
+    }
+  }
+}

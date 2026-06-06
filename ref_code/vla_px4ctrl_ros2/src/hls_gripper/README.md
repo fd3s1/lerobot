@@ -60,6 +60,23 @@ they do not tell which endpoint is physically open or closed. Use
 and max postures to fill `--left-open`, `--left-clear`, `--left-max`,
 `--right-open`, `--right-clear`, and `--right-max`.
 
+The mounted gripper limits are saved in:
+
+```text
+src/hls_gripper/config/hls_gripper_limits.json
+```
+
+Current saved raw positions:
+
+```text
+left:  open=2057 clear=952 close/max=675
+right: open=2085 clear=964 close/max=679
+```
+
+`collect-full` loads this file by default, so the normal field command does not
+need explicit open/clear/max arguments. Command-line values still override the
+JSON for one run.
+
 `collect` sweeps the empty gripper through calibrated open/close limits and
 records position, current, load, temperature, and optional ROS2 attitude. Keep
 using it only for smoke tests or legacy two-point calibration.
