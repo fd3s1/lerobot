@@ -34,6 +34,7 @@ HLS_PRESENT_VOLTAGE = None
 HLS_PRESENT_TEMPERATURE = None
 HLS_MOVING = None
 HLS_PRESENT_CURRENT_L = None
+HLS_MODE = None
 
 
 STATE_OPEN = "OPEN"
@@ -122,6 +123,7 @@ def load_sdk(sdk_root: str = "") -> None:
     global HLS_PRESENT_TEMPERATURE
     global HLS_MOVING
     global HLS_PRESENT_CURRENT_L
+    global HLS_MODE
 
     if SDK_LOADED:
         return
@@ -156,6 +158,7 @@ def load_sdk(sdk_root: str = "") -> None:
     HLS_PRESENT_TEMPERATURE = sdk.HLS_PRESENT_TEMPERATURE
     HLS_MOVING = sdk.HLS_MOVING
     HLS_PRESENT_CURRENT_L = sdk.HLS_PRESENT_CURRENT_L
+    HLS_MODE = sdk.HLS_MODE
     SDK_LOADED = True
 
 
@@ -296,6 +299,42 @@ class HlsBus:
         if error:
             raise RuntimeError(f"{label}: {self.packet.getRxPacketError(error)}")
 
+    def read_mode(self, servo_id: int) -> int:
+        mode, result, error = self.packet.read1ByteTxRx(servo_id, HLS_MODE)
+        self._check(result, error, f"read mode id={servo_id}")
+        return int(mode)
+
+    def write_mode_checked(self, servo_id: int, mode_name: str, mode_fn, expected_mode: int) -> None:
+        result, error = self.packet.EnableTorque(servo_id, 0)
+        self._check(result, error, f"disable torque id={servo_id}")
+
+        result, error = mode_fn(servo_id)
+        self._check(result, error, f"{mode_name} id={servo_id}")
+        time.sleep(0.05)
+        mode = self.read_mode(servo_id)
+
+        if mode != expected_mode:
+            self.get_logger().warn(
+                f"id={servo_id} mode readback is {mode} after {mode_name}; retrying with EEPROM unlock"
+            )
+            result, error = self.packet.unLockEprom(servo_id)
+            self._check(result, error, f"unlock EPROM id={servo_id}")
+            time.sleep(0.02)
+            result, error = mode_fn(servo_id)
+            self._check(result, error, f"{mode_name} after unlock id={servo_id}")
+            time.sleep(0.05)
+            result, error = self.packet.LockEprom(servo_id)
+            self._check(result, error, f"lock EPROM id={servo_id}")
+            mode = self.read_mode(servo_id)
+
+        if mode != expected_mode:
+            raise RuntimeError(
+                f"failed to switch id={servo_id} to {mode_name}: mode readback={mode} expected={expected_mode}"
+            )
+
+        result, error = self.packet.EnableTorque(servo_id, 1)
+        self._check(result, error, f"enable torque id={servo_id}")
+
     def ping(self, servo_id: int) -> None:
         _model, result, error = self.packet.ping(servo_id)
         self._check(result, error, f"ping id={servo_id}")
@@ -303,23 +342,13 @@ class HlsBus:
     def set_position_mode(self, servo_id: int) -> None:
         if self.mode.get(servo_id) == "position":
             return
-        result, error = self.packet.EnableTorque(servo_id, 0)
-        self._check(result, error, f"disable torque id={servo_id}")
-        result, error = self.packet.ServoMode(servo_id)
-        self._check(result, error, f"ServoMode id={servo_id}")
-        result, error = self.packet.EnableTorque(servo_id, 1)
-        self._check(result, error, f"enable torque id={servo_id}")
+        self.write_mode_checked(servo_id, "ServoMode", self.packet.ServoMode, 0)
         self.mode[servo_id] = "position"
 
     def set_ele_mode(self, servo_id: int) -> None:
         if self.mode.get(servo_id) == "ele":
             return
-        result, error = self.packet.EnableTorque(servo_id, 0)
-        self._check(result, error, f"disable torque id={servo_id}")
-        result, error = self.packet.EleMode(servo_id)
-        self._check(result, error, f"EleMode id={servo_id}")
-        result, error = self.packet.EnableTorque(servo_id, 1)
-        self._check(result, error, f"enable torque id={servo_id}")
+        self.write_mode_checked(servo_id, "EleMode", self.packet.EleMode, 2)
         self.mode[servo_id] = "ele"
 
     def write_position(self, servo_id: int, position: int, speed: int, acc: int, torque_limit: int) -> None:

@@ -202,6 +202,47 @@ def check(packet, result, error, label):
         raise RuntimeError("%s: %s" % (label, packet.getRxPacketError(error)))
 
 
+def read_mode(packet, servo_id):
+    mode, result, error = packet.read1ByteTxRx(servo_id, HLS_MODE)
+    check(packet, result, error, "read mode id=%s" % servo_id)
+    return mode
+
+
+def write_mode_checked(packet, servo_id, mode_name, mode_fn, expected_mode):
+    result, error = packet.EnableTorque(servo_id, 0)
+    check(packet, result, error, "disable torque id=%s" % servo_id)
+
+    result, error = mode_fn(servo_id)
+    check(packet, result, error, "set %s id=%s" % (mode_name, servo_id))
+    time.sleep(0.05)
+    mode = read_mode(packet, servo_id)
+
+    if mode != expected_mode:
+        print(
+            "id=%s mode readback is %s after %s; retrying with EEPROM unlock"
+            % (servo_id, mode, mode_name)
+        )
+        result, error = packet.unLockEprom(servo_id)
+        check(packet, result, error, "unlock EPROM id=%s" % servo_id)
+        time.sleep(0.02)
+        result, error = mode_fn(servo_id)
+        check(packet, result, error, "set %s after unlock id=%s" % (mode_name, servo_id))
+        time.sleep(0.05)
+        result, error = packet.LockEprom(servo_id)
+        check(packet, result, error, "lock EPROM id=%s" % servo_id)
+        mode = read_mode(packet, servo_id)
+
+    if mode != expected_mode:
+        raise RuntimeError(
+            "failed to switch id=%s to %s: mode readback=%s expected=%s"
+            % (servo_id, mode_name, mode, expected_mode)
+        )
+
+    result, error = packet.EnableTorque(servo_id, 1)
+    check(packet, result, error, "enable torque id=%s" % servo_id)
+    print("id=%s mode=%s (%s)" % (servo_id, mode, mode_name))
+
+
 def read_feedback(packet, servo_id):
     length = HLS_PRESENT_CURRENT_H - HLS_PRESENT_POSITION_L + 1
     data, result, error = packet.readTxRx(servo_id, HLS_PRESENT_POSITION_L, length)
@@ -231,15 +272,7 @@ def setup_servo_position_mode(packet, servo_id):
     model, result, error = packet.ping(servo_id)
     check(packet, result, error, "ping id=%s" % servo_id)
     print("id=%s model=%s" % (servo_id, model))
-
-    result, error = packet.EnableTorque(servo_id, 0)
-    check(packet, result, error, "disable torque id=%s" % servo_id)
-
-    result, error = packet.ServoMode(servo_id)
-    check(packet, result, error, "set ServoMode id=%s" % servo_id)
-
-    result, error = packet.EnableTorque(servo_id, 1)
-    check(packet, result, error, "enable torque id=%s" % servo_id)
+    write_mode_checked(packet, servo_id, "ServoMode", packet.ServoMode, 0)
 
 
 def safety_check(args, left_fb, right_fb):
@@ -456,8 +489,8 @@ def collect(args):
                         time.sleep(period)
 
                     print(
-                        "cycle=%s direction=%s ratio=%.3f left_pos=%s right_pos=%s"
-                        % (cycle, direction, target_ratio, left_fb["pos"], right_fb["pos"])
+                        "cycle=%s direction=%s ratio=%.3f target=(%s,%s) pos=(%s,%s)"
+                        % (cycle, direction, target_ratio, target_left, target_right, left_fb["pos"], right_fb["pos"])
                     )
 
         if not args.no_park:
@@ -702,13 +735,15 @@ def collect_full(args):
 
                         print(
                             "segment=%s cycle=%s direction=%s left_ratio=%.3f right_ratio=%.3f "
-                            "left_pos=%s right_pos=%s"
+                            "target=(%s,%s) pos=(%s,%s)"
                             % (
                                 segment["name"],
                                 cycle,
                                 direction,
                                 left_ratio,
                                 right_ratio,
+                                target_left,
+                                target_right,
                                 left_fb["pos"],
                                 right_fb["pos"],
                             )
