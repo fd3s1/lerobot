@@ -426,7 +426,7 @@ def make_ratio_sequence_between(start, stop, points, cycle):
     return ratios
 
 
-def parse_profiles(text):
+def parse_profiles(text, name_prefix="p"):
     profiles = []
     for index, chunk in enumerate(text.split(",")):
         chunk = chunk.strip()
@@ -451,7 +451,7 @@ def parse_profiles(text):
         profiles.append(
             {
                 "profile_index": index,
-                "profile_name": "p%s" % index,
+                "profile_name": "%s%s" % (name_prefix, index),
                 "speed": speed,
                 "acc": acc,
                 "torque_limit": torque_limit,
@@ -461,6 +461,29 @@ def parse_profiles(text):
     if not profiles:
         raise RuntimeError("at least one profile is required")
     return profiles
+
+
+def parse_opening_profiles(args):
+    text = getattr(args, "opening_profiles", "").strip()
+    if text:
+        return parse_profiles(text, name_prefix="o")
+    return [
+        {
+            "profile_index": 0,
+            "profile_name": "o0",
+            "speed": int(getattr(args, "open_speed", getattr(args, "inter_segment_open_speed", 40))),
+            "acc": int(getattr(args, "open_acc", getattr(args, "inter_segment_open_acc", 10))),
+            "torque_limit": int(
+                getattr(args, "open_torque_limit", getattr(args, "inter_segment_open_torque_limit", 300))
+            ),
+            "label": "%s:%s:%s"
+            % (
+                int(getattr(args, "open_speed", getattr(args, "inter_segment_open_speed", 40))),
+                int(getattr(args, "open_acc", getattr(args, "inter_segment_open_acc", 10))),
+                int(getattr(args, "open_torque_limit", getattr(args, "inter_segment_open_torque_limit", 300))),
+            ),
+        }
+    ]
 
 
 def parse_object_labels(text):
@@ -1034,11 +1057,24 @@ def write_empty_rows_for_moving_sweep(
     return sample_index, left_fb, right_fb, stop_left, stop_right
 
 
-def write_full_range_samples(packet, writer, csv_file, args, attitude, profiles, sample_index=0):
+def write_full_range_samples(
+    packet,
+    writer,
+    csv_file,
+    args,
+    attitude,
+    profiles,
+    opening_profiles=None,
+    sample_index=0,
+):
     left_clear_ratio, right_clear_ratio = validate_full_collect_args(args)
     segments = build_full_segments(left_clear_ratio, right_clear_ratio, args)
+    opening_profiles = list(opening_profiles or [])
 
-    for profile in profiles:
+    for profile_position, profile in enumerate(profiles):
+        opening_profile = None
+        if opening_profiles:
+            opening_profile = opening_profiles[min(profile_position, len(opening_profiles) - 1)]
         print(
             "empty profile=%s speed=%s acc=%s torque_limit=%s"
             % (
@@ -1048,26 +1084,31 @@ def write_full_range_samples(packet, writer, csv_file, args, attitude, profiles,
                 profile["torque_limit"],
             )
         )
-        for segment in segments:
-            move_open_between_empty_segments(
-                packet,
-                args,
-                profile,
-                "profile_%s_before_%s" % (profile["profile_index"], segment["name"]),
+        if args.empty_sweep_direction == "bidirectional" and opening_profile:
+            print(
+                "empty opening_profile=%s speed=%s acc=%s torque_limit=%s"
+                % (
+                    opening_profile["profile_name"],
+                    opening_profile["speed"],
+                    opening_profile["acc"],
+                    opening_profile["torque_limit"],
+                )
             )
+        for segment in segments:
             for cycle in range(args.cycles):
-                direction = "closing" if cycle % 2 == 0 else "opening"
+                move_open_between_empty_segments(
+                    packet,
+                    args,
+                    profile,
+                    "profile_%s_before_%s_cycle_%s"
+                    % (profile["profile_index"], segment["name"], cycle),
+                )
+                direction = "closing"
                 if args.empty_sample_mode == "moving":
-                    if cycle % 2 == 0:
-                        start_left_ratio = segment["left_start"]
-                        stop_left_ratio = segment["left_stop"]
-                        start_right_ratio = segment["right_start"]
-                        stop_right_ratio = segment["right_stop"]
-                    else:
-                        start_left_ratio = segment["left_stop"]
-                        stop_left_ratio = segment["left_start"]
-                        start_right_ratio = segment["right_stop"]
-                        stop_right_ratio = segment["right_start"]
+                    start_left_ratio = segment["left_start"]
+                    stop_left_ratio = segment["left_stop"]
+                    start_right_ratio = segment["right_start"]
+                    stop_right_ratio = segment["right_stop"]
                     sample_index, left_fb, right_fb, target_left, target_right = write_empty_rows_for_moving_sweep(
                         packet,
                         writer,
@@ -1102,12 +1143,46 @@ def write_full_range_samples(packet, writer, csv_file, args, attitude, profiles,
                             right_fb["pos"],
                         )
                     )
+                    if args.empty_sweep_direction == "bidirectional" and opening_profile:
+                        sample_index, left_fb, right_fb, target_left, target_right = write_empty_rows_for_moving_sweep(
+                            packet,
+                            writer,
+                            csv_file,
+                            args,
+                            attitude,
+                            segment,
+                            opening_profile,
+                            cycle,
+                            "opening",
+                            segment["left_stop"],
+                            segment["left_start"],
+                            segment["right_stop"],
+                            segment["right_start"],
+                            sample_index,
+                        )
+                        print(
+                            "segment=%s profile=%s cycle=%s direction=opening sweep=(%.3f,%.3f)->(%.3f,%.3f) "
+                            "target=(%s,%s) pos=(%s,%s)"
+                            % (
+                                segment["name"],
+                                opening_profile["profile_name"],
+                                cycle,
+                                segment["left_stop"],
+                                segment["right_stop"],
+                                segment["left_start"],
+                                segment["right_start"],
+                                target_left,
+                                target_right,
+                                left_fb["pos"],
+                                right_fb["pos"],
+                            )
+                        )
                 else:
                     left_ratios = make_ratio_sequence_between(
-                        segment["left_start"], segment["left_stop"], segment["points"], cycle
+                        segment["left_start"], segment["left_stop"], segment["points"], 0
                     )
                     right_ratios = make_ratio_sequence_between(
-                        segment["right_start"], segment["right_stop"], segment["points"], cycle
+                        segment["right_start"], segment["right_stop"], segment["points"], 0
                     )
                     for left_ratio, right_ratio in zip(left_ratios, right_ratios):
                         target_left = ratio_to_pos(args.left_open, args.left_max, left_ratio)
@@ -1161,6 +1236,64 @@ def write_full_range_samples(packet, writer, csv_file, args, attitude, profiles,
                                 right_fb["pos"],
                             )
                         )
+                    if args.empty_sweep_direction == "bidirectional" and opening_profile:
+                        left_ratios = make_ratio_sequence_between(
+                            segment["left_start"], segment["left_stop"], segment["points"], 1
+                        )
+                        right_ratios = make_ratio_sequence_between(
+                            segment["right_start"], segment["right_stop"], segment["points"], 1
+                        )
+                        for left_ratio, right_ratio in zip(left_ratios, right_ratios):
+                            target_left = ratio_to_pos(args.left_open, args.left_max, left_ratio)
+                            target_right = ratio_to_pos(args.right_open, args.right_max, right_ratio)
+                            write_position(
+                                packet,
+                                args.left_id,
+                                target_left,
+                                opening_profile["speed"],
+                                opening_profile["acc"],
+                                opening_profile["torque_limit"],
+                            )
+                            write_position(
+                                packet,
+                                args.right_id,
+                                target_right,
+                                opening_profile["speed"],
+                                opening_profile["acc"],
+                                opening_profile["torque_limit"],
+                            )
+                            sample_index, left_fb, right_fb = write_empty_rows_for_settled_target(
+                                packet,
+                                writer,
+                                csv_file,
+                                args,
+                                attitude,
+                                segment,
+                                opening_profile,
+                                cycle,
+                                "opening",
+                                left_ratio,
+                                right_ratio,
+                                target_left,
+                                target_right,
+                                sample_index,
+                            )
+
+                            print(
+                                "segment=%s profile=%s cycle=%s direction=opening left_ratio=%.3f right_ratio=%.3f "
+                                "target=(%s,%s) pos=(%s,%s)"
+                                % (
+                                    segment["name"],
+                                    opening_profile["profile_name"],
+                                    cycle,
+                                    left_ratio,
+                                    right_ratio,
+                                    target_left,
+                                    target_right,
+                                    left_fb["pos"],
+                                    right_fb["pos"],
+                                )
+                            )
             move_open_between_empty_segments(
                 packet,
                 args,
@@ -1185,6 +1318,7 @@ def collect_full(args):
                 "label": "%s:%s:%s" % (args.speed, args.acc, args.torque_limit),
             }
         ]
+    opening_profiles = parse_opening_profiles(args)
     load_sdk(args.sdk_root)
     ensure_parent(args.output_csv)
     ensure_parent(args.output_json)
@@ -1225,6 +1359,7 @@ def collect_full(args):
                 args,
                 attitude,
                 profiles,
+                opening_profiles,
                 sample_index=0,
             )
 
@@ -1263,6 +1398,7 @@ def collect_full(args):
     table = build_compensation_table(rows, args, args.output_csv)
     table.setdefault("collection", {})
     table["collection"]["profiles"] = profiles
+    table["collection"]["opening_profiles"] = opening_profiles
     write_compensation_outputs(table, args.output_json, args.curve_csv)
 
 
@@ -1357,6 +1493,7 @@ def collect_side_points(rows, side, args):
             continue
 
         key = (
+            row.get("direction", ""),
             row.get("profile_index", ""),
             row.get("profile_name", ""),
             bin_ratio(ratio, args.position_bins),
@@ -1408,14 +1545,15 @@ def collect_side_points(rows, side, args):
         speed_abs_median = statistics.median(bucket["abs_speed"]) if bucket["abs_speed"] else None
         points.append(
             {
-                "profile_index": first_int([{"value": key[0]}], "value", None),
-                "profile_name": key[1],
+                "direction": key[0],
+                "profile_index": first_int([{"value": key[1]}], "value", None),
+                "profile_name": key[2],
                 "speed_cmd": statistics.median(bucket["speed_cmd"]) if bucket["speed_cmd"] else None,
                 "acc_cmd": statistics.median(bucket["acc_cmd"]) if bucket["acc_cmd"] else None,
                 "torque_limit": statistics.median(bucket["torque_limit"]) if bucket["torque_limit"] else None,
-                "close_ratio": key[2],
-                "roll_bin_deg": key[3],
-                "pitch_bin_deg": key[4],
+                "close_ratio": key[3],
+                "roll_bin_deg": key[4],
+                "pitch_bin_deg": key[5],
                 "roll_median_deg": statistics.median(bucket["roll"]) if bucket["roll"] else None,
                 "pitch_median_deg": statistics.median(bucket["pitch"]) if bucket["pitch"] else None,
                 "pos_median": pos_median,
@@ -1438,6 +1576,7 @@ def collect_side_points(rows, side, args):
 
     points.sort(
         key=lambda point: (
+            point.get("direction", ""),
             none_last(point.get("profile_index")),
             none_last(point["roll_bin_deg"]),
             none_last(point["pitch_bin_deg"]),
@@ -1476,9 +1615,11 @@ def first_str(rows, field, default=""):
     return default
 
 
-def collect_profiles_from_rows(rows):
+def collect_profiles_from_rows(rows, direction=None):
     profiles = {}
     for row in rows:
+        if direction and row.get("direction") != direction:
+            continue
         index = first_int([{"value": row.get("profile_index")}], "value", None)
         if index is None:
             continue
@@ -1541,7 +1682,8 @@ def build_compensation_table(rows, args, source_csv):
         "collection": {
             "attitude_source": first_str(rows, "attitude_source"),
             "row_count": len(rows),
-            "profiles": collect_profiles_from_rows(rows),
+            "profiles": collect_profiles_from_rows(rows, direction="closing"),
+            "opening_profiles": collect_profiles_from_rows(rows, direction="opening"),
         },
     }
     return table
@@ -1574,7 +1716,11 @@ def fit(args):
     write_compensation_outputs(table, args.output, args.curve_csv)
 
 
-def profile_matches_point(point, profile_index=None, profile_name=None):
+def profile_matches_point(point, profile_index=None, profile_name=None, direction=None):
+    if direction not in (None, ""):
+        point_direction = str(point.get("direction", ""))
+        if point_direction and point_direction != str(direction):
+            return False
     if profile_index not in (None, ""):
         point_index = first_int([{"value": point.get("profile_index")}], "value", None)
         target_index = first_int([{"value": profile_index}], "value", None)
@@ -1587,17 +1733,39 @@ def profile_matches_point(point, profile_index=None, profile_name=None):
     return True
 
 
-def table_baseline_current(table, side, close_ratio, roll_deg, pitch_deg, profile_index=None, profile_name=None):
+def table_baseline_current(
+    table,
+    side,
+    close_ratio,
+    roll_deg,
+    pitch_deg,
+    profile_index=None,
+    profile_name=None,
+    direction=None,
+):
     points = table.get("servos", {}).get(side, {}).get("points", [])
     if not points:
         return 0.0
     profile_points = [
         point
         for point in points
-        if profile_matches_point(point, profile_index=profile_index, profile_name=profile_name)
+        if profile_matches_point(
+            point,
+            profile_index=profile_index,
+            profile_name=profile_name,
+            direction=direction,
+        )
     ]
     if profile_points:
         points = profile_points
+    elif direction not in (None, ""):
+        direction_points = [
+            point
+            for point in points
+            if profile_matches_point(point, direction=direction)
+        ]
+        if direction_points:
+            points = direction_points
     close_ratio = clamp(finite_float(close_ratio, 0.0), 0.0, 1.0)
     roll_deg = finite_float(roll_deg, 0.0)
     pitch_deg = finite_float(pitch_deg, 0.0)
@@ -1614,13 +1782,18 @@ def table_baseline_current(table, side, close_ratio, roll_deg, pitch_deg, profil
     return finite_float(best_point.get("current_median"), 0.0)
 
 
-def baseline_noise_stats(table, side, profile_index=None, profile_name=None):
+def baseline_noise_stats(table, side, profile_index=None, profile_name=None, direction=None):
     points = table.get("servos", {}).get(side, {}).get("points", [])
-    if profile_index not in (None, "") or profile_name not in (None, ""):
+    if profile_index not in (None, "") or profile_name not in (None, "") or direction not in (None, ""):
         filtered = [
             point
             for point in points
-            if profile_matches_point(point, profile_index=profile_index, profile_name=profile_name)
+            if profile_matches_point(
+                point,
+                profile_index=profile_index,
+                profile_name=profile_name,
+                direction=direction,
+            )
         ]
         if filtered:
             points = filtered
@@ -1688,7 +1861,13 @@ def fit_contact_detection_side(
             residuals.append(residual)
 
     inward_sign = servo_inward_sign_from_table(table, side)
-    noise = baseline_noise_stats(table, side, profile_index=profile_index, profile_name=profile_name)
+    noise = baseline_noise_stats(
+        table,
+        side,
+        profile_index=profile_index,
+        profile_name=profile_name,
+        direction="closing",
+    )
     baseline_margin = max(
         args.contact_min_enter_threshold,
         3.0 * noise["median_mad"],
@@ -2035,6 +2214,7 @@ def add_contact_baseline_to_row(row, table):
             row.get("pitch_deg"),
             row.get("profile_index"),
             row.get("profile_name"),
+            row.get("direction"),
         )
         current = finite_float(row.get("%s_current" % side), 0.0)
         row["%s_current_baseline" % side] = "%.6f" % baseline
@@ -2246,6 +2426,7 @@ def calibrate_session(args):
     apply_collect_full_limits_config(args)
     validate_full_collect_args(args)
     profiles = parse_profiles(args.profiles)
+    opening_profiles = parse_opening_profiles(args)
     if args.contact_profiles.strip().lower() == "same":
         contact_profiles = profiles
     elif args.contact_profiles.strip().lower() == "legacy":
@@ -2316,6 +2497,7 @@ def calibrate_session(args):
                     args,
                     attitude,
                     profiles,
+                    opening_profiles,
                     sample_index=0,
                 )
             print("wrote empty raw samples: %s" % args.output_csv)
@@ -2323,6 +2505,7 @@ def calibrate_session(args):
             table = build_compensation_table(empty_rows, args, args.output_csv)
             table.setdefault("collection", {})
             table["collection"]["profiles"] = profiles
+            table["collection"]["opening_profiles"] = opening_profiles
             table["collection"]["empty_csv"] = os.path.abspath(args.output_csv)
             write_compensation_outputs(table, args.output_json, args.curve_csv)
 
@@ -2373,6 +2556,7 @@ def write_curve_csv(path, table):
     fields = [
         "side",
         "id",
+        "direction",
         "profile_index",
         "profile_name",
         "speed_cmd",
@@ -2487,6 +2671,17 @@ def add_collect_full_args(subparsers):
         help="Optional speed:acc:torque_limit list. If omitted, --speed/--acc/--torque-limit are used.",
     )
     parser.add_argument("--empty-sample-mode", choices=("moving", "settled"), default="moving")
+    parser.add_argument(
+        "--empty-sweep-direction",
+        choices=("closing", "bidirectional"),
+        default="bidirectional",
+        help="closing repeats inward sweeps; bidirectional alternates inward/outward sweeps.",
+    )
+    parser.add_argument(
+        "--opening-profiles",
+        default="40:10:300",
+        help="Opening sweep speed:acc:torque_limit list. Defaults to the runtime open profile.",
+    )
     parser.add_argument("--speed", type=int, default=8)
     parser.add_argument("--acc", type=int, default=4)
     parser.add_argument("--torque-limit", type=int, default=80)
@@ -2557,6 +2752,17 @@ def add_calibrate_session_args(subparsers):
     parser.add_argument("--cycles", type=int, default=2)
     parser.add_argument("--profiles", default="5:3:90,10:5:120,20:8:150")
     parser.add_argument("--empty-sample-mode", choices=("moving", "settled"), default="moving")
+    parser.add_argument(
+        "--empty-sweep-direction",
+        choices=("closing", "bidirectional"),
+        default="bidirectional",
+        help="closing repeats inward sweeps; bidirectional alternates inward/outward sweeps.",
+    )
+    parser.add_argument(
+        "--opening-profiles",
+        default="40:10:300",
+        help="Opening sweep speed:acc:torque_limit list. Defaults to the runtime open profile.",
+    )
     parser.add_argument("--inter-segment-open-speed", type=int, default=5)
     parser.add_argument("--inter-segment-open-acc", type=int, default=3)
     parser.add_argument("--inter-segment-open-torque-limit", type=int, default=90)

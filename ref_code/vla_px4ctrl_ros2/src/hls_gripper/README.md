@@ -113,6 +113,13 @@ actual grasp motion. If you need the older point-by-point behavior, pass
 `--empty-sample-mode settled`; then each commanded point must settle within
 `--position-tolerance` before samples are written.
 
+The default empty sweep direction is `--empty-sweep-direction bidirectional`.
+Each cycle records an inward closing sweep with `--profiles`, then records an
+outward opening sweep with `--opening-profiles`. This keeps closing and opening
+friction/gravity baselines separate. Opening is intentionally calibrated with a
+different profile family because the low-torque grasp profile may not reliably
+pull the fingers back open.
+
 Motion profiles are written as `p0`, `p1`, ... in the JSON. A profile is:
 
 ```text
@@ -126,7 +133,9 @@ the same profile family later available to the runtime controller:
 GRIPPER_PORT=/dev/ttyACM1 ATTITUDE_SOURCE=ros-imu \
 bash shflies/gripper_gravity_calibration.sh collect-full \
   --profiles 5:3:90,10:5:120,20:8:150 \
+  --opening-profiles 40:10:300 \
   --empty-sample-mode moving \
+  --empty-sweep-direction bidirectional \
   --cycles 1 \
   --sample-hz 30 \
   --sample-duration 0.2 \
@@ -156,8 +165,10 @@ bash shflies/gripper_gravity_calibration.sh calibrate-session \
   --object-labels foam,bottle,small_box \
   --contact-trials-per-object 3 \
   --profiles 5:3:90,10:5:120,20:8:150 \
+  --opening-profiles 40:10:300 \
   --contact-profiles same \
   --empty-sample-mode moving \
+  --empty-sweep-direction bidirectional \
   --max-current 300 \
   --max-temp 60
 ```

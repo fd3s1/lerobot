@@ -304,6 +304,7 @@ class GravityCompensationTable:
         pitch_deg: float,
         profile_index: int | None = None,
         profile_name: str = "",
+        direction: str = "",
     ) -> float:
         points = self.points.get(side, [])
         if not points:
@@ -315,6 +316,9 @@ class GravityCompensationTable:
             except (TypeError, ValueError):
                 point_index = None
             point_name = str(point.get("profile_name") or "")
+            point_direction = str(point.get("direction") or "")
+            if direction and point_direction and point_direction != direction:
+                continue
             if profile_index is not None and point_index != profile_index:
                 continue
             if profile_name and point_name and point_name != profile_name:
@@ -322,6 +326,14 @@ class GravityCompensationTable:
             profile_points.append(point)
         if profile_points:
             points = profile_points
+        elif direction:
+            direction_points = [
+                point
+                for point in points
+                if str(point.get("direction") or "") in ("", direction)
+            ]
+            if direction_points:
+                points = direction_points
 
         close_ratio = clamp(close_ratio, 0.0, 1.0)
         if not math.isfinite(roll_deg):
@@ -877,6 +889,7 @@ class HlsGripperNode(Node):
                 self.latest_pitch_deg,
                 profile_index=self.motion_profile.profile_index,
                 profile_name=self.motion_profile.profile_name,
+                direction=self._baseline_direction(),
             )
             fb.residual_current = fb.current - fb.baseline_current
         self.last_feedback_s = time.monotonic()
@@ -1123,6 +1136,11 @@ class HlsGripperNode(Node):
 
     def _contact_metric(self, side: str) -> float:
         return self.contact_detection[side]["metric_sign"] * self.feedback[side].residual_current
+
+    def _baseline_direction(self) -> str:
+        if self.state in (STATE_OPEN, STATE_FAULT):
+            return "opening"
+        return "closing"
 
     def _at_close_limit(self, side: str) -> bool:
         return self.feedback[side].close_ratio >= self.single_contact_limit_ratio
