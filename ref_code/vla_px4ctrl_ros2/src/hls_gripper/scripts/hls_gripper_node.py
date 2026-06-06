@@ -512,6 +512,8 @@ class HlsGripperNode(Node):
         self.right_close = int(self.declare_parameter("right_close", -1).value)
         self.left_inward_sign = int(self.declare_parameter("left_inward_sign", 0).value)
         self.right_inward_sign = int(self.declare_parameter("right_inward_sign", 0).value)
+        self.left_current_inward_sign_param = int(self.declare_parameter("left_current_inward_sign", 0).value)
+        self.right_current_inward_sign_param = int(self.declare_parameter("right_current_inward_sign", 0).value)
 
         self.gravity_comp_path_param = str(self.declare_parameter("gravity_comp_path", "").value)
         self.control_rate_hz = float(self.declare_parameter("control_rate_hz", 30.0).value)
@@ -575,6 +577,7 @@ class HlsGripperNode(Node):
             else max(self.center_hold_current, min(self.lift_current, int(round(0.75 * self.lift_current))))
         )
         self.contact_detection = self._build_contact_detection()
+        self.current_inward_sign = self._build_current_inward_sign()
         self.center_gain_m_per_ratio = self._compute_center_gain()
 
         self.bus: HlsBus | None = None
@@ -586,6 +589,8 @@ class HlsGripperNode(Node):
         self.right_contact_cycles = 0
         self.left_contact = False
         self.right_contact = False
+        self.fault_requires_open_reset = False
+        self.last_fault_grasp_warn_s = 0.0
         self.last_feedback_s: float | None = None
         self.last_command_s: float | None = None
         self.last_open_write_s = 0.0
@@ -665,6 +670,7 @@ class HlsGripperNode(Node):
             f"center_gain={self.center_gain_m_per_ratio:.5f}m/ratio "
             f"profile={self.motion_profile.profile_name}"
             f"({self.search_speed},{self.search_acc},{self.search_torque_limit}) "
+            f"current_sign=({self.current_inward_sign[SIDE_LEFT]:+d},{self.current_inward_sign[SIDE_RIGHT]:+d}) "
             f"center_current=({self.center_hold_current},{self.center_push_current}) "
             f"contact_enter=({self.contact_detection[SIDE_LEFT]['enter_threshold']:.1f},"
             f"{self.contact_detection[SIDE_RIGHT]['enter_threshold']:.1f}) "
@@ -797,6 +803,19 @@ class HlsGripperNode(Node):
             }
         return result
 
+    def _build_current_inward_sign(self) -> dict[str, int]:
+        result: dict[str, int] = {}
+        for side in (SIDE_LEFT, SIDE_RIGHT):
+            sign_override = (
+                self.left_current_inward_sign_param if side == SIDE_LEFT else self.right_current_inward_sign_param
+            )
+            if sign_override != 0:
+                sign = sign_override
+            else:
+                sign = int(self.contact_detection[side]["metric_sign"])
+            result[side] = 1 if sign >= 0 else -1
+        return result
+
     def _compute_center_gain(self) -> float:
         if self.center_gain_override > 0.0:
             return self.center_gain_override
@@ -862,6 +881,7 @@ class HlsGripperNode(Node):
     def _handle_command(self, intent: CommandIntent) -> None:
         self.last_command_s = time.monotonic()
         if intent.mode == "open":
+            self.fault_requires_open_reset = False
             if self.state != STATE_OPEN:
                 self.get_logger().warn(
                     f"received open command value={intent.value:.1f}; leaving state={self.state}"
@@ -870,6 +890,14 @@ class HlsGripperNode(Node):
             self._enter_state(STATE_OPEN)
         elif intent.mode == "grasp":
             if self.state in (STATE_OPEN, STATE_FAULT):
+                if self.state == STATE_FAULT and self.fault_requires_open_reset:
+                    now = time.monotonic()
+                    if now - self.last_fault_grasp_warn_s > 1.0:
+                        self.last_fault_grasp_warn_s = now
+                        self.get_logger().warn(
+                            f"ignoring grasp command while fault requires open reset: {self.fault_reason}"
+                        )
+                    return
                 self.get_logger().info(f"received grasp command value={intent.value:.1f}")
                 self.fault_reason = ""
                 self._enter_state(STATE_SEARCH_OBJECT)
@@ -892,6 +920,7 @@ class HlsGripperNode(Node):
             self.get_logger().info(f"HLS gripper state -> {state}")
 
     def _set_fault(self, reason: str) -> None:
+        self.fault_requires_open_reset = True
         self._enter_state(STATE_FAULT, reason)
 
     def _control_timer_cb(self) -> None:
@@ -1095,14 +1124,14 @@ class HlsGripperNode(Node):
         assert self.bus is not None
         if self.left_contact:
             cal = self.calibration[SIDE_LEFT]
-            self.bus.write_current(cal.servo_id, cal.inward_sign * self.low_current)
+            self.bus.write_current(cal.servo_id, self.current_inward_sign[SIDE_LEFT] * self.low_current)
         else:
             cal = self.calibration[SIDE_LEFT]
             self.bus.write_position(cal.servo_id, cal.close_pos, self.search_speed, self.search_acc, self.search_torque_limit)
 
         if self.right_contact:
             cal = self.calibration[SIDE_RIGHT]
-            self.bus.write_current(cal.servo_id, cal.inward_sign * self.low_current)
+            self.bus.write_current(cal.servo_id, self.current_inward_sign[SIDE_RIGHT] * self.low_current)
         else:
             cal = self.calibration[SIDE_RIGHT]
             self.bus.write_position(cal.servo_id, cal.close_pos, self.search_speed, self.search_acc, self.search_torque_limit)
@@ -1120,7 +1149,7 @@ class HlsGripperNode(Node):
         assert self.bus is not None
         for side in (SIDE_LEFT, SIDE_RIGHT):
             cal = self.calibration[side]
-            self.bus.write_current(cal.servo_id, cal.inward_sign * self.low_current)
+            self.bus.write_current(cal.servo_id, self.current_inward_sign[side] * self.low_current)
 
     def _write_centering_current_if_due(self, now: float) -> None:
         if now - self.last_ele_write_s < 0.08:
@@ -1144,8 +1173,8 @@ class HlsGripperNode(Node):
         assert self.bus is not None
         left_cal = self.calibration[SIDE_LEFT]
         right_cal = self.calibration[SIDE_RIGHT]
-        self.bus.write_current(left_cal.servo_id, left_cal.inward_sign * left_current)
-        self.bus.write_current(right_cal.servo_id, right_cal.inward_sign * right_current)
+        self.bus.write_current(left_cal.servo_id, self.current_inward_sign[SIDE_LEFT] * left_current)
+        self.bus.write_current(right_cal.servo_id, self.current_inward_sign[SIDE_RIGHT] * right_current)
 
     def _write_final_grip_current(self, now: float) -> None:
         alpha = clamp((now - self.state_started_s) / max(self.final_grip_ramp_s, 1e-3), 0.0, 1.0)
@@ -1164,7 +1193,7 @@ class HlsGripperNode(Node):
         assert self.bus is not None
         for side in (SIDE_LEFT, SIDE_RIGHT):
             cal = self.calibration[side]
-            self.bus.write_current(cal.servo_id, cal.inward_sign * current)
+            self.bus.write_current(cal.servo_id, self.current_inward_sign[side] * current)
 
     def _update_contacts(self) -> None:
         left_metric = self._contact_metric(SIDE_LEFT)

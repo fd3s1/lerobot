@@ -21,6 +21,8 @@ HLS_LIFT_CURRENT="${HLS_LIFT_CURRENT:-120}"
 HLS_CENTER_HOLD_CURRENT="${HLS_CENTER_HOLD_CURRENT:-}"
 HLS_CENTER_PUSH_CURRENT="${HLS_CENTER_PUSH_CURRENT:-}"
 HLS_CENTER_TIMEOUT_ACTION="${HLS_CENTER_TIMEOUT_ACTION:-final_grip}"
+HLS_LEFT_CURRENT_INWARD_SIGN="${HLS_LEFT_CURRENT_INWARD_SIGN:-}"
+HLS_RIGHT_CURRENT_INWARD_SIGN="${HLS_RIGHT_CURRENT_INWARD_SIGN:-}"
 HLS_MOTION_PROFILE="${HLS_MOTION_PROFILE:-}"
 HLS_MOTION_PROFILE_INDEX="${HLS_MOTION_PROFILE_INDEX:-}"
 HLS_CENTER_GAIN_M_PER_RATIO="${HLS_CENTER_GAIN_M_PER_RATIO:-0.0}"
@@ -47,6 +49,7 @@ CLOSE_COMMAND="${CLOSE_COMMAND:-0.0}"
 PUBLISH_PERIOD_S="${PUBLISH_PERIOD_S:-0.5}"
 GRASP_MODE_STABLE_S="${GRASP_MODE_STABLE_S:-0.3}"
 OPEN_MODE_STABLE_S="${OPEN_MODE_STABLE_S:-0.8}"
+HOLD_MODE_TIMEOUT_S="${HOLD_MODE_TIMEOUT_S:-1.5}"
 RC_STALE_MODE="${RC_STALE_MODE:-hold}"
 CSV_PATH="${CSV_PATH:-}"
 
@@ -91,10 +94,11 @@ echo "[handheld-hls-grasp-test] feedback topic: ${GRIPPER_FEEDBACK_TOPIC}"
 echo "[handheld-hls-grasp-test] manager: start=${START_GRIPPER_MANAGER} port=${GRIPPER_MANAGER_PORT} dry_run=${HLS_DRY_RUN}"
 echo "[handheld-hls-grasp-test] sdk root: ${HLS_SDK_ROOT:-<auto>}"
 echo "[handheld-hls-grasp-test] current: low=${HLS_LOW_CURRENT} lift=${HLS_LIFT_CURRENT} center_hold=${HLS_CENTER_HOLD_CURRENT:-<low>} center_push=${HLS_CENTER_PUSH_CURRENT:-<auto>} center_timeout=${HLS_CENTER_TIMEOUT_ACTION}"
+echo "[handheld-hls-grasp-test] current signs: left=${HLS_LEFT_CURRENT_INWARD_SIGN:-<contact-metric>} right=${HLS_RIGHT_CURRENT_INWARD_SIGN:-<contact-metric>}"
 echo "[handheld-hls-grasp-test] motion profile: name=${HLS_MOTION_PROFILE:-<json-default>} index=${HLS_MOTION_PROFILE_INDEX:-<none>}"
 echo "[handheld-hls-grasp-test] center: gain=${HLS_CENTER_GAIN_M_PER_RATIO} bias=${HLS_CENTER_BIAS} sign=${HLS_CENTER_SIGN}"
 echo "[handheld-hls-grasp-test] single-contact: timeout=${HLS_SINGLE_CONTACT_TIMEOUT_S} limit_ratio=${HLS_SINGLE_CONTACT_LIMIT_RATIO} dry_run_pattern=${HLS_DRY_RUN_CONTACT_PATTERN}"
-echo "[handheld-hls-grasp-test] rc latch: stale=${RC_STALE_MODE} grasp_stable=${GRASP_MODE_STABLE_S}s open_stable=${OPEN_MODE_STABLE_S}s publish_period=${PUBLISH_PERIOD_S}s"
+echo "[handheld-hls-grasp-test] rc latch: stale=${RC_STALE_MODE} grasp_stable=${GRASP_MODE_STABLE_S}s open_stable=${OPEN_MODE_STABLE_S}s hold_timeout=${HOLD_MODE_TIMEOUT_S}s publish_period=${PUBLISH_PERIOD_S}s"
 echo "[handheld-hls-grasp-test] no /position_cmd, takeoff/land, or record data will be published."
 
 set +u
@@ -140,6 +144,12 @@ if bool_is_true "${START_GRIPPER_MANAGER}"; then
   if [[ -n "${HLS_CENTER_PUSH_CURRENT}" ]]; then
     hls_args+=(-p center_push_current:="${HLS_CENTER_PUSH_CURRENT}")
   fi
+  if [[ -n "${HLS_LEFT_CURRENT_INWARD_SIGN}" ]]; then
+    hls_args+=(-p left_current_inward_sign:="${HLS_LEFT_CURRENT_INWARD_SIGN}")
+  fi
+  if [[ -n "${HLS_RIGHT_CURRENT_INWARD_SIGN}" ]]; then
+    hls_args+=(-p right_current_inward_sign:="${HLS_RIGHT_CURRENT_INWARD_SIGN}")
+  fi
   if [[ -n "${HLS_LEFT_OPEN}" ]]; then
     hls_args+=(-p left_open:="${HLS_LEFT_OPEN}")
   fi
@@ -179,6 +189,7 @@ test_args=(
   --publish-period-s "${PUBLISH_PERIOD_S}"
   --grasp-mode-stable-s "${GRASP_MODE_STABLE_S}"
   --open-mode-stable-s "${OPEN_MODE_STABLE_S}"
+  --hold-mode-timeout-s "${HOLD_MODE_TIMEOUT_S}"
   --rc-stale-mode "${RC_STALE_MODE}"
 )
 if [[ -n "${CSV_PATH}" ]]; then

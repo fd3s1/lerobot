@@ -59,6 +59,7 @@ class HandheldHlsConfig:
     publish_period_s: float
     grasp_mode_stable_s: float
     open_mode_stable_s: float
+    hold_mode_timeout_s: float
     rc_stale_mode: str
     csv_path: str
 
@@ -111,6 +112,9 @@ class HandheldHlsGraspTest(Node):
         self.latched_command_mode = "open"
         self.raw_command_mode = "open"
         self.raw_mode_started_s = time.monotonic()
+        self.candidate_command_mode = "open"
+        self.candidate_mode_started_s = self.raw_mode_started_s
+        self.last_non_hold_raw_s = self.raw_mode_started_s
         self.csv_file = None
         self.csv_writer = None
 
@@ -224,9 +228,16 @@ class HandheldHlsGraspTest(Node):
             self.raw_mode_started_s = now
 
         if raw_mode == "hold":
+            if now - self.last_non_hold_raw_s >= self.config.hold_mode_timeout_s:
+                self.latched_command_mode = "open"
             return self.latched_command_mode
 
-        stable_time = now - self.raw_mode_started_s
+        self.last_non_hold_raw_s = now
+        if raw_mode != self.candidate_command_mode:
+            self.candidate_command_mode = raw_mode
+            self.candidate_mode_started_s = now
+
+        stable_time = now - self.candidate_mode_started_s
         required_stable_s = (
             self.config.open_mode_stable_s if raw_mode == "open" else self.config.grasp_mode_stable_s
         )
@@ -335,6 +346,7 @@ def parse_args() -> HandheldHlsConfig:
     parser.add_argument("--publish-period-s", type=float, default=0.5)
     parser.add_argument("--grasp-mode-stable-s", type=float, default=0.3)
     parser.add_argument("--open-mode-stable-s", type=float, default=0.8)
+    parser.add_argument("--hold-mode-timeout-s", type=float, default=1.5)
     parser.add_argument("--rc-stale-mode", choices=("hold", "open"), default="hold")
     parser.add_argument("--csv-path", default="")
     args = parser.parse_args(remove_ros_args(args=sys.argv)[1:])
@@ -346,6 +358,8 @@ def parse_args() -> HandheldHlsConfig:
         raise ValueError("--grasp-mode-stable-s must be non-negative.")
     if args.open_mode_stable_s < 0.0:
         raise ValueError("--open-mode-stable-s must be non-negative.")
+    if args.hold_mode_timeout_s < 0.0:
+        raise ValueError("--hold-mode-timeout-s must be non-negative.")
     return HandheldHlsConfig(**vars(args))
 
 
