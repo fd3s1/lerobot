@@ -62,6 +62,17 @@ case "${command}" in
       --limits-json "${HLS_LIMITS_PATH}" \
       "$@"
     ;;
+  calibrate-session)
+    echo "[gripper-gravity-calibration] port: ${GRIPPER_PORT}"
+    echo "[gripper-gravity-calibration] attitude: ${ATTITUDE_SOURCE} ${ATTITUDE_TOPIC}"
+    echo "[gripper-gravity-calibration] limits: ${HLS_LIMITS_PATH}"
+    python3 "${CALIBRATION_SCRIPT}" calibrate-session \
+      --port "${GRIPPER_PORT}" \
+      --attitude-source "${ATTITUDE_SOURCE}" \
+      --attitude-topic "${ATTITUDE_TOPIC}" \
+      --limits-json "${HLS_LIMITS_PATH}" \
+      "$@"
+    ;;
   fit)
     python3 "${CALIBRATION_SCRIPT}" fit "$@"
     ;;
@@ -70,7 +81,7 @@ case "${command}" in
     ;;
   *)
     echo "[gripper-gravity-calibration] unknown command: ${command}" >&2
-    echo "[gripper-gravity-calibration] expected: read-limits, collect, collect-full, or fit" >&2
+    echo "[gripper-gravity-calibration] expected: read-limits, collect, collect-full, calibrate-session, or fit" >&2
     exit 2
     ;;
 esac

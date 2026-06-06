@@ -8,12 +8,13 @@ ROS2 launch/config files, and the future flight gripper force-control node.
 
 ## Gravity Calibration
 
-The calibration tool has four subcommands:
+The calibration tool has five subcommands:
 
 ```bash
 python3 src/hls_gripper/scripts/gripper_gravity_calibration.py read-limits --help
 python3 src/hls_gripper/scripts/gripper_gravity_calibration.py collect --help
 python3 src/hls_gripper/scripts/gripper_gravity_calibration.py collect-full --help
+python3 src/hls_gripper/scripts/gripper_gravity_calibration.py calibrate-session --help
 python3 src/hls_gripper/scripts/gripper_gravity_calibration.py fit --help
 ```
 
@@ -24,6 +25,7 @@ For field use, prefer the workspace wrapper because it follows the existing
 bash shflies/gripper_gravity_calibration.sh read-limits --help
 bash shflies/gripper_gravity_calibration.sh collect --help
 bash shflies/gripper_gravity_calibration.sh collect-full --help
+bash shflies/gripper_gravity_calibration.sh calibrate-session --help
 bash shflies/gripper_gravity_calibration.sh fit --help
 ```
 
@@ -86,16 +88,56 @@ collects:
 
 ```text
 both_clear       both fingers sweep open -> clear without self-contact
-left_extension   left finger sweeps clear -> max while right stays open
-right_extension  right finger sweeps clear -> max while left stays open
+left_full        left finger sweeps open -> max while right stays open
+right_full       right finger sweeps open -> max while left stays open
 ```
 
 Use `clear` for the near-vertical no-self-contact position. Use `max` for the
 actual inward travel limit. The fitted JSON stores `close_pos=max`; the
 runtime close ratio is computed over `open -> max`.
 
+Before and after each empty segment, the script parks both fingers at open with
+low-speed transition commands. Those transition moves are not recorded in the
+CSV, so current spikes from changing segment geometry do not pollute the
+no-load baseline.
+
 `fit` bins the raw CSV by close ratio, roll, and pitch, then writes a JSON table
 that the runtime gripper controller can use for gravity/friction compensation.
+
+`calibrate-session` is the preferred full field workflow when contact detection
+must also be calibrated. It first collects the empty no-load table over multiple
+speed/acceleration/torque profiles, then opens the gripper and waits for plain
+terminal prompts while you place or change objects. The terminal does not
+refresh while waiting for input.
+
+Default object labels are `foam,bottle,box`; override them with your own names:
+
+```bash
+GRIPPER_PORT=/dev/ttyACM1 ATTITUDE_SOURCE=ros-imu \
+bash shflies/gripper_gravity_calibration.sh calibrate-session \
+  --object-labels foam,bottle,small_box \
+  --contact-trials-per-object 3 \
+  --profiles 5:3:90,10:5:120,20:8:150 \
+  --max-current 300 \
+  --max-temp 60
+```
+
+If the empty baseline is already trusted, collect only contact samples and
+append contact thresholds to a new JSON:
+
+```bash
+GRIPPER_PORT=/dev/ttyACM1 ATTITUDE_SOURCE=ros-imu \
+bash shflies/gripper_gravity_calibration.sh calibrate-session \
+  --skip-empty \
+  --baseline-json src/hls_gripper/config/gravity_compensation.json \
+  --object-labels bottle,box \
+  --contact-trials-per-object 3
+```
+
+The final JSON contains `contact_detection.left/right` with
+`metric_sign`, `enter_threshold`, `exit_threshold`, and `strong_threshold`.
+The runtime node uses those values by default; ROS parameters can still override
+them for field debugging.
 
 Example output locations:
 
@@ -146,6 +188,8 @@ so the actual status topics are:
 /hls_gripper/right_current_baseline   std_msgs/Float64
 /hls_gripper/left_current_residual    std_msgs/Float64
 /hls_gripper/right_current_residual   std_msgs/Float64
+/hls_gripper/left_contact_metric      std_msgs/Float64
+/hls_gripper/right_contact_metric     std_msgs/Float64
 /hls_gripper/roll_deg                 std_msgs/Float64
 /hls_gripper/pitch_deg                std_msgs/Float64
 ```

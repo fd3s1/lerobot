@@ -209,12 +209,23 @@ def int_from_mapping(mapping: dict, key: str, default: int) -> int:
         return default
 
 
+def float_from_mapping(mapping: dict, key: str, default: float) -> float:
+    value = mapping.get(key, default)
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 class GravityCompensationTable:
     def __init__(self, path: Path | None) -> None:
         self.path = path
         self.table = None
         self.points: dict[str, list[dict]] = {SIDE_LEFT: [], SIDE_RIGHT: []}
         self.calibration: dict[str, ServoCalibration] = {}
+        self.contact_detection: dict[str, dict] = {SIDE_LEFT: {}, SIDE_RIGHT: {}}
         if path is not None:
             with open(path) as json_file:
                 self.table = json.load(json_file)
@@ -242,6 +253,12 @@ class GravityCompensationTable:
                     inward_sign=1 if inward_sign >= 0 else -1,
                 )
             self.points[side] = list(servo.get("points", []))
+
+        detection = table.get("contact_detection", {})
+        for side in (SIDE_LEFT, SIDE_RIGHT):
+            side_detection = detection.get(side, {})
+            if isinstance(side_detection, dict):
+                self.contact_detection[side] = dict(side_detection)
 
     def baseline_current(self, side: str, close_ratio: float, roll_deg: float, pitch_deg: float) -> float:
         points = self.points.get(side, [])
@@ -314,7 +331,7 @@ class HlsBus:
         mode = self.read_mode(servo_id)
 
         if mode != expected_mode:
-            self.get_logger().warn(
+            print(
                 f"id={servo_id} mode readback is {mode} after {mode_name}; retrying with EEPROM unlock"
             )
             result, error = self.packet.unLockEprom(servo_id)
@@ -429,7 +446,11 @@ class HlsGripperNode(Node):
         self.low_current = int(self.declare_parameter("low_current", 40).value)
         self.lift_current = int(self.declare_parameter("lift_current", 120).value)
         self.final_grip_ramp_s = float(self.declare_parameter("final_grip_ramp_s", 1.2).value)
-        self.contact_current_threshold = float(self.declare_parameter("contact_current_threshold", 35.0).value)
+        self.contact_current_threshold = float(self.declare_parameter("contact_current_threshold", -1.0).value)
+        self.contact_exit_threshold = float(self.declare_parameter("contact_exit_threshold", -1.0).value)
+        self.contact_strong_threshold = float(self.declare_parameter("contact_strong_threshold", -1.0).value)
+        self.left_contact_metric_sign_param = int(self.declare_parameter("left_contact_metric_sign", 0).value)
+        self.right_contact_metric_sign_param = int(self.declare_parameter("right_contact_metric_sign", 0).value)
         self.contact_confirm_cycles = int(self.declare_parameter("contact_confirm_cycles", 3).value)
         self.max_current = float(self.declare_parameter("max_current", 600.0).value)
         self.max_temp = float(self.declare_parameter("max_temp", 70.0).value)
@@ -453,6 +474,7 @@ class HlsGripperNode(Node):
         comp_path = resolve_compensation_path(self.gravity_comp_path_param)
         self.compensation = GravityCompensationTable(comp_path)
         self.calibration = self._build_calibration()
+        self.contact_detection = self._build_contact_detection()
         self.center_gain_m_per_ratio = self._compute_center_gain()
 
         self.bus: HlsBus | None = None
@@ -502,6 +524,8 @@ class HlsGripperNode(Node):
                 "right_current_baseline",
                 "left_current_residual",
                 "right_current_residual",
+                "left_contact_metric",
+                "right_contact_metric",
                 "single_contact_direction",
                 "roll_deg",
                 "pitch_deg",
@@ -528,6 +552,8 @@ class HlsGripperNode(Node):
             "HLS gripper node started: "
             f"port={self.port} dry_run={self.dry_run} compensation={comp_label} "
             f"center_gain={self.center_gain_m_per_ratio:.5f}m/ratio "
+            f"contact_enter=({self.contact_detection[SIDE_LEFT]['enter_threshold']:.1f},"
+            f"{self.contact_detection[SIDE_RIGHT]['enter_threshold']:.1f}) "
             f"status_prefix={self.status_prefix}"
         )
         self._enter_state(STATE_OPEN)
@@ -581,6 +607,48 @@ class HlsGripperNode(Node):
                 inward_sign=1 if right_inward >= 0 else -1,
             ),
         }
+
+    def _build_contact_detection(self) -> dict[str, dict[str, float]]:
+        result: dict[str, dict[str, float]] = {}
+        for side in (SIDE_LEFT, SIDE_RIGHT):
+            table_params = self.compensation.contact_detection.get(side, {})
+            cal = self.calibration[side]
+            sign_override = (
+                self.left_contact_metric_sign_param if side == SIDE_LEFT else self.right_contact_metric_sign_param
+            )
+            if sign_override != 0:
+                metric_sign = 1.0 if sign_override > 0 else -1.0
+            else:
+                metric_sign = float_from_mapping(table_params, "metric_sign", float(cal.inward_sign))
+                metric_sign = 1.0 if metric_sign >= 0.0 else -1.0
+
+            enter = (
+                self.contact_current_threshold
+                if self.contact_current_threshold > 0.0
+                else float_from_mapping(table_params, "enter_threshold", 35.0)
+            )
+            exit_threshold = (
+                self.contact_exit_threshold
+                if self.contact_exit_threshold > 0.0
+                else float_from_mapping(table_params, "exit_threshold", max(6.0, 0.6 * enter))
+            )
+            strong = (
+                self.contact_strong_threshold
+                if self.contact_strong_threshold > 0.0
+                else float_from_mapping(table_params, "strong_threshold", max(70.0, 1.8 * enter))
+            )
+            enter = max(enter, 1.0)
+            exit_threshold = max(exit_threshold, 0.0)
+            if exit_threshold >= enter:
+                exit_threshold = 0.65 * enter
+            strong = max(strong, enter)
+            result[side] = {
+                "metric_sign": metric_sign,
+                "enter_threshold": enter,
+                "exit_threshold": exit_threshold,
+                "strong_threshold": strong,
+            }
+        return result
 
     def _compute_center_gain(self) -> float:
         if self.center_gain_override > 0.0:
@@ -743,7 +811,9 @@ class HlsGripperNode(Node):
                 )
             else:
                 contact_sim = self.state not in (STATE_OPEN, STATE_SEARCH_OBJECT) or elapsed > 0.8
-            fb.current = self.calibration[side].inward_sign * (self.low_current + 20.0 if contact_sim else 0.0)
+            fb.current = self.contact_detection[side]["metric_sign"] * (
+                self.low_current + 20.0 if contact_sim else 0.0
+            )
             fb.load = fb.current
             fb.temp = 25.0
 
@@ -913,14 +983,38 @@ class HlsGripperNode(Node):
     def _update_contacts(self) -> None:
         left_metric = self._contact_metric(SIDE_LEFT)
         right_metric = self._contact_metric(SIDE_RIGHT)
-        self.left_contact_cycles = self.left_contact_cycles + 1 if left_metric >= self.contact_current_threshold else 0
-        self.right_contact_cycles = self.right_contact_cycles + 1 if right_metric >= self.contact_current_threshold else 0
-        self.left_contact = self.left_contact_cycles >= self.contact_confirm_cycles
-        self.right_contact = self.right_contact_cycles >= self.contact_confirm_cycles
+        self.left_contact_cycles, self.left_contact = self._update_one_contact(
+            SIDE_LEFT,
+            left_metric,
+            self.left_contact_cycles,
+            self.left_contact,
+        )
+        self.right_contact_cycles, self.right_contact = self._update_one_contact(
+            SIDE_RIGHT,
+            right_metric,
+            self.right_contact_cycles,
+            self.right_contact,
+        )
+
+    def _update_one_contact(self, side: str, metric: float, cycles: int, is_contact: bool) -> tuple[int, bool]:
+        thresholds = self.contact_detection[side]
+        confirm_cycles = max(1, self.contact_confirm_cycles)
+        if is_contact:
+            if metric <= thresholds["exit_threshold"]:
+                cycles = max(0, cycles - 1)
+            else:
+                cycles = max(cycles, confirm_cycles)
+            return cycles, cycles > 0
+        if metric >= thresholds["strong_threshold"]:
+            cycles = confirm_cycles
+        elif metric >= thresholds["enter_threshold"]:
+            cycles += 1
+        else:
+            cycles = 0
+        return cycles, cycles >= confirm_cycles
 
     def _contact_metric(self, side: str) -> float:
-        cal = self.calibration[side]
-        return cal.inward_sign * self.feedback[side].residual_current
+        return self.contact_detection[side]["metric_sign"] * self.feedback[side].residual_current
 
     def _at_close_limit(self, side: str) -> bool:
         return self.feedback[side].close_ratio >= self.single_contact_limit_ratio
@@ -998,6 +1092,8 @@ class HlsGripperNode(Node):
             "right_current_baseline": right_fb.baseline_current,
             "left_current_residual": left_fb.residual_current,
             "right_current_residual": right_fb.residual_current,
+            "left_contact_metric": self._contact_metric(SIDE_LEFT),
+            "right_contact_metric": self._contact_metric(SIDE_RIGHT),
             "single_contact_direction": self._single_contact_direction(),
             "roll_deg": self.latest_roll_deg,
             "pitch_deg": self.latest_pitch_deg,
