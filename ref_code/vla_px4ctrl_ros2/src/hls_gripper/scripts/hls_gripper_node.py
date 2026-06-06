@@ -61,6 +61,15 @@ class ServoCalibration:
     inward_sign: int
 
 
+@dataclass(frozen=True)
+class MotionProfile:
+    profile_index: int
+    profile_name: str
+    speed: int
+    acc: int
+    torque_limit: int
+
+
 @dataclass
 class ServoFeedback:
     pos: float
@@ -226,6 +235,8 @@ class GravityCompensationTable:
         self.points: dict[str, list[dict]] = {SIDE_LEFT: [], SIDE_RIGHT: []}
         self.calibration: dict[str, ServoCalibration] = {}
         self.contact_detection: dict[str, dict] = {SIDE_LEFT: {}, SIDE_RIGHT: {}}
+        self.contact_detection_by_profile: dict[str, dict] = {}
+        self.motion_profiles: list[MotionProfile] = []
         if path is not None:
             with open(path) as json_file:
                 self.table = json.load(json_file)
@@ -259,11 +270,58 @@ class GravityCompensationTable:
             side_detection = detection.get(side, {})
             if isinstance(side_detection, dict):
                 self.contact_detection[side] = dict(side_detection)
+        profiles_detection = detection.get("profiles", {})
+        if isinstance(profiles_detection, dict):
+            self.contact_detection_by_profile = {
+                str(key): value for key, value in profiles_detection.items() if isinstance(value, dict)
+            }
 
-    def baseline_current(self, side: str, close_ratio: float, roll_deg: float, pitch_deg: float) -> float:
+        for profile in table.get("collection", {}).get("profiles", []):
+            try:
+                profile_index = int(profile.get("profile_index", len(self.motion_profiles)))
+                profile_name = str(profile.get("profile_name") or f"p{profile_index}")
+                speed = int(profile.get("speed", profile.get("speed_cmd", 0)))
+                acc = int(profile.get("acc", profile.get("acc_cmd", 0)))
+                torque_limit = int(profile.get("torque_limit", 0))
+            except (TypeError, ValueError):
+                continue
+            if speed > 0 and acc > 0 and torque_limit > 0:
+                self.motion_profiles.append(
+                    MotionProfile(
+                        profile_index=profile_index,
+                        profile_name=profile_name,
+                        speed=speed,
+                        acc=acc,
+                        torque_limit=torque_limit,
+                    )
+                )
+
+    def baseline_current(
+        self,
+        side: str,
+        close_ratio: float,
+        roll_deg: float,
+        pitch_deg: float,
+        profile_index: int | None = None,
+        profile_name: str = "",
+    ) -> float:
         points = self.points.get(side, [])
         if not points:
             return 0.0
+        profile_points = []
+        for point in points:
+            try:
+                point_index = int(point.get("profile_index"))
+            except (TypeError, ValueError):
+                point_index = None
+            point_name = str(point.get("profile_name") or "")
+            if profile_index is not None and point_index != profile_index:
+                continue
+            if profile_name and point_name and point_name != profile_name:
+                continue
+            profile_points.append(point)
+        if profile_points:
+            points = profile_points
 
         close_ratio = clamp(close_ratio, 0.0, 1.0)
         if not math.isfinite(roll_deg):
@@ -437,9 +495,11 @@ class HlsGripperNode(Node):
         self.feedback_rate_hz = float(self.declare_parameter("feedback_rate_hz", 20.0).value)
         self.open_enter_threshold = float(self.declare_parameter("open_enter_threshold", 80.0).value)
         self.close_enter_threshold = float(self.declare_parameter("close_enter_threshold", 20.0).value)
-        self.search_speed = int(self.declare_parameter("search_speed", 10).value)
-        self.search_acc = int(self.declare_parameter("search_acc", 5).value)
-        self.search_torque_limit = int(self.declare_parameter("search_torque_limit", 120).value)
+        self.motion_profile_name_param = str(self.declare_parameter("motion_profile", "").value)
+        self.motion_profile_index_param = int(self.declare_parameter("motion_profile_index", -1).value)
+        self.search_speed_param = int(self.declare_parameter("search_speed", -1).value)
+        self.search_acc_param = int(self.declare_parameter("search_acc", -1).value)
+        self.search_torque_limit_param = int(self.declare_parameter("search_torque_limit", -1).value)
         self.open_speed = int(self.declare_parameter("open_speed", 40).value)
         self.open_acc = int(self.declare_parameter("open_acc", 10).value)
         self.open_torque_limit = int(self.declare_parameter("open_torque_limit", 300).value)
@@ -474,6 +534,12 @@ class HlsGripperNode(Node):
         comp_path = resolve_compensation_path(self.gravity_comp_path_param)
         self.compensation = GravityCompensationTable(comp_path)
         self.calibration = self._build_calibration()
+        self.motion_profile = self._select_motion_profile()
+        self.search_speed = self.search_speed_param if self.search_speed_param > 0 else self.motion_profile.speed
+        self.search_acc = self.search_acc_param if self.search_acc_param > 0 else self.motion_profile.acc
+        self.search_torque_limit = (
+            self.search_torque_limit_param if self.search_torque_limit_param > 0 else self.motion_profile.torque_limit
+        )
         self.contact_detection = self._build_contact_detection()
         self.center_gain_m_per_ratio = self._compute_center_gain()
 
@@ -511,6 +577,7 @@ class HlsGripperNode(Node):
         self.feedback_pub = self.create_publisher(GripperFeedback, self.feedback_topic, 10)
         self.state_pub = self.create_publisher(String, f"{self.status_prefix}/state", 10)
         self.fault_reason_pub = self.create_publisher(String, f"{self.status_prefix}/fault_reason", 10)
+        self.motion_profile_pub = self.create_publisher(String, f"{self.status_prefix}/motion_profile", 10)
         self.float_status_pubs = {
             name: self.create_publisher(Float64, f"{self.status_prefix}/{name}", 10)
             for name in (
@@ -527,6 +594,10 @@ class HlsGripperNode(Node):
                 "left_contact_metric",
                 "right_contact_metric",
                 "single_contact_direction",
+                "motion_profile_index",
+                "motion_profile_speed",
+                "motion_profile_acc",
+                "motion_profile_torque_limit",
                 "roll_deg",
                 "pitch_deg",
             )
@@ -552,6 +623,8 @@ class HlsGripperNode(Node):
             "HLS gripper node started: "
             f"port={self.port} dry_run={self.dry_run} compensation={comp_label} "
             f"center_gain={self.center_gain_m_per_ratio:.5f}m/ratio "
+            f"profile={self.motion_profile.profile_name}"
+            f"({self.search_speed},{self.search_acc},{self.search_torque_limit}) "
             f"contact_enter=({self.contact_detection[SIDE_LEFT]['enter_threshold']:.1f},"
             f"{self.contact_detection[SIDE_RIGHT]['enter_threshold']:.1f}) "
             f"status_prefix={self.status_prefix}"
@@ -608,10 +681,43 @@ class HlsGripperNode(Node):
             ),
         }
 
+    def _select_motion_profile(self) -> MotionProfile:
+        profiles = list(self.compensation.motion_profiles)
+        if not profiles:
+            return MotionProfile(profile_index=0, profile_name="default", speed=10, acc=5, torque_limit=120)
+        if self.motion_profile_name_param:
+            for profile in profiles:
+                if profile.profile_name == self.motion_profile_name_param:
+                    return profile
+            self.get_logger().warn(
+                f"motion_profile={self.motion_profile_name_param} not found in compensation table; using first profile"
+            )
+        if self.motion_profile_index_param >= 0:
+            for profile in profiles:
+                if profile.profile_index == self.motion_profile_index_param:
+                    return profile
+            self.get_logger().warn(
+                f"motion_profile_index={self.motion_profile_index_param} not found in compensation table; using first profile"
+            )
+        return profiles[0]
+
+    def _profile_contact_detection_params(self) -> dict:
+        keys = [
+            f"{self.motion_profile.profile_index}:{self.motion_profile.profile_name}",
+            f"{self.motion_profile.profile_index}:",
+            f":{self.motion_profile.profile_name}",
+        ]
+        for key in keys:
+            params = self.compensation.contact_detection_by_profile.get(key)
+            if isinstance(params, dict):
+                return params
+        return {}
+
     def _build_contact_detection(self) -> dict[str, dict[str, float]]:
         result: dict[str, dict[str, float]] = {}
+        profile_detection = self._profile_contact_detection_params()
         for side in (SIDE_LEFT, SIDE_RIGHT):
-            table_params = self.compensation.contact_detection.get(side, {})
+            table_params = profile_detection.get(side, {}) or self.compensation.contact_detection.get(side, {})
             cal = self.calibration[side]
             sign_override = (
                 self.left_contact_metric_sign_param if side == SIDE_LEFT else self.right_contact_metric_sign_param
@@ -769,6 +875,8 @@ class HlsGripperNode(Node):
                 fb.close_ratio,
                 self.latest_roll_deg,
                 self.latest_pitch_deg,
+                profile_index=self.motion_profile.profile_index,
+                profile_name=self.motion_profile.profile_name,
             )
             fb.residual_current = fb.current - fb.baseline_current
         self.last_feedback_s = time.monotonic()
@@ -1081,6 +1189,10 @@ class HlsGripperNode(Node):
         string_msg.data = self.fault_reason if self.state == STATE_FAULT else ""
         self.fault_reason_pub.publish(string_msg)
 
+        string_msg = String()
+        string_msg.data = self.motion_profile.profile_name
+        self.motion_profile_pub.publish(string_msg)
+
         values = {
             "left_close_ratio": left_fb.close_ratio,
             "right_close_ratio": right_fb.close_ratio,
@@ -1095,6 +1207,10 @@ class HlsGripperNode(Node):
             "left_contact_metric": self._contact_metric(SIDE_LEFT),
             "right_contact_metric": self._contact_metric(SIDE_RIGHT),
             "single_contact_direction": self._single_contact_direction(),
+            "motion_profile_index": float(self.motion_profile.profile_index),
+            "motion_profile_speed": float(self.search_speed),
+            "motion_profile_acc": float(self.search_acc),
+            "motion_profile_torque_limit": float(self.search_torque_limit),
             "roll_deg": self.latest_roll_deg,
             "pitch_deg": self.latest_pitch_deg,
         }

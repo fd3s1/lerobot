@@ -29,6 +29,8 @@ HLS_GRAVITY_COMP_PATH="${HLS_GRAVITY_COMP_PATH:-}"
 HLS_DRY_RUN="${HLS_DRY_RUN:-false}"
 HLS_LOW_CURRENT="${HLS_LOW_CURRENT:-40}"
 HLS_LIFT_CURRENT="${HLS_LIFT_CURRENT:-120}"
+HLS_MOTION_PROFILE="${HLS_MOTION_PROFILE:-}"
+HLS_MOTION_PROFILE_INDEX="${HLS_MOTION_PROFILE_INDEX:-}"
 HLS_CENTER_GAIN_M_PER_RATIO="${HLS_CENTER_GAIN_M_PER_RATIO:-0.0}"
 HLS_CENTER_BIAS="${HLS_CENTER_BIAS:-0.0}"
 HLS_CENTER_SIGN="${HLS_CENTER_SIGN:-1.0}"
@@ -163,6 +165,7 @@ echo "[auto-hls-grasp-place] cmd topic: ${CMD_TOPIC}"
 echo "[auto-hls-grasp-place] gripper topics: scalar=${GRIPPER_TOPIC} pair=${GRIPPER_COMMAND_PAIR_TOPIC} feedback=${GRIPPER_FEEDBACK_TOPIC} status=${HLS_STATUS_TOPIC}"
 echo "[auto-hls-grasp-place] manager: type=${GRIPPER_MANAGER_TYPE} start=${START_GRIPPER_MANAGER} port=${GRIPPER_MANAGER_PORT} dry_run=${HLS_DRY_RUN}"
 echo "[auto-hls-grasp-place] hls current: low=${HLS_LOW_CURRENT} lift=${HLS_LIFT_CURRENT}"
+echo "[auto-hls-grasp-place] hls motion profile: name=${HLS_MOTION_PROFILE:-<json-default>} index=${HLS_MOTION_PROFILE_INDEX:-<none>}"
 echo "[auto-hls-grasp-place] centering: kp=${CENTER_KP} vmax=${CENTER_VMAX_MPS} deadband=${CENTER_DEADBAND_M} offset_max=${CENTER_OFFSET_MAX_M} sign=${CENTER_COMMAND_SIGN}"
 echo "[auto-hls-grasp-place] single-contact: vmax=${SINGLE_CONTACT_VMAX_MPS} offset_max=${SINGLE_CONTACT_OFFSET_MAX_M} sign=${SINGLE_CONTACT_BODY_Y_SIGN} timeout=${HLS_SINGLE_CONTACT_TIMEOUT_S} limit_ratio=${HLS_SINGLE_CONTACT_LIMIT_RATIO}"
 echo "[auto-hls-grasp-place] no LeRobot record process will be started."
@@ -207,6 +210,12 @@ if bool_is_true "${START_GRIPPER_MANAGER}"; then
   )
   if [[ -n "${HLS_GRAVITY_COMP_PATH}" ]]; then
     hls_args+=(-p gravity_comp_path:="${HLS_GRAVITY_COMP_PATH}")
+  fi
+  if [[ -n "${HLS_MOTION_PROFILE}" ]]; then
+    hls_args+=(-p motion_profile:="${HLS_MOTION_PROFILE}")
+  fi
+  if [[ -n "${HLS_MOTION_PROFILE_INDEX}" ]]; then
+    hls_args+=(-p motion_profile_index:="${HLS_MOTION_PROFILE_INDEX}")
   fi
   if [[ -n "${HLS_LEFT_OPEN}" ]]; then
     hls_args+=(-p left_open:="${HLS_LEFT_OPEN}")

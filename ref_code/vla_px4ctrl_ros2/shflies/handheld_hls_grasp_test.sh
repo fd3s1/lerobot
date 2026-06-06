@@ -17,6 +17,8 @@ HLS_GRAVITY_COMP_PATH="${HLS_GRAVITY_COMP_PATH:-}"
 HLS_DRY_RUN="${HLS_DRY_RUN:-false}"
 HLS_LOW_CURRENT="${HLS_LOW_CURRENT:-40}"
 HLS_LIFT_CURRENT="${HLS_LIFT_CURRENT:-120}"
+HLS_MOTION_PROFILE="${HLS_MOTION_PROFILE:-}"
+HLS_MOTION_PROFILE_INDEX="${HLS_MOTION_PROFILE_INDEX:-}"
 HLS_CENTER_GAIN_M_PER_RATIO="${HLS_CENTER_GAIN_M_PER_RATIO:-0.0}"
 HLS_CENTER_BIAS="${HLS_CENTER_BIAS:-0.0}"
 HLS_CENTER_SIGN="${HLS_CENTER_SIGN:-1.0}"
@@ -78,6 +80,7 @@ echo "[handheld-hls-grasp-test] status topic: ${HLS_STATUS_TOPIC}"
 echo "[handheld-hls-grasp-test] feedback topic: ${GRIPPER_FEEDBACK_TOPIC}"
 echo "[handheld-hls-grasp-test] manager: start=${START_GRIPPER_MANAGER} port=${GRIPPER_MANAGER_PORT} dry_run=${HLS_DRY_RUN}"
 echo "[handheld-hls-grasp-test] current: low=${HLS_LOW_CURRENT} lift=${HLS_LIFT_CURRENT}"
+echo "[handheld-hls-grasp-test] motion profile: name=${HLS_MOTION_PROFILE:-<json-default>} index=${HLS_MOTION_PROFILE_INDEX:-<none>}"
 echo "[handheld-hls-grasp-test] center: gain=${HLS_CENTER_GAIN_M_PER_RATIO} bias=${HLS_CENTER_BIAS} sign=${HLS_CENTER_SIGN}"
 echo "[handheld-hls-grasp-test] single-contact: timeout=${HLS_SINGLE_CONTACT_TIMEOUT_S} limit_ratio=${HLS_SINGLE_CONTACT_LIMIT_RATIO} dry_run_pattern=${HLS_DRY_RUN_CONTACT_PATTERN}"
 echo "[handheld-hls-grasp-test] no /position_cmd, takeoff/land, or record data will be published."
@@ -108,6 +111,12 @@ if bool_is_true "${START_GRIPPER_MANAGER}"; then
   )
   if [[ -n "${HLS_GRAVITY_COMP_PATH}" ]]; then
     hls_args+=(-p gravity_comp_path:="${HLS_GRAVITY_COMP_PATH}")
+  fi
+  if [[ -n "${HLS_MOTION_PROFILE}" ]]; then
+    hls_args+=(-p motion_profile:="${HLS_MOTION_PROFILE}")
+  fi
+  if [[ -n "${HLS_MOTION_PROFILE_INDEX}" ]]; then
+    hls_args+=(-p motion_profile_index:="${HLS_MOTION_PROFILE_INDEX}")
   fi
   if [[ -n "${HLS_LEFT_OPEN}" ]]; then
     hls_args+=(-p left_open:="${HLS_LEFT_OPEN}")

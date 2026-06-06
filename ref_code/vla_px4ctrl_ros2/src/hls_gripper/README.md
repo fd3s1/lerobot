@@ -103,11 +103,41 @@ runtime close ratio is computed over `open -> max`.
 Before and after each empty segment, the script parks both fingers at open with
 low-speed transition commands. Those transition moves are not recorded in the
 CSV, so current spikes from changing segment geometry do not pollute the
-no-load baseline. During empty calibration, each commanded point must settle
-within `--position-tolerance` before samples are written; otherwise the command
-fails instead of saving moving-current data. Increase `--move-timeout` for very
-slow smoke tests, or increase speed/acceleration after confirming the motion is
-safe.
+no-load baseline.
+
+By default, `collect-full` and `calibrate-session` use
+`--empty-sample-mode moving`: each empty segment is swept continuously from
+start to stop, and samples are recorded during that motion. This better matches
+real grasping than stopping at every point. Use profile values close to the
+actual grasp motion. If you need the older point-by-point behavior, pass
+`--empty-sample-mode settled`; then each commanded point must settle within
+`--position-tolerance` before samples are written.
+
+Motion profiles are written as `p0`, `p1`, ... in the JSON. A profile is:
+
+```text
+speed:acc:torque_limit
+```
+
+For example, this no-load smoke command records three continuous sweeps with
+the same profile family later available to the runtime controller:
+
+```bash
+GRIPPER_PORT=/dev/ttyACM1 ATTITUDE_SOURCE=ros-imu \
+bash shflies/gripper_gravity_calibration.sh collect-full \
+  --profiles 5:3:90,10:5:120,20:8:150 \
+  --empty-sample-mode moving \
+  --cycles 1 \
+  --sample-hz 30 \
+  --sample-duration 0.2 \
+  --move-timeout 20 \
+  --position-tolerance 50 \
+  --max-current 300 \
+  --max-temp 60 \
+  --output-csv src/hls_gripper/config/calibration/raw/gravity_empty_full_smoke.csv \
+  --output-json src/hls_gripper/config/gravity_compensation_smoke.json \
+  --curve-csv src/hls_gripper/config/gravity_compensation_curve_smoke.csv
+```
 
 `fit` bins the raw CSV by close ratio, roll, and pitch, then writes a JSON table
 that the runtime gripper controller can use for gravity/friction compensation.
@@ -126,9 +156,16 @@ bash shflies/gripper_gravity_calibration.sh calibrate-session \
   --object-labels foam,bottle,small_box \
   --contact-trials-per-object 3 \
   --profiles 5:3:90,10:5:120,20:8:150 \
+  --contact-profiles same \
+  --empty-sample-mode moving \
   --max-current 300 \
   --max-temp 60
 ```
+
+`--contact-profiles same` is the default. It means every object contact trial is
+also repeated with `p0`, `p1`, and `p2`, so contact thresholds are fitted per
+motion profile as well as globally. Use this for the final table; use fewer
+profiles only for a fast smoke test.
 
 If the empty baseline is already trusted, collect only contact samples and
 append contact thresholds to a new JSON:
@@ -176,6 +213,7 @@ so the actual status topics are:
 ```text
 /hls_gripper/state                    std_msgs/String
 /hls_gripper/fault_reason             std_msgs/String
+/hls_gripper/motion_profile           std_msgs/String
 /hls_gripper/left_contact             std_msgs/Bool
 /hls_gripper/right_contact            std_msgs/Bool
 /hls_gripper/both_contact             std_msgs/Bool
@@ -198,6 +236,10 @@ so the actual status topics are:
 /hls_gripper/right_current_residual   std_msgs/Float64
 /hls_gripper/left_contact_metric      std_msgs/Float64
 /hls_gripper/right_contact_metric     std_msgs/Float64
+/hls_gripper/motion_profile_index     std_msgs/Float64
+/hls_gripper/motion_profile_speed     std_msgs/Float64
+/hls_gripper/motion_profile_acc       std_msgs/Float64
+/hls_gripper/motion_profile_torque_limit std_msgs/Float64
 /hls_gripper/roll_deg                 std_msgs/Float64
 /hls_gripper/pitch_deg                std_msgs/Float64
 ```
@@ -209,3 +251,23 @@ HLS_STATUS_TOPIC=/my_hls/status bash shflies/handheld_hls_grasp_test.sh
 ```
 
 This publishes the standard status fields under `/my_hls/...`.
+
+To run with one of the calibrated motion profiles, either choose by name:
+
+```bash
+HLS_GRAVITY_COMP_PATH=src/hls_gripper/config/gravity_compensation.json \
+HLS_MOTION_PROFILE=p1 \
+bash shflies/handheld_hls_grasp_test.sh
+```
+
+or by index:
+
+```bash
+HLS_GRAVITY_COMP_PATH=src/hls_gripper/config/gravity_compensation.json \
+HLS_MOTION_PROFILE_INDEX=1 \
+bash shflies/auto_hls_grasp_place.sh
+```
+
+If neither is set, the HLS node uses the first profile in the JSON. The selected
+profile supplies the search speed, acceleration, and torque limit unless those
+ROS parameters are explicitly overridden.
