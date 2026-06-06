@@ -30,6 +30,9 @@ HLS_SDK_ROOT="${HLS_SDK_ROOT:-}"
 HLS_DRY_RUN="${HLS_DRY_RUN:-false}"
 HLS_LOW_CURRENT="${HLS_LOW_CURRENT:-40}"
 HLS_LIFT_CURRENT="${HLS_LIFT_CURRENT:-120}"
+HLS_CENTER_HOLD_CURRENT="${HLS_CENTER_HOLD_CURRENT:-}"
+HLS_CENTER_PUSH_CURRENT="${HLS_CENTER_PUSH_CURRENT:-}"
+HLS_CENTER_TIMEOUT_ACTION="${HLS_CENTER_TIMEOUT_ACTION:-final_grip}"
 HLS_MOTION_PROFILE="${HLS_MOTION_PROFILE:-}"
 HLS_MOTION_PROFILE_INDEX="${HLS_MOTION_PROFILE_INDEX:-}"
 HLS_CENTER_GAIN_M_PER_RATIO="${HLS_CENTER_GAIN_M_PER_RATIO:-0.0}"
@@ -166,7 +169,7 @@ echo "[auto-hls-grasp-place] cmd topic: ${CMD_TOPIC}"
 echo "[auto-hls-grasp-place] gripper topics: scalar=${GRIPPER_TOPIC} pair=${GRIPPER_COMMAND_PAIR_TOPIC} feedback=${GRIPPER_FEEDBACK_TOPIC} status=${HLS_STATUS_TOPIC}"
 echo "[auto-hls-grasp-place] manager: type=${GRIPPER_MANAGER_TYPE} start=${START_GRIPPER_MANAGER} port=${GRIPPER_MANAGER_PORT} dry_run=${HLS_DRY_RUN}"
 echo "[auto-hls-grasp-place] hls sdk root: ${HLS_SDK_ROOT:-<auto>}"
-echo "[auto-hls-grasp-place] hls current: low=${HLS_LOW_CURRENT} lift=${HLS_LIFT_CURRENT}"
+echo "[auto-hls-grasp-place] hls current: low=${HLS_LOW_CURRENT} lift=${HLS_LIFT_CURRENT} center_hold=${HLS_CENTER_HOLD_CURRENT:-<low>} center_push=${HLS_CENTER_PUSH_CURRENT:-<auto>} center_timeout=${HLS_CENTER_TIMEOUT_ACTION}"
 echo "[auto-hls-grasp-place] hls motion profile: name=${HLS_MOTION_PROFILE:-<json-default>} index=${HLS_MOTION_PROFILE_INDEX:-<none>}"
 echo "[auto-hls-grasp-place] centering: kp=${CENTER_KP} vmax=${CENTER_VMAX_MPS} deadband=${CENTER_DEADBAND_M} offset_max=${CENTER_OFFSET_MAX_M} sign=${CENTER_COMMAND_SIGN}"
 echo "[auto-hls-grasp-place] single-contact: vmax=${SINGLE_CONTACT_VMAX_MPS} offset_max=${SINGLE_CONTACT_OFFSET_MAX_M} sign=${SINGLE_CONTACT_BODY_Y_SIGN} timeout=${HLS_SINGLE_CONTACT_TIMEOUT_S} limit_ratio=${HLS_SINGLE_CONTACT_LIMIT_RATIO}"
@@ -203,6 +206,7 @@ if bool_is_true "${START_GRIPPER_MANAGER}"; then
     -p dry_run:="${HLS_DRY_RUN}"
     -p low_current:="${HLS_LOW_CURRENT}"
     -p lift_current:="${HLS_LIFT_CURRENT}"
+    -p center_timeout_action:="${HLS_CENTER_TIMEOUT_ACTION}"
     -p center_gain_m_per_ratio:="${HLS_CENTER_GAIN_M_PER_RATIO}"
     -p center_bias:="${HLS_CENTER_BIAS}"
     -p center_sign:="${HLS_CENTER_SIGN}"
@@ -221,6 +225,12 @@ if bool_is_true "${START_GRIPPER_MANAGER}"; then
   fi
   if [[ -n "${HLS_MOTION_PROFILE_INDEX}" ]]; then
     hls_args+=(-p motion_profile_index:="${HLS_MOTION_PROFILE_INDEX}")
+  fi
+  if [[ -n "${HLS_CENTER_HOLD_CURRENT}" ]]; then
+    hls_args+=(-p center_hold_current:="${HLS_CENTER_HOLD_CURRENT}")
+  fi
+  if [[ -n "${HLS_CENTER_PUSH_CURRENT}" ]]; then
+    hls_args+=(-p center_push_current:="${HLS_CENTER_PUSH_CURRENT}")
   fi
   if [[ -n "${HLS_LEFT_OPEN}" ]]; then
     hls_args+=(-p left_open:="${HLS_LEFT_OPEN}")

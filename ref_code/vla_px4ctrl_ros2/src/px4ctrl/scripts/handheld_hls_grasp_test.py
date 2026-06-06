@@ -356,8 +356,11 @@ def main() -> None:
     try:
         node.run()
     except KeyboardInterrupt:
-        node.publish_command("open", force=True)
-        raise
+        try:
+            if rclpy.ok():
+                node.publish_command("open", force=True)
+        except Exception as exc:
+            node.get_logger().warn(f"failed to publish open command during shutdown: {exc}")
     finally:
         node.close()
         node.destroy_node()

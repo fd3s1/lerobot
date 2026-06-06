@@ -15,6 +15,7 @@ import rclpy
 from quadrotor_msgs.msg import GripperCommandPair, GripperFeedback
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Bool, Float64, String
 
@@ -527,6 +528,9 @@ class HlsGripperNode(Node):
         self.open_torque_limit = int(self.declare_parameter("open_torque_limit", 300).value)
         self.low_current = int(self.declare_parameter("low_current", 40).value)
         self.lift_current = int(self.declare_parameter("lift_current", 120).value)
+        self.center_hold_current_param = int(self.declare_parameter("center_hold_current", -1).value)
+        self.center_push_current_param = int(self.declare_parameter("center_push_current", -1).value)
+        self.center_timeout_action = str(self.declare_parameter("center_timeout_action", "final_grip").value)
         self.final_grip_ramp_s = float(self.declare_parameter("final_grip_ramp_s", 1.2).value)
         self.contact_current_threshold = float(self.declare_parameter("contact_current_threshold", -1.0).value)
         self.contact_exit_threshold = float(self.declare_parameter("contact_exit_threshold", -1.0).value)
@@ -562,6 +566,14 @@ class HlsGripperNode(Node):
         self.search_torque_limit = (
             self.search_torque_limit_param if self.search_torque_limit_param > 0 else self.motion_profile.torque_limit
         )
+        self.center_hold_current = (
+            self.center_hold_current_param if self.center_hold_current_param > 0 else self.low_current
+        )
+        self.center_push_current = (
+            self.center_push_current_param
+            if self.center_push_current_param > 0
+            else max(self.center_hold_current, min(self.lift_current, int(round(0.75 * self.lift_current))))
+        )
         self.contact_detection = self._build_contact_detection()
         self.center_gain_m_per_ratio = self._compute_center_gain()
 
@@ -595,7 +607,13 @@ class HlsGripperNode(Node):
 
         self.create_subscription(Float64, self.command_topic, self._command_cb, 10)
         self.create_subscription(GripperCommandPair, self.command_pair_topic, self._command_pair_cb, 10)
-        self.create_subscription(Imu, self.attitude_topic, self._imu_cb, 10)
+        imu_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+        self.create_subscription(Imu, self.attitude_topic, self._imu_cb, imu_qos)
         self.feedback_pub = self.create_publisher(GripperFeedback, self.feedback_topic, 10)
         self.state_pub = self.create_publisher(String, f"{self.status_prefix}/state", 10)
         self.fault_reason_pub = self.create_publisher(String, f"{self.status_prefix}/fault_reason", 10)
@@ -647,6 +665,7 @@ class HlsGripperNode(Node):
             f"center_gain={self.center_gain_m_per_ratio:.5f}m/ratio "
             f"profile={self.motion_profile.profile_name}"
             f"({self.search_speed},{self.search_acc},{self.search_torque_limit}) "
+            f"center_current=({self.center_hold_current},{self.center_push_current}) "
             f"contact_enter=({self.contact_detection[SIDE_LEFT]['enter_threshold']:.1f},"
             f"{self.contact_detection[SIDE_RIGHT]['enter_threshold']:.1f}) "
             f"status_prefix={self.status_prefix}"
@@ -1014,9 +1033,15 @@ class HlsGripperNode(Node):
             return
         if self.state == STATE_CENTERING:
             if now - self.state_started_s > self.center_timeout_s:
-                self._set_fault("centering timeout")
+                if self.center_timeout_action == "fault":
+                    self._set_fault("centering timeout")
+                else:
+                    self.get_logger().warn(
+                        "centering timeout; keeping inward force and continuing to final grip"
+                    )
+                    self._enter_state(STATE_FINAL_GRIP)
                 return
-            self._write_low_current_if_due(now)
+            self._write_centering_current_if_due(now)
             if self._is_centered(now):
                 self._enter_state(STATE_CENTERED)
             return
@@ -1096,6 +1121,31 @@ class HlsGripperNode(Node):
         for side in (SIDE_LEFT, SIDE_RIGHT):
             cal = self.calibration[side]
             self.bus.write_current(cal.servo_id, cal.inward_sign * self.low_current)
+
+    def _write_centering_current_if_due(self, now: float) -> None:
+        if now - self.last_ele_write_s < 0.08:
+            return
+        self.last_ele_write_s = now
+        self.goal_left_pos = self._compat_pos(self.feedback[SIDE_LEFT].close_ratio)
+        self.goal_right_pos = self._compat_pos(self.feedback[SIDE_RIGHT].close_ratio)
+
+        left_current = self.center_hold_current
+        right_current = self.center_hold_current
+        error_ratio = self._center_error_ratio()
+        deadband_ratio = self.center_deadband_m / max(self.center_gain_m_per_ratio, 1e-6)
+
+        if error_ratio > deadband_ratio:
+            right_current = self.center_push_current
+        elif error_ratio < -deadband_ratio:
+            left_current = self.center_push_current
+
+        if self.dry_run:
+            return
+        assert self.bus is not None
+        left_cal = self.calibration[SIDE_LEFT]
+        right_cal = self.calibration[SIDE_RIGHT]
+        self.bus.write_current(left_cal.servo_id, left_cal.inward_sign * left_current)
+        self.bus.write_current(right_cal.servo_id, right_cal.inward_sign * right_current)
 
     def _write_final_grip_current(self, now: float) -> None:
         alpha = clamp((now - self.state_started_s) / max(self.final_grip_ramp_s, 1e-3), 0.0, 1.0)
