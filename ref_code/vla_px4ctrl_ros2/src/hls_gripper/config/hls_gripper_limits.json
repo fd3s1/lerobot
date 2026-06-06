@@ -9,14 +9,14 @@
   "servos": {
     "left": {
       "id": 1,
-      "open_pos": 2057,
+      "open_pos": 2050,
       "clear_pos": 952,
       "close_pos": 675,
       "inward_sign": 1
     },
     "right": {
       "id": 2,
-      "open_pos": 2085,
+      "open_pos": 2050,
       "clear_pos": 964,
       "close_pos": 679,
       "inward_sign": -1

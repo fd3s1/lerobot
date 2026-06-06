@@ -71,9 +71,13 @@ src/hls_gripper/config/hls_gripper_limits.json
 Current saved raw positions:
 
 ```text
-left:  open=2057 clear=952 close/max=675
-right: open=2085 clear=964 close/max=679
+left:  open=2050 clear=952 close/max=675
+right: open=2050 clear=964 close/max=679
 ```
+
+The commanded open position is kept inside the HLS angle limit register. The
+manual back-driven present position can read slightly above this limit, but
+calibration and runtime commands must use a reachable target.
 
 `collect-full` loads this file by default, so the normal field command does not
 need explicit open/clear/max arguments. Command-line values still override the
