@@ -13,6 +13,7 @@ from typing import Literal
 
 import rclpy
 from quadrotor_msgs.msg import GripperCommandPair, GripperFeedback
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Bool, Float64, String
@@ -1272,7 +1273,7 @@ def main() -> None:
     node = HlsGripperNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
