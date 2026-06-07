@@ -539,8 +539,8 @@ class HlsGripperNode(Node):
         self.open_speed = int(self.declare_parameter("open_speed", 24).value)
         self.open_acc = int(self.declare_parameter("open_acc", 6).value)
         self.open_torque_limit = int(self.declare_parameter("open_torque_limit", 120).value)
-        self.low_current = int(self.declare_parameter("low_current", 25).value)
-        self.lift_current = int(self.declare_parameter("lift_current", 70).value)
+        self.low_current = int(self.declare_parameter("low_current", 28).value)
+        self.lift_current = int(self.declare_parameter("lift_current", 76).value)
         self.center_hold_current_param = int(self.declare_parameter("center_hold_current", -1).value)
         self.center_push_current_param = int(self.declare_parameter("center_push_current", -1).value)
         self.grip_chase_min_current_param = int(self.declare_parameter("grip_chase_min_current", -1).value)
@@ -607,12 +607,12 @@ class HlsGripperNode(Node):
         self.grip_chase_position_speed = (
             self.grip_chase_position_speed_param
             if self.grip_chase_position_speed_param > 0
-            else max(8, min(self.motion_profile.speed, 28))
+            else max(8, min(self.motion_profile.speed, 16))
         )
         self.grip_chase_position_acc = (
             self.grip_chase_position_acc_param
             if self.grip_chase_position_acc_param > 0
-            else max(4, min(self.motion_profile.acc, 10))
+            else max(4, min(self.motion_profile.acc, 6))
         )
         self.grip_chase_position_torque_limit = (
             self.grip_chase_position_torque_param

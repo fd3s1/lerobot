@@ -390,9 +390,9 @@ def parse_args() -> HandheldHlsConfig:
     parser.add_argument("--close-command", type=float, default=0.0)
     parser.add_argument("--publish-period-s", type=float, default=0.5)
     parser.add_argument("--grasp-mode-stable-s", type=float, default=0.3)
-    parser.add_argument("--open-mode-stable-s", type=float, default=0.7)
-    parser.add_argument("--hold-mode-timeout-s", type=float, default=1.5)
-    parser.add_argument("--rc-stale-mode", choices=("hold", "open"), default="open")
+    parser.add_argument("--open-mode-stable-s", type=float, default=0.8)
+    parser.add_argument("--hold-mode-timeout-s", type=float, default=1.0)
+    parser.add_argument("--rc-stale-mode", choices=("hold", "open"), default="hold")
     parser.add_argument("--csv-path", default="")
     args = parser.parse_args(remove_ros_args(args=sys.argv)[1:])
     if args.rate_hz <= 0.0:
