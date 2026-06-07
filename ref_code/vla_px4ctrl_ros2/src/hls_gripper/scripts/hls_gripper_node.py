@@ -539,8 +539,8 @@ class HlsGripperNode(Node):
         self.open_speed = int(self.declare_parameter("open_speed", 40).value)
         self.open_acc = int(self.declare_parameter("open_acc", 10).value)
         self.open_torque_limit = int(self.declare_parameter("open_torque_limit", 300).value)
-        self.low_current = int(self.declare_parameter("low_current", 40).value)
-        self.lift_current = int(self.declare_parameter("lift_current", 120).value)
+        self.low_current = int(self.declare_parameter("low_current", 25).value)
+        self.lift_current = int(self.declare_parameter("lift_current", 70).value)
         self.center_hold_current_param = int(self.declare_parameter("center_hold_current", -1).value)
         self.center_push_current_param = int(self.declare_parameter("center_push_current", -1).value)
         self.grip_chase_min_current_param = int(self.declare_parameter("grip_chase_min_current", -1).value)
@@ -979,6 +979,11 @@ class HlsGripperNode(Node):
             self.get_logger().error(f"HLS gripper fault: {self.fault_reason}")
         else:
             self.get_logger().info(f"HLS gripper state -> {state}")
+        if state in (STATE_OPEN, STATE_FAULT):
+            try:
+                self._write_open_direct(self.state_started_s)
+            except Exception as exc:
+                self.get_logger().warn(f"failed to write direct open command in state={state}: {exc}")
 
     def _set_fault(self, reason: str) -> None:
         self.fault_requires_open_reset = True
@@ -1186,7 +1191,13 @@ class HlsGripperNode(Node):
     def _write_open_if_due(self, now: float) -> None:
         if now - self.last_open_write_s < 0.25:
             return
+        self._write_open_direct(now)
+
+    def _write_open_direct(self, now: float) -> None:
         self.last_open_write_s = now
+        self.last_search_write_s = now
+        self.last_ele_write_s = now
+        self._reset_grip_chase_memory()
         self.goal_left_pos = 100.0
         self.goal_right_pos = 100.0
         if self.dry_run:
