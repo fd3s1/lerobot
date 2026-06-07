@@ -1158,41 +1158,57 @@ class HlsGripperNode(Node):
         self.goal_left_pos = self._compat_pos(self.feedback[SIDE_LEFT].close_ratio)
         self.goal_right_pos = self._compat_pos(self.feedback[SIDE_RIGHT].close_ratio)
 
-        left_current = self.center_hold_current
-        right_current = self.center_hold_current
-        error_ratio = self._center_error_ratio()
-        deadband_ratio = self.center_deadband_m / max(self.center_gain_m_per_ratio, 1e-6)
-
-        if error_ratio > deadband_ratio:
-            right_current = self.center_push_current
-        elif error_ratio < -deadband_ratio:
-            left_current = self.center_push_current
+        left_current, right_current = self._differential_current_pair(
+            self.center_hold_current,
+            self.center_push_current,
+        )
 
         if self.dry_run:
             return
         assert self.bus is not None
-        left_cal = self.calibration[SIDE_LEFT]
-        right_cal = self.calibration[SIDE_RIGHT]
-        self.bus.write_current(left_cal.servo_id, self.current_inward_sign[SIDE_LEFT] * left_current)
-        self.bus.write_current(right_cal.servo_id, self.current_inward_sign[SIDE_RIGHT] * right_current)
+        self._write_signed_current_pair(left_current, right_current)
 
     def _write_final_grip_current(self, now: float) -> None:
         alpha = clamp((now - self.state_started_s) / max(self.final_grip_ramp_s, 1e-3), 0.0, 1.0)
         current = int(round(self.low_current + (self.lift_current - self.low_current) * alpha))
-        self._write_current_pair(current, now)
+        push_current = max(current, self.center_push_current)
+        self._write_current_pair(current, now, push_current=push_current)
 
     def _write_lift_current_if_due(self, now: float) -> None:
-        self._write_current_pair(self.lift_current, now)
+        hold_current = max(self.center_hold_current, int(round(0.65 * self.lift_current)))
+        self._write_current_pair(hold_current, now, push_current=self.lift_current)
 
-    def _write_current_pair(self, current: int, now: float) -> None:
+    def _write_current_pair(self, current: int, now: float, push_current: int | None = None) -> None:
         if now - self.last_ele_write_s < 0.08:
             return
         self.last_ele_write_s = now
+        left_current, right_current = self._differential_current_pair(
+            current,
+            push_current if push_current is not None else current,
+        )
         if self.dry_run:
             return
         assert self.bus is not None
+        self._write_signed_current_pair(left_current, right_current)
+
+    def _differential_current_pair(self, hold_current: int, push_current: int) -> tuple[int, int]:
+        hold_current = max(0, int(hold_current))
+        push_current = max(hold_current, int(push_current))
+        left_current = hold_current
+        right_current = hold_current
+
+        error_ratio = self._center_error_ratio()
+        deadband_ratio = self.center_deadband_m / max(self.center_gain_m_per_ratio, 1e-6)
+        if error_ratio > deadband_ratio:
+            right_current = push_current
+        elif error_ratio < -deadband_ratio:
+            left_current = push_current
+        return left_current, right_current
+
+    def _write_signed_current_pair(self, left_current: int, right_current: int) -> None:
         for side in (SIDE_LEFT, SIDE_RIGHT):
             cal = self.calibration[side]
+            current = left_current if side == SIDE_LEFT else right_current
             self.bus.write_current(cal.servo_id, self.current_inward_sign[side] * current)
 
     def _update_contacts(self) -> None:
