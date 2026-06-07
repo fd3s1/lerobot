@@ -52,6 +52,8 @@ STATE_FAULT = "FAULT"
 
 SIDE_LEFT = "left"
 SIDE_RIGHT = "right"
+ANSI_RED = "\033[31m"
+ANSI_RESET = "\033[0m"
 
 
 @dataclass(frozen=True)
@@ -542,7 +544,8 @@ class HlsGripperNode(Node):
         self.right_contact_metric_sign_param = int(self.declare_parameter("right_contact_metric_sign", 0).value)
         self.contact_confirm_cycles = int(self.declare_parameter("contact_confirm_cycles", 3).value)
         self.max_current = float(self.declare_parameter("max_current", 600.0).value)
-        self.max_temp = float(self.declare_parameter("max_temp", 70.0).value)
+        self.max_temp = float(self.declare_parameter("max_temp", 85.0).value)
+        self.temp_warn_threshold = float(self.declare_parameter("temp_warn_threshold", 75.0).value)
         self.feedback_timeout_s = float(self.declare_parameter("feedback_timeout_s", 0.5).value)
         self.attitude_timeout_s = float(self.declare_parameter("attitude_timeout_s", 0.5).value)
         self.command_timeout_s = float(self.declare_parameter("command_timeout_s", 0.0).value)
@@ -597,6 +600,7 @@ class HlsGripperNode(Node):
         self.right_contact = False
         self.fault_requires_open_reset = False
         self.last_fault_grasp_warn_s = 0.0
+        self.last_temp_warn_s = {SIDE_LEFT: 0.0, SIDE_RIGHT: 0.0}
         self.last_feedback_s: float | None = None
         self.last_command_s: float | None = None
         self.last_open_write_s = 0.0
@@ -1030,8 +1034,20 @@ class HlsGripperNode(Node):
             fb = self.feedback[side]
             if self.max_current > 0.0 and abs(fb.current) > self.max_current:
                 raise RuntimeError(f"{side} current limit reached: {fb.current:.0f}")
+            self._warn_temperature_if_needed(side, fb.temp, now)
             if self.max_temp > 0.0 and fb.temp >= self.max_temp:
                 raise RuntimeError(f"{side} temperature limit reached: {fb.temp:.0f}")
+
+    def _warn_temperature_if_needed(self, side: str, temp: float, now: float) -> None:
+        if self.temp_warn_threshold <= 0.0 or temp < self.temp_warn_threshold:
+            return
+        if now - self.last_temp_warn_s[side] < 2.0:
+            return
+        self.last_temp_warn_s[side] = now
+        self.get_logger().warn(
+            f"{ANSI_RED}HLS gripper high temperature: {side} temp={temp:.0f}C "
+            f"warn={self.temp_warn_threshold:.0f}C fault={self.max_temp:.0f}C{ANSI_RESET}"
+        )
 
     def _run_state_machine(self) -> None:
         now = time.monotonic()
