@@ -262,18 +262,14 @@ class HandheldHlsGraspTest(Node):
             return self.latched_command_mode
 
         self.last_non_hold_raw_s = now
-        if raw_mode == "open":
-            self.latched_command_mode = "open"
-            self.candidate_command_mode = "open"
-            self.candidate_mode_started_s = now
-            return self.latched_command_mode
-
         if raw_mode != self.candidate_command_mode:
             self.candidate_command_mode = raw_mode
             self.candidate_mode_started_s = now
 
         stable_time = now - self.candidate_mode_started_s
-        required_stable_s = self.config.grasp_mode_stable_s
+        required_stable_s = (
+            self.config.open_mode_stable_s if raw_mode == "open" else self.config.grasp_mode_stable_s
+        )
         if stable_time >= required_stable_s:
             self.latched_command_mode = raw_mode
         return self.latched_command_mode
@@ -393,8 +389,8 @@ def parse_args() -> HandheldHlsConfig:
     parser.add_argument("--open-command", type=float, default=100.0)
     parser.add_argument("--close-command", type=float, default=0.0)
     parser.add_argument("--publish-period-s", type=float, default=0.5)
-    parser.add_argument("--grasp-mode-stable-s", type=float, default=0.45)
-    parser.add_argument("--open-mode-stable-s", type=float, default=0.0)
+    parser.add_argument("--grasp-mode-stable-s", type=float, default=0.3)
+    parser.add_argument("--open-mode-stable-s", type=float, default=0.7)
     parser.add_argument("--hold-mode-timeout-s", type=float, default=1.5)
     parser.add_argument("--rc-stale-mode", choices=("hold", "open"), default="open")
     parser.add_argument("--csv-path", default="")
