@@ -607,12 +607,12 @@ class HlsGripperNode(Node):
         self.grip_chase_position_speed = (
             self.grip_chase_position_speed_param
             if self.grip_chase_position_speed_param > 0
-            else max(8, min(self.motion_profile.speed, 18))
+            else max(8, min(self.motion_profile.speed, 28))
         )
         self.grip_chase_position_acc = (
             self.grip_chase_position_acc_param
             if self.grip_chase_position_acc_param > 0
-            else max(4, min(self.motion_profile.acc, 6))
+            else max(4, min(self.motion_profile.acc, 10))
         )
         self.grip_chase_position_torque_limit = (
             self.grip_chase_position_torque_param
