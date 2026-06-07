@@ -131,6 +131,7 @@ class HandheldHlsGraspTest(Node):
         self.candidate_command_mode = "open"
         self.candidate_mode_started_s = self.raw_mode_started_s
         self.last_non_hold_raw_s = self.raw_mode_started_s
+        self.last_ch10_pwm: int | None = None
         self.csv_file = None
         self.csv_writer = None
 
@@ -157,6 +158,7 @@ class HandheldHlsGraspTest(Node):
                     "monotonic_s",
                     "command_mode",
                     "raw_command_mode",
+                    "ch10_pwm",
                     "state",
                     "left_close_ratio",
                     "right_close_ratio",
@@ -234,10 +236,13 @@ class HandheldHlsGraspTest(Node):
 
     def raw_command_mode_from_rc(self) -> str:
         if not self.rc_fresh() or self.rc is None:
+            self.last_ch10_pwm = None
             return "open" if self.config.rc_stale_mode == "open" else "hold"
         if self.config.ch10_index < 0 or self.config.ch10_index >= len(self.rc.channels):
+            self.last_ch10_pwm = None
             return "open" if self.config.rc_stale_mode == "open" else "hold"
         pwm = int(self.rc.channels[self.config.ch10_index])
+        self.last_ch10_pwm = pwm
         if pwm >= self.config.ch10_close_pwm:
             return "grasp"
         if pwm <= self.config.ch10_open_pwm:
@@ -292,12 +297,15 @@ class HandheldHlsGraspTest(Node):
         self.last_log_s = now
 
         if not self.status_fresh():
-            self.get_logger().info(f"CH10 mode={mode} raw={self.raw_command_mode} hls_status=missing/stale")
+            self.get_logger().info(
+                f"CH10 mode={mode} raw={self.raw_command_mode} pwm={self.last_ch10_pwm} "
+                "hls_status=missing/stale"
+            )
             return
 
         msg = self.status
         self.get_logger().info(
-            f"CH10 mode={mode} raw={self.raw_command_mode} state={msg.state} "
+            f"CH10 mode={mode} raw={self.raw_command_mode} pwm={self.last_ch10_pwm} state={msg.state} "
             f"center={msg.center_error_m:+.4f}m ratio={msg.center_error_ratio:+.3f} "
             f"offset={msg.centering_offset_m:+.4f}m single={msg.single_contact_offset_m:+.4f}m "
             f"pos=({msg.left_raw_pos:.0f},{msg.right_raw_pos:.0f}) "
@@ -320,6 +328,7 @@ class HandheldHlsGraspTest(Node):
                 "monotonic_s": f"{time.monotonic():.6f}",
                 "command_mode": mode,
                 "raw_command_mode": self.raw_command_mode,
+                "ch10_pwm": "" if self.last_ch10_pwm is None else self.last_ch10_pwm,
                 "state": msg.state,
                 "left_close_ratio": f"{msg.left_close_ratio:.6f}",
                 "right_close_ratio": f"{msg.right_close_ratio:.6f}",
@@ -384,7 +393,7 @@ def parse_args() -> HandheldHlsConfig:
     parser.add_argument("--open-command", type=float, default=100.0)
     parser.add_argument("--close-command", type=float, default=0.0)
     parser.add_argument("--publish-period-s", type=float, default=0.5)
-    parser.add_argument("--grasp-mode-stable-s", type=float, default=0.8)
+    parser.add_argument("--grasp-mode-stable-s", type=float, default=0.45)
     parser.add_argument("--open-mode-stable-s", type=float, default=0.0)
     parser.add_argument("--hold-mode-timeout-s", type=float, default=1.5)
     parser.add_argument("--rc-stale-mode", choices=("hold", "open"), default="open")
