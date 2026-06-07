@@ -819,7 +819,7 @@ class HlsGripperNode(Node):
             if sign_override != 0:
                 sign = sign_override
             else:
-                sign = self.calibration[side].inward_sign
+                sign = int(self.contact_detection[side]["metric_sign"])
             result[side] = 1 if sign >= 0 else -1
         return result
 
@@ -1228,18 +1228,9 @@ class HlsGripperNode(Node):
         chase_floor = max(hold_current, min(push_current, self.grip_chase_min_current))
         left_current = max(left_current, chase_floor)
         right_current = max(right_current, chase_floor)
-        if not self.left_contact:
-            left_current = max(left_current, push_current)
-        if not self.right_contact:
-            right_current = max(right_current, push_current)
 
         self.goal_left_pos = self._compat_pos(self.feedback[SIDE_LEFT].close_ratio)
         self.goal_right_pos = self._compat_pos(self.feedback[SIDE_RIGHT].close_ratio)
-
-        if not self.left_contact:
-            self.goal_left_pos = 0.0
-        if not self.right_contact:
-            self.goal_right_pos = 0.0
 
         if self.dry_run:
             return
