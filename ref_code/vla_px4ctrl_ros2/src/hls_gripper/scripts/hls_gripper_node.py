@@ -1223,19 +1223,23 @@ class HlsGripperNode(Node):
     def _write_asymmetric_contact_commands(self, now: float) -> None:
         if now - min(self.last_ele_write_s, self.last_search_write_s) < 0.10:
             return
+        contact_sides = []
+        if self.left_contact:
+            contact_sides.append(SIDE_LEFT)
+        if self.right_contact:
+            contact_sides.append(SIDE_RIGHT)
+        self._update_grip_chase_memory(now, tuple(contact_sides))
         if self.dry_run:
             return
         assert self.bus is not None
         if self.left_contact:
-            cal = self.calibration[SIDE_LEFT]
-            self.bus.write_current(cal.servo_id, self.current_inward_sign[SIDE_LEFT] * self.active_grip_current)
+            self._write_grip_chase_side(SIDE_LEFT, self.active_grip_current)
         else:
             cal = self.calibration[SIDE_LEFT]
             self.bus.write_position(cal.servo_id, cal.close_pos, self.search_speed, self.search_acc, self.search_torque_limit)
 
         if self.right_contact:
-            cal = self.calibration[SIDE_RIGHT]
-            self.bus.write_current(cal.servo_id, self.current_inward_sign[SIDE_RIGHT] * self.active_grip_current)
+            self._write_grip_chase_side(SIDE_RIGHT, self.active_grip_current)
         else:
             cal = self.calibration[SIDE_RIGHT]
             self.bus.write_position(cal.servo_id, cal.close_pos, self.search_speed, self.search_acc, self.search_torque_limit)
@@ -1336,13 +1340,13 @@ class HlsGripperNode(Node):
             self.grip_best_close_ratio[side] = clamp(ratio, -0.2, 1.2)
             self.chase_position_until_s[side] = 0.0
 
-    def _update_grip_chase_memory(self, now: float) -> None:
+    def _update_grip_chase_memory(self, now: float, sides: tuple[str, ...] = (SIDE_LEFT, SIDE_RIGHT)) -> None:
         if not self.grip_chase_position_enable:
             return
         period_s = max(self.grip_chase_position_period_s, 0.08)
         pulse_s = max(self.grip_chase_position_pulse_s, 0.0)
         slip_ratio = max(self.grip_chase_slip_ratio, 0.0)
-        for side in (SIDE_LEFT, SIDE_RIGHT):
+        for side in sides:
             current_ratio = clamp(self.feedback[side].close_ratio, -0.2, 1.2)
             best_ratio = self.grip_best_close_ratio[side]
             if current_ratio > best_ratio:
@@ -1361,7 +1365,13 @@ class HlsGripperNode(Node):
     def _should_write_grip_chase_position(self, side: str) -> bool:
         if not self.grip_chase_position_enable:
             return False
-        if self.state not in (STATE_CENTERING, STATE_CENTERED, STATE_FINAL_GRIP, STATE_LIFT_READY):
+        if self.state == STATE_LEFT_CONTACT:
+            if side != SIDE_LEFT:
+                return False
+        elif self.state == STATE_RIGHT_CONTACT:
+            if side != SIDE_RIGHT:
+                return False
+        elif self.state not in (STATE_CENTERING, STATE_CENTERED, STATE_FINAL_GRIP, STATE_LIFT_READY):
             return False
         return time.monotonic() <= self.chase_position_until_s[side]
 
