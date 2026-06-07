@@ -51,6 +51,8 @@ class HlsTaskConfig:
 class StandardHlsStatus:
     state: str = "UNKNOWN"
     center_error_m: float = 0.0
+    centering_offset_m: float = 0.0
+    single_contact_offset_m: float = 0.0
     safe_to_lift: bool = False
     fault: bool = False
     fault_reason: str = ""
@@ -79,6 +81,13 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
         self.create_subscription(String, f"{self.status_prefix}/state", self._string_cb("state"), 10)
         self.create_subscription(String, f"{self.status_prefix}/fault_reason", self._string_cb("fault_reason"), 10)
         self.create_subscription(Float64, f"{self.status_prefix}/center_error_m", self._float_cb("center_error_m"), 10)
+        self.create_subscription(Float64, f"{self.status_prefix}/centering_offset_m", self._float_cb("centering_offset_m"), 10)
+        self.create_subscription(
+            Float64,
+            f"{self.status_prefix}/single_contact_offset_m",
+            self._float_cb("single_contact_offset_m"),
+            10,
+        )
         self.create_subscription(
             Float64,
             f"{self.status_prefix}/single_contact_direction",
@@ -129,7 +138,7 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
 
     def hls_status_fresh(self) -> bool:
         now = time.monotonic()
-        for name in ("state", "center_error_m", "safe_to_lift", "fault", "single_contact_need_motion", "single_contact_direction"):
+        for name in ("state", "centering_offset_m", "safe_to_lift", "fault", "single_contact_need_motion", "single_contact_direction"):
             stamp = self.hls_status_stamps.get(name)
             if stamp is None or now - stamp > self.hls_config.hls_status_timeout_s:
                 return False
@@ -174,8 +183,7 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
         period = 1.0 / self.config.rate_hz
         deadline = time.monotonic() + self.hls_config.hls_grasp_timeout_s
         latest = reference
-        center_offset_m = 0.0
-        single_contact_offset_m = 0.0
+        body_y_offset_m = 0.0
         last_t = time.monotonic()
         last_log_s = 0.0
 
@@ -207,36 +215,30 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
                 self.get_logger().info("HLS reports safe_to_lift; automatic lift may start.")
                 return latest
 
-            if status.state in ("LEFT_CONTACT", "RIGHT_CONTACT") and status.single_contact_need_motion:
-                direction = max(-1.0, min(1.0, float(status.single_contact_direction)))
-                vy = self.hls_config.single_contact_body_y_sign * direction * self.hls_config.single_contact_vmax_mps
-                single_contact_offset_m += vy * dt
-                single_contact_offset_m = max(
-                    -self.hls_config.single_contact_offset_max_m,
-                    min(self.hls_config.single_contact_offset_max_m, single_contact_offset_m),
-                )
-                if abs(single_contact_offset_m) >= self.hls_config.single_contact_offset_max_m:
-                    latest = self.pose_with_body_y_offset(reference, single_contact_offset_m + center_offset_m)
-                    latest = self.abort_before_lift(latest, reference, "single-contact body-y search offset limit")
-                    raise RuntimeError("HLS single-contact search reached body-y offset limit before two-sided contact.")
-                latest = self.pose_with_body_y_offset(reference, single_contact_offset_m + center_offset_m)
-            elif status.state in HLS_CENTERING_STATES:
-                error_m = float(status.center_error_m)
-                if abs(error_m) > self.hls_config.center_deadband_m:
-                    vy = self.hls_config.center_command_sign * self.hls_config.center_kp * error_m
-                    vy = max(-self.hls_config.center_vmax_mps, min(self.hls_config.center_vmax_mps, vy))
-                    center_offset_m += vy * dt
-                    center_offset_m = max(
-                        -self.hls_config.center_offset_max_m,
-                        min(self.hls_config.center_offset_max_m, center_offset_m),
-                    )
-                latest = self.pose_with_body_y_offset(reference, single_contact_offset_m + center_offset_m)
-            elif status.state in ("CENTERED", "FINAL_GRIP"):
-                latest = self.pose_with_body_y_offset(reference, single_contact_offset_m + center_offset_m)
-            elif status.state in HLS_PRE_LIFT_STATES:
-                latest = self.pose_with_body_y_offset(reference, single_contact_offset_m + center_offset_m)
-            else:
-                latest = self.pose_with_body_y_offset(reference, single_contact_offset_m + center_offset_m)
+            target_offset_m = 0.0
+            offset_limit_m = self.hls_config.center_offset_max_m
+            if status.state in HLS_PRE_LIFT_STATES:
+                target_offset_m = self.hls_config.center_command_sign * float(status.centering_offset_m)
+                if status.left_contact != status.right_contact:
+                    offset_limit_m = min(offset_limit_m, self.hls_config.single_contact_offset_max_m)
+
+            target_offset_m = max(-offset_limit_m, min(offset_limit_m, target_offset_m))
+            if abs(target_offset_m) >= offset_limit_m and (status.left_contact or status.right_contact):
+                latest = self.pose_with_body_y_offset(reference, body_y_offset_m)
+                latest = self.abort_before_lift(latest, reference, "HLS centering offset limit")
+                raise RuntimeError("HLS centering offset reached body-y offset limit before safe_to_lift.")
+
+            offset_error_m = target_offset_m - body_y_offset_m
+            if abs(offset_error_m) > self.hls_config.center_deadband_m:
+                vy = self.hls_config.center_kp * offset_error_m
+                vy = max(-self.hls_config.center_vmax_mps, min(self.hls_config.center_vmax_mps, vy))
+                step = vy * dt
+                if abs(step) > abs(offset_error_m):
+                    step = offset_error_m
+                body_y_offset_m += step
+                body_y_offset_m = max(-offset_limit_m, min(offset_limit_m, body_y_offset_m))
+
+            latest = self.pose_with_body_y_offset(reference, body_y_offset_m)
 
             self.publish_cmd(latest)
             self.publish_gripper(self.hls_config.close_command, repeats=1, interval_s=0.0)
@@ -245,8 +247,8 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
                 last_log_s = now
                 self.get_logger().info(
                     f"HLS state={status.state} center={status.center_error_m:+.4f}m "
-                    f"body_y_offset={single_contact_offset_m + center_offset_m:+.4f}m "
-                    f"single={single_contact_offset_m:+.4f}m center_trim={center_offset_m:+.4f}m "
+                    f"target_offset={target_offset_m:+.4f}m body_y_offset={body_y_offset_m:+.4f}m "
+                    f"single_est={status.single_contact_offset_m:+.4f}m "
                     f"motion={int(status.single_contact_need_motion)} dir={status.single_contact_direction:+.0f} "
                     f"contact=({int(status.left_contact)},{int(status.right_contact)})"
                 )

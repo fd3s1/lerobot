@@ -29,6 +29,8 @@ FLOAT_STATUS_FIELDS = (
     "right_current",
     "left_current_residual",
     "right_current_residual",
+    "centering_offset_m",
+    "single_contact_offset_m",
     "single_contact_direction",
     "roll_deg",
     "pitch_deg",
@@ -84,6 +86,8 @@ class StandardHlsStatus:
     right_current: float = 0.0
     left_current_residual: float = 0.0
     right_current_residual: float = 0.0
+    centering_offset_m: float = 0.0
+    single_contact_offset_m: float = 0.0
     single_contact_direction: float = 0.0
     roll_deg: float = 0.0
     pitch_deg: float = 0.0
@@ -169,6 +173,8 @@ class HandheldHlsGraspTest(Node):
                     "right_current",
                     "left_current_residual",
                     "right_current_residual",
+                    "centering_offset_m",
+                    "single_contact_offset_m",
                     "single_contact_need_motion",
                     "single_contact_direction",
                     "left_at_close_limit",
@@ -283,6 +289,7 @@ class HandheldHlsGraspTest(Node):
         self.get_logger().info(
             f"CH10 mode={mode} raw={self.raw_command_mode} state={msg.state} "
             f"center={msg.center_error_m:+.4f}m ratio={msg.center_error_ratio:+.3f} "
+            f"offset={msg.centering_offset_m:+.4f}m single={msg.single_contact_offset_m:+.4f}m "
             f"pos=({msg.left_raw_pos:.0f},{msg.right_raw_pos:.0f}) "
             f"seg=({msg.left_close_segment_ratio:.2f},{msg.right_close_segment_ratio:.2f}) "
             f"contact=({int(msg.left_contact)},{int(msg.right_contact)}) "
@@ -322,6 +329,8 @@ class HandheldHlsGraspTest(Node):
                 "right_current": f"{msg.right_current:.3f}",
                 "left_current_residual": f"{msg.left_current_residual:.3f}",
                 "right_current_residual": f"{msg.right_current_residual:.3f}",
+                "centering_offset_m": f"{msg.centering_offset_m:.6f}",
+                "single_contact_offset_m": f"{msg.single_contact_offset_m:.6f}",
                 "single_contact_need_motion": int(msg.single_contact_need_motion),
                 "single_contact_direction": f"{msg.single_contact_direction:.3f}",
                 "left_at_close_limit": int(msg.left_at_close_limit),

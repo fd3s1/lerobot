@@ -571,6 +571,7 @@ class HlsGripperNode(Node):
         self.center_sign = float(self.declare_parameter("center_sign", 1.0).value)
         self.center_gain_override = float(self.declare_parameter("center_gain_m_per_ratio", 0.0).value)
         self.center_error_gain = float(self.declare_parameter("center_error_gain", 2.0).value)
+        self.single_contact_offset_limit_m = float(self.declare_parameter("single_contact_offset_limit_m", 0.12).value)
         self.dry_run_contact_pattern = str(self.declare_parameter("dry_run_contact_pattern", "both").value)
 
         comp_path = resolve_compensation_path(self.gravity_comp_path_param)
@@ -595,6 +596,7 @@ class HlsGripperNode(Node):
             if self.grip_chase_min_current_param > 0
             else self.center_push_current
         )
+        self.active_grip_current = max(self.low_current, self.grip_chase_min_current)
         self.contact_detection = self._build_contact_detection()
         self.current_inward_sign = self._build_current_inward_sign()
         self.center_gain_m_per_ratio = self._compute_center_gain()
@@ -662,6 +664,8 @@ class HlsGripperNode(Node):
                 "right_current_residual",
                 "left_contact_metric",
                 "right_contact_metric",
+                "centering_offset_m",
+                "single_contact_offset_m",
                 "single_contact_direction",
                 "motion_profile_index",
                 "motion_profile_speed",
@@ -697,6 +701,7 @@ class HlsGripperNode(Node):
             f"current_sign=({self.current_inward_sign[SIDE_LEFT]:+d},{self.current_inward_sign[SIDE_RIGHT]:+d}) "
             f"center_current=({self.center_hold_current},{self.center_push_current}) "
             f"grip_chase_min_current={self.grip_chase_min_current} "
+            f"active_grip_current={self.active_grip_current} "
             f"contact_enter=({self.contact_detection[SIDE_LEFT]['enter_threshold']:.1f},"
             f"{self.contact_detection[SIDE_RIGHT]['enter_threshold']:.1f}) "
             f"status_prefix={self.status_prefix}"
@@ -1181,14 +1186,14 @@ class HlsGripperNode(Node):
         assert self.bus is not None
         if self.left_contact:
             cal = self.calibration[SIDE_LEFT]
-            self.bus.write_current(cal.servo_id, self.current_inward_sign[SIDE_LEFT] * self.low_current)
+            self.bus.write_current(cal.servo_id, self.current_inward_sign[SIDE_LEFT] * self.active_grip_current)
         else:
             cal = self.calibration[SIDE_LEFT]
             self.bus.write_position(cal.servo_id, cal.close_pos, self.search_speed, self.search_acc, self.search_torque_limit)
 
         if self.right_contact:
             cal = self.calibration[SIDE_RIGHT]
-            self.bus.write_current(cal.servo_id, self.current_inward_sign[SIDE_RIGHT] * self.low_current)
+            self.bus.write_current(cal.servo_id, self.current_inward_sign[SIDE_RIGHT] * self.active_grip_current)
         else:
             cal = self.calibration[SIDE_RIGHT]
             self.bus.write_position(cal.servo_id, cal.close_pos, self.search_speed, self.search_acc, self.search_torque_limit)
@@ -1206,7 +1211,7 @@ class HlsGripperNode(Node):
         assert self.bus is not None
         for side in (SIDE_LEFT, SIDE_RIGHT):
             cal = self.calibration[side]
-            self.bus.write_current(cal.servo_id, self.current_inward_sign[side] * self.low_current)
+            self.bus.write_current(cal.servo_id, self.current_inward_sign[side] * self.active_grip_current)
 
     def _write_centering_current_if_due(self, now: float) -> None:
         if now - self.last_ele_write_s < 0.08:
@@ -1347,10 +1352,46 @@ class HlsGripperNode(Node):
     def _single_contact_direction(self) -> float:
         if not self._single_contact_need_motion():
             return 0.0
-        if self.state == STATE_LEFT_CONTACT:
+        return self._single_contact_direction_raw()
+
+    def _single_contact_direction_raw(self) -> float:
+        if self.left_contact and not self.right_contact:
             return 1.0
-        if self.state == STATE_RIGHT_CONTACT:
+        if self.right_contact and not self.left_contact:
             return -1.0
+        return 0.0
+
+    def _single_contact_offset_m(self) -> float:
+        direction = self._single_contact_direction_raw()
+        if direction == 0.0:
+            return 0.0
+        if self.state == STATE_LEFT_CONTACT:
+            gap_m = self._side_close_gap_m(SIDE_LEFT)
+        elif self.state == STATE_RIGHT_CONTACT:
+            gap_m = self._side_close_gap_m(SIDE_RIGHT)
+        elif self.left_contact and not self.right_contact:
+            gap_m = self._side_close_gap_m(SIDE_LEFT)
+        elif self.right_contact and not self.left_contact:
+            gap_m = self._side_close_gap_m(SIDE_RIGHT)
+        else:
+            return 0.0
+        offset_m = self.center_sign * direction * gap_m
+        limit = max(0.0, self.single_contact_offset_limit_m)
+        if limit > 0.0:
+            offset_m = clamp(offset_m, -limit, limit)
+        return offset_m
+
+    def _side_close_gap_m(self, side: str) -> float:
+        cal = self.calibration[side]
+        delta_ticks = abs(cal.close_pos - self.feedback[side].pos)
+        delta_theta = delta_ticks * 2.0 * math.pi / max(self.servo_ticks_per_rev, 1.0)
+        return self.finger_length_m * delta_theta
+
+    def _centering_offset_m(self) -> float:
+        if self.left_contact and self.right_contact:
+            return self._center_error_m()
+        if self.left_contact != self.right_contact:
+            return self._single_contact_offset_m()
         return 0.0
 
     def _center_error_ratio(self) -> float:
@@ -1425,6 +1466,8 @@ class HlsGripperNode(Node):
             "right_current_residual": right_fb.residual_current,
             "left_contact_metric": self._contact_metric(SIDE_LEFT),
             "right_contact_metric": self._contact_metric(SIDE_RIGHT),
+            "centering_offset_m": self._centering_offset_m(),
+            "single_contact_offset_m": self._single_contact_offset_m(),
             "single_contact_direction": self._single_contact_direction(),
             "motion_profile_index": float(self.motion_profile.profile_index),
             "motion_profile_speed": float(self.search_speed),
