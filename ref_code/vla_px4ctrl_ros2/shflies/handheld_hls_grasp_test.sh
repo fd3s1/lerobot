@@ -22,8 +22,8 @@ HLS_CENTER_HOLD_CURRENT="${HLS_CENTER_HOLD_CURRENT:-}"
 HLS_CENTER_PUSH_CURRENT="${HLS_CENTER_PUSH_CURRENT:-}"
 HLS_GRIP_CHASE_MIN_CURRENT="${HLS_GRIP_CHASE_MIN_CURRENT:-}"
 HLS_CENTER_TIMEOUT_ACTION="${HLS_CENTER_TIMEOUT_ACTION:-final_grip}"
-HLS_MAX_TEMP="${HLS_MAX_TEMP:-85}"
-HLS_TEMP_WARN_THRESHOLD="${HLS_TEMP_WARN_THRESHOLD:-75}"
+HLS_MAX_TEMP="${HLS_MAX_TEMP:-85.0}"
+HLS_TEMP_WARN_THRESHOLD="${HLS_TEMP_WARN_THRESHOLD:-75.0}"
 HLS_LEFT_CURRENT_INWARD_SIGN="${HLS_LEFT_CURRENT_INWARD_SIGN:-}"
 HLS_RIGHT_CURRENT_INWARD_SIGN="${HLS_RIGHT_CURRENT_INWARD_SIGN:-}"
 HLS_MOTION_PROFILE="${HLS_MOTION_PROFILE:-}"
@@ -62,6 +62,13 @@ bool_is_true() {
   case "${1,,}" in
     1|true|yes|y|on) return 0 ;;
     *) return 1 ;;
+  esac
+}
+
+ros_double() {
+  case "$1" in
+    *.*|*e*|*E*) printf '%s' "$1" ;;
+    *) printf '%s.0' "$1" ;;
   esac
 }
 
@@ -122,8 +129,8 @@ if bool_is_true "${START_GRIPPER_MANAGER}"; then
     -p dry_run:="${HLS_DRY_RUN}"
     -p low_current:="${HLS_LOW_CURRENT}"
     -p lift_current:="${HLS_LIFT_CURRENT}"
-    -p max_temp:="${HLS_MAX_TEMP}"
-    -p temp_warn_threshold:="${HLS_TEMP_WARN_THRESHOLD}"
+    -p max_temp:="$(ros_double "${HLS_MAX_TEMP}")"
+    -p temp_warn_threshold:="$(ros_double "${HLS_TEMP_WARN_THRESHOLD}")"
     -p center_timeout_action:="${HLS_CENTER_TIMEOUT_ACTION}"
     -p center_gain_m_per_ratio:="${HLS_CENTER_GAIN_M_PER_RATIO}"
     -p center_bias:="${HLS_CENTER_BIAS}"
