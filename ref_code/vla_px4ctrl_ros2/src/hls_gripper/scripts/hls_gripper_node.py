@@ -1061,6 +1061,7 @@ class HlsGripperNode(Node):
             self._enter_state(STATE_CENTERING)
             return
         if self.state == STATE_CENTERING:
+            self._update_contacts()
             if now - self.state_started_s > self.center_timeout_s:
                 if self.center_timeout_action == "fault":
                     self._set_fault("centering timeout")
@@ -1070,12 +1071,29 @@ class HlsGripperNode(Node):
                     )
                     self._enter_state(STATE_FINAL_GRIP)
                 return
-            self._write_centering_current_if_due(now)
+            self._write_grip_chase_commands_if_due(
+                now,
+                self.center_hold_current,
+                self.center_push_current,
+            )
             if self._is_centered(now):
                 self._enter_state(STATE_CENTERED)
             return
         if self.state == STATE_CENTERED:
-            self._write_low_current_if_due(now)
+            self._update_contacts()
+            if not (self.left_contact and self.right_contact):
+                self._enter_state(STATE_CENTERING)
+                self._write_grip_chase_commands_if_due(
+                    now,
+                    self.center_hold_current,
+                    self.center_push_current,
+                )
+                return
+            self._write_grip_chase_commands_if_due(
+                now,
+                self.center_hold_current,
+                self.center_push_current,
+            )
             if now - self.state_started_s >= 0.2:
                 self._enter_state(STATE_FINAL_GRIP)
             return
@@ -1083,11 +1101,13 @@ class HlsGripperNode(Node):
             if now - self.state_started_s > max(self.final_grip_timeout_s, self.final_grip_ramp_s + 0.5):
                 self._set_fault("final grip timeout")
                 return
+            self._update_contacts()
             self._write_final_grip_current(now)
             if now - self.state_started_s >= self.final_grip_ramp_s:
                 self._enter_state(STATE_LIFT_READY)
             return
         if self.state == STATE_LIFT_READY:
+            self._update_contacts()
             self._write_lift_current_if_due(now)
 
     def _write_open_if_due(self, now: float) -> None:
@@ -1172,11 +1192,11 @@ class HlsGripperNode(Node):
         alpha = clamp((now - self.state_started_s) / max(self.final_grip_ramp_s, 1e-3), 0.0, 1.0)
         current = int(round(self.low_current + (self.lift_current - self.low_current) * alpha))
         push_current = max(current, self.center_push_current)
-        self._write_current_pair(current, now, push_current=push_current)
+        self._write_grip_chase_commands_if_due(now, current, push_current)
 
     def _write_lift_current_if_due(self, now: float) -> None:
         hold_current = max(self.center_hold_current, int(round(0.65 * self.lift_current)))
-        self._write_current_pair(hold_current, now, push_current=self.lift_current)
+        self._write_grip_chase_commands_if_due(now, hold_current, self.lift_current)
 
     def _write_current_pair(self, current: int, now: float, push_current: int | None = None) -> None:
         if now - self.last_ele_write_s < 0.08:
@@ -1190,6 +1210,41 @@ class HlsGripperNode(Node):
             return
         assert self.bus is not None
         self._write_signed_current_pair(left_current, right_current)
+
+    def _write_grip_chase_commands_if_due(self, now: float, hold_current: int, push_current: int) -> None:
+        if now - min(self.last_ele_write_s, self.last_search_write_s) < 0.08:
+            return
+        self.last_ele_write_s = now
+        self.last_search_write_s = now
+
+        left_current, right_current = self._differential_current_pair(hold_current, push_current)
+        self.goal_left_pos = self._compat_pos(self.feedback[SIDE_LEFT].close_ratio)
+        self.goal_right_pos = self._compat_pos(self.feedback[SIDE_RIGHT].close_ratio)
+
+        if not self.left_contact:
+            self.goal_left_pos = 0.0
+        if not self.right_contact:
+            self.goal_right_pos = 0.0
+
+        if self.dry_run:
+            return
+        assert self.bus is not None
+
+        self._write_grip_chase_side(SIDE_LEFT, left_current, self.left_contact)
+        self._write_grip_chase_side(SIDE_RIGHT, right_current, self.right_contact)
+
+    def _write_grip_chase_side(self, side: str, current: int, is_contact: bool) -> None:
+        cal = self.calibration[side]
+        if is_contact:
+            self.bus.write_current(cal.servo_id, self.current_inward_sign[side] * current)
+        else:
+            self.bus.write_position(
+                cal.servo_id,
+                cal.close_pos,
+                self.search_speed,
+                self.search_acc,
+                self.search_torque_limit,
+            )
 
     def _differential_current_pair(self, hold_current: int, push_current: int) -> tuple[int, int]:
         hold_current = max(0, int(hold_current))
@@ -1351,8 +1406,9 @@ class HlsGripperNode(Node):
             "left_contact": bool(self.left_contact),
             "right_contact": bool(self.right_contact),
             "both_contact": bool(self.left_contact and self.right_contact),
-            "centered": self.state in (STATE_CENTERED, STATE_FINAL_GRIP, STATE_LIFT_READY),
-            "safe_to_lift": self.state == STATE_LIFT_READY,
+            "centered": self.state in (STATE_CENTERED, STATE_FINAL_GRIP, STATE_LIFT_READY)
+            and bool(self.left_contact and self.right_contact),
+            "safe_to_lift": self.state == STATE_LIFT_READY and bool(self.left_contact and self.right_contact),
             "fault": self.state == STATE_FAULT,
             "single_contact_need_motion": self._single_contact_need_motion(),
             "left_at_close_limit": self._at_close_limit(SIDE_LEFT),
