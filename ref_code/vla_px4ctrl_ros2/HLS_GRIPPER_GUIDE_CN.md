@@ -147,6 +147,8 @@ bash shflies/handheld_hls_grasp_test.sh
 
 原因是早期代码只在 `CENTERING`、`CENTERED`、`FINAL_GRIP`、`LIFT_READY` 状态启用位置追夹，而 `LEFT_CONTACT` / `RIGHT_CONTACT` 单侧接触阶段的已接触侧只写保持电流。修改后，单侧接触阶段的已接触侧也会更新追夹记忆，并在被推开超过 `HLS_GRIP_CHASE_SLIP_RATIO` 后触发同一套位置脉冲追夹；未接触侧仍然继续按搜索速度闭合。
 
+如果仍偶发“第一次单侧接触不补偿”，原因通常是单侧接触后还没有形成 `slipped_open` 或 `contact_lost` 判定，因此没有触发第一下位置脉冲。进一步修正为：刚进入 `LEFT_CONTACT` / `RIGHT_CONTACT` 时，自动对已接触侧预激活一次 `HLS_GRIP_CHASE_POSITION_PULSE_S` 时长的位置追夹窗口，相当于自动做一次轻微追夹唤醒，不需要人工碰一下或晃动飞机。
+
 ## HLS 节点状态机
 
 `hls_gripper_node.py` 的主要状态如下：
@@ -172,7 +174,7 @@ bash shflies/handheld_hls_grasp_test.sh
 
 位置脉冲追夹现在覆盖两类阶段：
 
-- 单侧接触阶段：只对已经接触的一侧启用追夹，另一侧继续搜索闭合。
+- 单侧接触阶段：刚进入状态时对已接触侧预激活一次追夹；之后只对已经接触的一侧启用追夹，另一侧继续搜索闭合。
 - 双侧接触后的阶段：对左右两侧都启用追夹，包括 `CENTERING`、`CENTERED`、`FINAL_GRIP`、`LIFT_READY`。
 
 相关参数：

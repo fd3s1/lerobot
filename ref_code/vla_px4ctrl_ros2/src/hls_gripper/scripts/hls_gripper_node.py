@@ -969,6 +969,8 @@ class HlsGripperNode(Node):
         self.centered_since_s = None
         if state in (STATE_OPEN, STATE_SEARCH_OBJECT, STATE_LEFT_CONTACT, STATE_RIGHT_CONTACT, STATE_BOTH_CONTACT, STATE_FAULT):
             self._reset_grip_chase_memory()
+        if state in (STATE_LEFT_CONTACT, STATE_RIGHT_CONTACT):
+            self._prime_single_contact_chase(state, self.state_started_s)
         if state in (STATE_OPEN, STATE_SEARCH_OBJECT, STATE_FAULT):
             self.left_contact_cycles = 0
             self.right_contact_cycles = 0
@@ -1339,6 +1341,14 @@ class HlsGripperNode(Node):
             ratio = self.feedback[side].close_ratio if hasattr(self, "feedback") else 0.0
             self.grip_best_close_ratio[side] = clamp(ratio, -0.2, 1.2)
             self.chase_position_until_s[side] = 0.0
+
+    def _prime_single_contact_chase(self, state: str, now: float) -> None:
+        if not self.grip_chase_position_enable:
+            return
+        side = SIDE_LEFT if state == STATE_LEFT_CONTACT else SIDE_RIGHT
+        pulse_s = max(self.grip_chase_position_pulse_s, 0.0)
+        self.last_chase_position_s[side] = now
+        self.chase_position_until_s[side] = now + pulse_s
 
     def _update_grip_chase_memory(self, now: float, sides: tuple[str, ...] = (SIDE_LEFT, SIDE_RIGHT)) -> None:
         if not self.grip_chase_position_enable:
