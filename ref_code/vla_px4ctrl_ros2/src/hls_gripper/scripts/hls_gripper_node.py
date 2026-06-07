@@ -819,7 +819,7 @@ class HlsGripperNode(Node):
             if sign_override != 0:
                 sign = sign_override
             else:
-                sign = int(self.contact_detection[side]["metric_sign"])
+                sign = self.calibration[side].inward_sign
             result[side] = 1 if sign >= 0 else -1
         return result
 
