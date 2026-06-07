@@ -544,6 +544,13 @@ class HlsGripperNode(Node):
         self.center_hold_current_param = int(self.declare_parameter("center_hold_current", -1).value)
         self.center_push_current_param = int(self.declare_parameter("center_push_current", -1).value)
         self.grip_chase_min_current_param = int(self.declare_parameter("grip_chase_min_current", -1).value)
+        self.grip_chase_position_enable = bool(self.declare_parameter("grip_chase_position_enable", True).value)
+        self.grip_chase_position_speed_param = int(self.declare_parameter("grip_chase_position_speed", -1).value)
+        self.grip_chase_position_acc_param = int(self.declare_parameter("grip_chase_position_acc", -1).value)
+        self.grip_chase_position_torque_param = int(self.declare_parameter("grip_chase_position_torque_limit", -1).value)
+        self.grip_chase_slip_ratio = float(self.declare_parameter("grip_chase_slip_ratio", 0.06).value)
+        self.grip_chase_position_period_s = float(self.declare_parameter("grip_chase_position_period_s", 0.35).value)
+        self.grip_chase_position_pulse_s = float(self.declare_parameter("grip_chase_position_pulse_s", 0.16).value)
         self.center_timeout_action = str(self.declare_parameter("center_timeout_action", "final_grip").value)
         self.final_grip_ramp_s = float(self.declare_parameter("final_grip_ramp_s", 1.2).value)
         self.contact_current_threshold = float(self.declare_parameter("contact_current_threshold", -1.0).value)
@@ -597,6 +604,21 @@ class HlsGripperNode(Node):
             else self.center_push_current
         )
         self.active_grip_current = max(self.low_current, self.grip_chase_min_current)
+        self.grip_chase_position_speed = (
+            self.grip_chase_position_speed_param
+            if self.grip_chase_position_speed_param > 0
+            else max(3, min(self.search_speed, 8))
+        )
+        self.grip_chase_position_acc = (
+            self.grip_chase_position_acc_param
+            if self.grip_chase_position_acc_param > 0
+            else max(2, min(self.search_acc, 4))
+        )
+        self.grip_chase_position_torque_limit = (
+            self.grip_chase_position_torque_param
+            if self.grip_chase_position_torque_param > 0
+            else max(40, min(self.search_torque_limit, self.center_push_current + 40))
+        )
         self.contact_detection = self._build_contact_detection()
         self.current_inward_sign = self._build_current_inward_sign()
         self.center_gain_m_per_ratio = self._compute_center_gain()
@@ -618,6 +640,9 @@ class HlsGripperNode(Node):
         self.last_open_write_s = 0.0
         self.last_search_write_s = 0.0
         self.last_ele_write_s = 0.0
+        self.last_chase_position_s = {SIDE_LEFT: 0.0, SIDE_RIGHT: 0.0}
+        self.chase_position_until_s = {SIDE_LEFT: 0.0, SIDE_RIGHT: 0.0}
+        self.grip_best_close_ratio = {SIDE_LEFT: 0.0, SIDE_RIGHT: 0.0}
         self.latest_roll_deg = 0.0
         self.latest_pitch_deg = 0.0
         self.latest_yaw_deg = 0.0
@@ -687,6 +712,8 @@ class HlsGripperNode(Node):
                 "single_contact_need_motion",
                 "left_at_close_limit",
                 "right_at_close_limit",
+                "left_chase_position_pulse",
+                "right_chase_position_pulse",
             )
         }
         self.timer = self.create_timer(1.0 / self.control_rate_hz, self._control_timer_cb)
@@ -702,6 +729,8 @@ class HlsGripperNode(Node):
             f"center_current=({self.center_hold_current},{self.center_push_current}) "
             f"grip_chase_min_current={self.grip_chase_min_current} "
             f"active_grip_current={self.active_grip_current} "
+            f"chase_position=({self.grip_chase_position_speed},{self.grip_chase_position_acc},"
+            f"{self.grip_chase_position_torque_limit}) "
             f"contact_enter=({self.contact_detection[SIDE_LEFT]['enter_threshold']:.1f},"
             f"{self.contact_detection[SIDE_RIGHT]['enter_threshold']:.1f}) "
             f"status_prefix={self.status_prefix}"
@@ -938,6 +967,8 @@ class HlsGripperNode(Node):
         self.state = state
         self.state_started_s = time.monotonic()
         self.centered_since_s = None
+        if state in (STATE_OPEN, STATE_SEARCH_OBJECT, STATE_LEFT_CONTACT, STATE_RIGHT_CONTACT, STATE_BOTH_CONTACT, STATE_FAULT):
+            self._reset_grip_chase_memory()
         if state in (STATE_OPEN, STATE_SEARCH_OBJECT, STATE_FAULT):
             self.left_contact_cycles = 0
             self.right_contact_cycles = 0
@@ -1258,6 +1289,7 @@ class HlsGripperNode(Node):
             return
         self.last_ele_write_s = now
         self.last_search_write_s = now
+        self._update_grip_chase_memory(now)
 
         left_current, right_current = self._differential_current_pair(hold_current, push_current)
         chase_floor = max(hold_current, min(push_current, self.grip_chase_min_current))
@@ -1276,7 +1308,51 @@ class HlsGripperNode(Node):
 
     def _write_grip_chase_side(self, side: str, current: int) -> None:
         cal = self.calibration[side]
+        if self._should_write_grip_chase_position(side):
+            self.bus.write_position(
+                cal.servo_id,
+                cal.close_pos,
+                self.grip_chase_position_speed,
+                self.grip_chase_position_acc,
+                self.grip_chase_position_torque_limit,
+            )
+            return
         self.bus.write_current(cal.servo_id, self.current_inward_sign[side] * current)
+
+    def _reset_grip_chase_memory(self) -> None:
+        for side in (SIDE_LEFT, SIDE_RIGHT):
+            ratio = self.feedback[side].close_ratio if hasattr(self, "feedback") else 0.0
+            self.grip_best_close_ratio[side] = clamp(ratio, -0.2, 1.2)
+            self.chase_position_until_s[side] = 0.0
+
+    def _update_grip_chase_memory(self, now: float) -> None:
+        if not self.grip_chase_position_enable:
+            return
+        period_s = max(self.grip_chase_position_period_s, 0.08)
+        pulse_s = max(self.grip_chase_position_pulse_s, 0.0)
+        slip_ratio = max(self.grip_chase_slip_ratio, 0.0)
+        for side in (SIDE_LEFT, SIDE_RIGHT):
+            current_ratio = clamp(self.feedback[side].close_ratio, -0.2, 1.2)
+            best_ratio = self.grip_best_close_ratio[side]
+            if current_ratio > best_ratio:
+                self.grip_best_close_ratio[side] = current_ratio
+                best_ratio = current_ratio
+
+            slipped_open = best_ratio - current_ratio >= slip_ratio
+            contact_lost = (side == SIDE_LEFT and not self.left_contact) or (side == SIDE_RIGHT and not self.right_contact)
+            if not (slipped_open or contact_lost):
+                continue
+            if now - self.last_chase_position_s[side] < period_s:
+                continue
+            self.last_chase_position_s[side] = now
+            self.chase_position_until_s[side] = now + pulse_s
+
+    def _should_write_grip_chase_position(self, side: str) -> bool:
+        if not self.grip_chase_position_enable:
+            return False
+        if self.state not in (STATE_CENTERING, STATE_CENTERED, STATE_FINAL_GRIP, STATE_LIFT_READY):
+            return False
+        return time.monotonic() <= self.chase_position_until_s[side]
 
     def _differential_current_pair(self, hold_current: int, push_current: int) -> tuple[int, int]:
         hold_current = max(0, int(hold_current))
@@ -1492,6 +1568,8 @@ class HlsGripperNode(Node):
             "single_contact_need_motion": self._single_contact_need_motion(),
             "left_at_close_limit": self._at_close_limit(SIDE_LEFT),
             "right_at_close_limit": self._at_close_limit(SIDE_RIGHT),
+            "left_chase_position_pulse": self._should_write_grip_chase_position(SIDE_LEFT),
+            "right_chase_position_pulse": self._should_write_grip_chase_position(SIDE_RIGHT),
         }
         for name, value in flags.items():
             msg = Bool()

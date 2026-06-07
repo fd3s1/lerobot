@@ -33,6 +33,13 @@ HLS_LIFT_CURRENT="${HLS_LIFT_CURRENT:-120}"
 HLS_CENTER_HOLD_CURRENT="${HLS_CENTER_HOLD_CURRENT:-}"
 HLS_CENTER_PUSH_CURRENT="${HLS_CENTER_PUSH_CURRENT:-}"
 HLS_GRIP_CHASE_MIN_CURRENT="${HLS_GRIP_CHASE_MIN_CURRENT:-}"
+HLS_GRIP_CHASE_POSITION_ENABLE="${HLS_GRIP_CHASE_POSITION_ENABLE:-true}"
+HLS_GRIP_CHASE_POSITION_SPEED="${HLS_GRIP_CHASE_POSITION_SPEED:-8}"
+HLS_GRIP_CHASE_POSITION_ACC="${HLS_GRIP_CHASE_POSITION_ACC:-4}"
+HLS_GRIP_CHASE_POSITION_TORQUE_LIMIT="${HLS_GRIP_CHASE_POSITION_TORQUE_LIMIT:-110}"
+HLS_GRIP_CHASE_SLIP_RATIO="${HLS_GRIP_CHASE_SLIP_RATIO:-0.05}"
+HLS_GRIP_CHASE_POSITION_PERIOD_S="${HLS_GRIP_CHASE_POSITION_PERIOD_S:-0.30}"
+HLS_GRIP_CHASE_POSITION_PULSE_S="${HLS_GRIP_CHASE_POSITION_PULSE_S:-0.18}"
 HLS_CENTER_TIMEOUT_ACTION="${HLS_CENTER_TIMEOUT_ACTION:-final_grip}"
 HLS_MAX_TEMP="${HLS_MAX_TEMP:-85.0}"
 HLS_TEMP_WARN_THRESHOLD="${HLS_TEMP_WARN_THRESHOLD:-75.0}"
@@ -40,6 +47,9 @@ HLS_LEFT_CURRENT_INWARD_SIGN="${HLS_LEFT_CURRENT_INWARD_SIGN:-}"
 HLS_RIGHT_CURRENT_INWARD_SIGN="${HLS_RIGHT_CURRENT_INWARD_SIGN:-}"
 HLS_MOTION_PROFILE="${HLS_MOTION_PROFILE:-}"
 HLS_MOTION_PROFILE_INDEX="${HLS_MOTION_PROFILE_INDEX:-}"
+HLS_SEARCH_SPEED="${HLS_SEARCH_SPEED:-}"
+HLS_SEARCH_ACC="${HLS_SEARCH_ACC:-}"
+HLS_SEARCH_TORQUE_LIMIT="${HLS_SEARCH_TORQUE_LIMIT:-}"
 HLS_CENTER_GAIN_M_PER_RATIO="${HLS_CENTER_GAIN_M_PER_RATIO:-0.0}"
 HLS_CENTER_ERROR_GAIN="${HLS_CENTER_ERROR_GAIN:-2.0}"
 HLS_CENTER_BIAS="${HLS_CENTER_BIAS:-0.0}"
@@ -184,9 +194,11 @@ echo "[auto-hls-grasp-place] gripper topics: scalar=${GRIPPER_TOPIC} pair=${GRIP
 echo "[auto-hls-grasp-place] manager: type=${GRIPPER_MANAGER_TYPE} start=${START_GRIPPER_MANAGER} port=${GRIPPER_MANAGER_PORT} dry_run=${HLS_DRY_RUN}"
 echo "[auto-hls-grasp-place] hls sdk root: ${HLS_SDK_ROOT:-<auto>}"
 echo "[auto-hls-grasp-place] hls current: low=${HLS_LOW_CURRENT} lift=${HLS_LIFT_CURRENT} center_hold=${HLS_CENTER_HOLD_CURRENT:-<low>} center_push=${HLS_CENTER_PUSH_CURRENT:-<auto>} chase_min=${HLS_GRIP_CHASE_MIN_CURRENT:-<center_push>} center_timeout=${HLS_CENTER_TIMEOUT_ACTION}"
+echo "[auto-hls-grasp-place] hls chase position: enable=${HLS_GRIP_CHASE_POSITION_ENABLE} speed=${HLS_GRIP_CHASE_POSITION_SPEED} acc=${HLS_GRIP_CHASE_POSITION_ACC} torque=${HLS_GRIP_CHASE_POSITION_TORQUE_LIMIT} slip=${HLS_GRIP_CHASE_SLIP_RATIO} period=${HLS_GRIP_CHASE_POSITION_PERIOD_S}s pulse=${HLS_GRIP_CHASE_POSITION_PULSE_S}s"
 echo "[auto-hls-grasp-place] hls temperature: warn=${HLS_TEMP_WARN_THRESHOLD}C fault=${HLS_MAX_TEMP}C"
 echo "[auto-hls-grasp-place] hls current signs: left=${HLS_LEFT_CURRENT_INWARD_SIGN:-<contact-metric>} right=${HLS_RIGHT_CURRENT_INWARD_SIGN:-<contact-metric>}"
 echo "[auto-hls-grasp-place] hls motion profile: name=${HLS_MOTION_PROFILE:-<json-default>} index=${HLS_MOTION_PROFILE_INDEX:-<none>}"
+echo "[auto-hls-grasp-place] hls search override: speed=${HLS_SEARCH_SPEED:-<profile>} acc=${HLS_SEARCH_ACC:-<profile>} torque=${HLS_SEARCH_TORQUE_LIMIT:-<profile>}"
 echo "[auto-hls-grasp-place] centering: kp=${CENTER_KP} vmax=${CENTER_VMAX_MPS} deadband=${CENTER_DEADBAND_M} offset_max=${CENTER_OFFSET_MAX_M} sign=${CENTER_COMMAND_SIGN} hls_error_gain=${HLS_CENTER_ERROR_GAIN}"
 echo "[auto-hls-grasp-place] single-contact: vmax=${SINGLE_CONTACT_VMAX_MPS} offset_max=${SINGLE_CONTACT_OFFSET_MAX_M} sign=${SINGLE_CONTACT_BODY_Y_SIGN} timeout=${HLS_SINGLE_CONTACT_TIMEOUT_S} limit_ratio=${HLS_SINGLE_CONTACT_LIMIT_RATIO} hls_offset_limit=${HLS_SINGLE_CONTACT_OFFSET_LIMIT_M}"
 echo "[auto-hls-grasp-place] no LeRobot record process will be started."
@@ -222,6 +234,13 @@ if bool_is_true "${START_GRIPPER_MANAGER}"; then
     -p dry_run:="${HLS_DRY_RUN}"
     -p low_current:="${HLS_LOW_CURRENT}"
     -p lift_current:="${HLS_LIFT_CURRENT}"
+    -p grip_chase_position_enable:="${HLS_GRIP_CHASE_POSITION_ENABLE}"
+    -p grip_chase_position_speed:="${HLS_GRIP_CHASE_POSITION_SPEED}"
+    -p grip_chase_position_acc:="${HLS_GRIP_CHASE_POSITION_ACC}"
+    -p grip_chase_position_torque_limit:="${HLS_GRIP_CHASE_POSITION_TORQUE_LIMIT}"
+    -p grip_chase_slip_ratio:="$(ros_double "${HLS_GRIP_CHASE_SLIP_RATIO}")"
+    -p grip_chase_position_period_s:="$(ros_double "${HLS_GRIP_CHASE_POSITION_PERIOD_S}")"
+    -p grip_chase_position_pulse_s:="$(ros_double "${HLS_GRIP_CHASE_POSITION_PULSE_S}")"
     -p max_temp:="$(ros_double "${HLS_MAX_TEMP}")"
     -p temp_warn_threshold:="$(ros_double "${HLS_TEMP_WARN_THRESHOLD}")"
     -p center_timeout_action:="${HLS_CENTER_TIMEOUT_ACTION}"
@@ -245,6 +264,15 @@ if bool_is_true "${START_GRIPPER_MANAGER}"; then
   fi
   if [[ -n "${HLS_MOTION_PROFILE_INDEX}" ]]; then
     hls_args+=(-p motion_profile_index:="${HLS_MOTION_PROFILE_INDEX}")
+  fi
+  if [[ -n "${HLS_SEARCH_SPEED}" ]]; then
+    hls_args+=(-p search_speed:="${HLS_SEARCH_SPEED}")
+  fi
+  if [[ -n "${HLS_SEARCH_ACC}" ]]; then
+    hls_args+=(-p search_acc:="${HLS_SEARCH_ACC}")
+  fi
+  if [[ -n "${HLS_SEARCH_TORQUE_LIMIT}" ]]; then
+    hls_args+=(-p search_torque_limit:="${HLS_SEARCH_TORQUE_LIMIT}")
   fi
   if [[ -n "${HLS_CENTER_HOLD_CURRENT}" ]]; then
     hls_args+=(-p center_hold_current:="${HLS_CENTER_HOLD_CURRENT}")

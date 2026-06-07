@@ -46,6 +46,8 @@ BOOL_STATUS_FIELDS = (
     "single_contact_need_motion",
     "left_at_close_limit",
     "right_at_close_limit",
+    "left_chase_position_pulse",
+    "right_chase_position_pulse",
 )
 
 
@@ -100,6 +102,8 @@ class StandardHlsStatus:
     single_contact_need_motion: bool = False
     left_at_close_limit: bool = False
     right_at_close_limit: bool = False
+    left_chase_position_pulse: bool = False
+    right_chase_position_pulse: bool = False
 
 
 def status_prefix_from_topic(topic: str) -> str:
@@ -179,6 +183,8 @@ class HandheldHlsGraspTest(Node):
                     "single_contact_direction",
                     "left_at_close_limit",
                     "right_at_close_limit",
+                    "left_chase_position_pulse",
+                    "right_chase_position_pulse",
                     "roll_deg",
                     "pitch_deg",
                 ],
@@ -294,6 +300,7 @@ class HandheldHlsGraspTest(Node):
             f"seg=({msg.left_close_segment_ratio:.2f},{msg.right_close_segment_ratio:.2f}) "
             f"contact=({int(msg.left_contact)},{int(msg.right_contact)}) "
             f"limit=({int(msg.left_at_close_limit)},{int(msg.right_at_close_limit)}) "
+            f"chase=({int(msg.left_chase_position_pulse)},{int(msg.right_chase_position_pulse)}) "
             f"move={int(msg.single_contact_need_motion)} dir={msg.single_contact_direction:+.0f} "
             f"safe={int(msg.safe_to_lift)} fault={int(msg.fault)} "
             f"cur=({msg.left_current:.0f},{msg.right_current:.0f}) "
@@ -335,6 +342,8 @@ class HandheldHlsGraspTest(Node):
                 "single_contact_direction": f"{msg.single_contact_direction:.3f}",
                 "left_at_close_limit": int(msg.left_at_close_limit),
                 "right_at_close_limit": int(msg.right_at_close_limit),
+                "left_chase_position_pulse": int(msg.left_chase_position_pulse),
+                "right_chase_position_pulse": int(msg.right_chase_position_pulse),
                 "roll_deg": f"{msg.roll_deg:.3f}",
                 "pitch_deg": f"{msg.pitch_deg:.3f}",
             }
