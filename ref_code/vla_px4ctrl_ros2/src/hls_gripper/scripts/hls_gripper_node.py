@@ -1218,6 +1218,11 @@ class HlsGripperNode(Node):
         self.last_search_write_s = now
 
         left_current, right_current = self._differential_current_pair(hold_current, push_current)
+        if not self.left_contact:
+            left_current = max(left_current, push_current)
+        if not self.right_contact:
+            right_current = max(right_current, push_current)
+
         self.goal_left_pos = self._compat_pos(self.feedback[SIDE_LEFT].close_ratio)
         self.goal_right_pos = self._compat_pos(self.feedback[SIDE_RIGHT].close_ratio)
 
@@ -1230,21 +1235,12 @@ class HlsGripperNode(Node):
             return
         assert self.bus is not None
 
-        self._write_grip_chase_side(SIDE_LEFT, left_current, self.left_contact)
-        self._write_grip_chase_side(SIDE_RIGHT, right_current, self.right_contact)
+        self._write_grip_chase_side(SIDE_LEFT, left_current)
+        self._write_grip_chase_side(SIDE_RIGHT, right_current)
 
-    def _write_grip_chase_side(self, side: str, current: int, is_contact: bool) -> None:
+    def _write_grip_chase_side(self, side: str, current: int) -> None:
         cal = self.calibration[side]
-        if is_contact:
-            self.bus.write_current(cal.servo_id, self.current_inward_sign[side] * current)
-        else:
-            self.bus.write_position(
-                cal.servo_id,
-                cal.close_pos,
-                self.search_speed,
-                self.search_acc,
-                self.search_torque_limit,
-            )
+        self.bus.write_current(cal.servo_id, self.current_inward_sign[side] * current)
 
     def _differential_current_pair(self, hold_current: int, push_current: int) -> tuple[int, int]:
         hold_current = max(0, int(hold_current))
