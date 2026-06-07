@@ -532,6 +532,7 @@ class HlsGripperNode(Node):
         self.lift_current = int(self.declare_parameter("lift_current", 120).value)
         self.center_hold_current_param = int(self.declare_parameter("center_hold_current", -1).value)
         self.center_push_current_param = int(self.declare_parameter("center_push_current", -1).value)
+        self.grip_chase_min_current_param = int(self.declare_parameter("grip_chase_min_current", -1).value)
         self.center_timeout_action = str(self.declare_parameter("center_timeout_action", "final_grip").value)
         self.final_grip_ramp_s = float(self.declare_parameter("final_grip_ramp_s", 1.2).value)
         self.contact_current_threshold = float(self.declare_parameter("contact_current_threshold", -1.0).value)
@@ -575,6 +576,11 @@ class HlsGripperNode(Node):
             self.center_push_current_param
             if self.center_push_current_param > 0
             else max(self.center_hold_current, min(self.lift_current, int(round(0.75 * self.lift_current))))
+        )
+        self.grip_chase_min_current = (
+            self.grip_chase_min_current_param
+            if self.grip_chase_min_current_param > 0
+            else self.center_push_current
         )
         self.contact_detection = self._build_contact_detection()
         self.current_inward_sign = self._build_current_inward_sign()
@@ -672,6 +678,7 @@ class HlsGripperNode(Node):
             f"({self.search_speed},{self.search_acc},{self.search_torque_limit}) "
             f"current_sign=({self.current_inward_sign[SIDE_LEFT]:+d},{self.current_inward_sign[SIDE_RIGHT]:+d}) "
             f"center_current=({self.center_hold_current},{self.center_push_current}) "
+            f"grip_chase_min_current={self.grip_chase_min_current} "
             f"contact_enter=({self.contact_detection[SIDE_LEFT]['enter_threshold']:.1f},"
             f"{self.contact_detection[SIDE_RIGHT]['enter_threshold']:.1f}) "
             f"status_prefix={self.status_prefix}"
@@ -1218,6 +1225,9 @@ class HlsGripperNode(Node):
         self.last_search_write_s = now
 
         left_current, right_current = self._differential_current_pair(hold_current, push_current)
+        chase_floor = max(hold_current, min(push_current, self.grip_chase_min_current))
+        left_current = max(left_current, chase_floor)
+        right_current = max(right_current, chase_floor)
         if not self.left_contact:
             left_current = max(left_current, push_current)
         if not self.right_contact:

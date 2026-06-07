@@ -32,6 +32,7 @@ HLS_LOW_CURRENT="${HLS_LOW_CURRENT:-40}"
 HLS_LIFT_CURRENT="${HLS_LIFT_CURRENT:-120}"
 HLS_CENTER_HOLD_CURRENT="${HLS_CENTER_HOLD_CURRENT:-}"
 HLS_CENTER_PUSH_CURRENT="${HLS_CENTER_PUSH_CURRENT:-}"
+HLS_GRIP_CHASE_MIN_CURRENT="${HLS_GRIP_CHASE_MIN_CURRENT:-}"
 HLS_CENTER_TIMEOUT_ACTION="${HLS_CENTER_TIMEOUT_ACTION:-final_grip}"
 HLS_LEFT_CURRENT_INWARD_SIGN="${HLS_LEFT_CURRENT_INWARD_SIGN:-}"
 HLS_RIGHT_CURRENT_INWARD_SIGN="${HLS_RIGHT_CURRENT_INWARD_SIGN:-}"
@@ -171,7 +172,7 @@ echo "[auto-hls-grasp-place] cmd topic: ${CMD_TOPIC}"
 echo "[auto-hls-grasp-place] gripper topics: scalar=${GRIPPER_TOPIC} pair=${GRIPPER_COMMAND_PAIR_TOPIC} feedback=${GRIPPER_FEEDBACK_TOPIC} status=${HLS_STATUS_TOPIC}"
 echo "[auto-hls-grasp-place] manager: type=${GRIPPER_MANAGER_TYPE} start=${START_GRIPPER_MANAGER} port=${GRIPPER_MANAGER_PORT} dry_run=${HLS_DRY_RUN}"
 echo "[auto-hls-grasp-place] hls sdk root: ${HLS_SDK_ROOT:-<auto>}"
-echo "[auto-hls-grasp-place] hls current: low=${HLS_LOW_CURRENT} lift=${HLS_LIFT_CURRENT} center_hold=${HLS_CENTER_HOLD_CURRENT:-<low>} center_push=${HLS_CENTER_PUSH_CURRENT:-<auto>} center_timeout=${HLS_CENTER_TIMEOUT_ACTION}"
+echo "[auto-hls-grasp-place] hls current: low=${HLS_LOW_CURRENT} lift=${HLS_LIFT_CURRENT} center_hold=${HLS_CENTER_HOLD_CURRENT:-<low>} center_push=${HLS_CENTER_PUSH_CURRENT:-<auto>} chase_min=${HLS_GRIP_CHASE_MIN_CURRENT:-<center_push>} center_timeout=${HLS_CENTER_TIMEOUT_ACTION}"
 echo "[auto-hls-grasp-place] hls current signs: left=${HLS_LEFT_CURRENT_INWARD_SIGN:-<contact-metric>} right=${HLS_RIGHT_CURRENT_INWARD_SIGN:-<contact-metric>}"
 echo "[auto-hls-grasp-place] hls motion profile: name=${HLS_MOTION_PROFILE:-<json-default>} index=${HLS_MOTION_PROFILE_INDEX:-<none>}"
 echo "[auto-hls-grasp-place] centering: kp=${CENTER_KP} vmax=${CENTER_VMAX_MPS} deadband=${CENTER_DEADBAND_M} offset_max=${CENTER_OFFSET_MAX_M} sign=${CENTER_COMMAND_SIGN}"
@@ -234,6 +235,9 @@ if bool_is_true "${START_GRIPPER_MANAGER}"; then
   fi
   if [[ -n "${HLS_CENTER_PUSH_CURRENT}" ]]; then
     hls_args+=(-p center_push_current:="${HLS_CENTER_PUSH_CURRENT}")
+  fi
+  if [[ -n "${HLS_GRIP_CHASE_MIN_CURRENT}" ]]; then
+    hls_args+=(-p grip_chase_min_current:="${HLS_GRIP_CHASE_MIN_CURRENT}")
   fi
   if [[ -n "${HLS_LEFT_CURRENT_INWARD_SIGN}" ]]; then
     hls_args+=(-p left_current_inward_sign:="${HLS_LEFT_CURRENT_INWARD_SIGN}")
