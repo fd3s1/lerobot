@@ -218,7 +218,16 @@ def pos_to_ratio(open_pos: int, close_pos: int, pos: float) -> float:
     span = close_pos - open_pos
     if span == 0:
         return 0.0
-    return clamp((float(pos) - open_pos) / float(span), 0.0, 1.0)
+    # Keep a small amount of overtravel visible to centering/status logic. The
+    # gravity compensation table clamps separately before baseline lookup.
+    return clamp((float(pos) - open_pos) / float(span), -0.2, 1.2)
+
+
+def pos_to_segment_ratio(start_pos: int, end_pos: int, pos: float) -> float:
+    span = end_pos - start_pos
+    if span == 0:
+        return 0.0
+    return clamp((float(pos) - start_pos) / float(span), -0.2, 1.2)
 
 
 def int_from_mapping(mapping: dict, key: str, default: int) -> int:
@@ -561,6 +570,7 @@ class HlsGripperNode(Node):
         self.center_bias = float(self.declare_parameter("center_bias", 0.0).value)
         self.center_sign = float(self.declare_parameter("center_sign", 1.0).value)
         self.center_gain_override = float(self.declare_parameter("center_gain_m_per_ratio", 0.0).value)
+        self.center_error_gain = float(self.declare_parameter("center_error_gain", 2.0).value)
         self.dry_run_contact_pattern = str(self.declare_parameter("dry_run_contact_pattern", "both").value)
 
         comp_path = resolve_compensation_path(self.gravity_comp_path_param)
@@ -638,6 +648,10 @@ class HlsGripperNode(Node):
             for name in (
                 "left_close_ratio",
                 "right_close_ratio",
+                "left_raw_pos",
+                "right_raw_pos",
+                "left_close_segment_ratio",
+                "right_close_segment_ratio",
                 "center_error_ratio",
                 "center_error_m",
                 "left_current",
@@ -1340,7 +1354,12 @@ class HlsGripperNode(Node):
         return 0.0
 
     def _center_error_ratio(self) -> float:
-        return self.feedback[SIDE_LEFT].close_ratio - self.feedback[SIDE_RIGHT].close_ratio - self.center_bias
+        raw_error = self.feedback[SIDE_LEFT].close_ratio - self.feedback[SIDE_RIGHT].close_ratio
+        return self.center_error_gain * raw_error - self.center_bias
+
+    def _close_segment_ratio(self, side: str) -> float:
+        cal = self.calibration[side]
+        return pos_to_segment_ratio(cal.clear_pos, cal.close_pos, self.feedback[side].pos)
 
     def _center_error_m(self) -> float:
         return self.center_sign * self.center_gain_m_per_ratio * self._center_error_ratio()
@@ -1392,6 +1411,10 @@ class HlsGripperNode(Node):
         values = {
             "left_close_ratio": left_fb.close_ratio,
             "right_close_ratio": right_fb.close_ratio,
+            "left_raw_pos": left_fb.pos,
+            "right_raw_pos": right_fb.pos,
+            "left_close_segment_ratio": self._close_segment_ratio(SIDE_LEFT),
+            "right_close_segment_ratio": self._close_segment_ratio(SIDE_RIGHT),
             "center_error_ratio": self._center_error_ratio(),
             "center_error_m": self._center_error_m(),
             "left_current": left_fb.current,

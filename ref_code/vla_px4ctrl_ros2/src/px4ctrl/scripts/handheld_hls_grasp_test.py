@@ -19,6 +19,10 @@ from std_msgs.msg import Bool, Float64, String
 FLOAT_STATUS_FIELDS = (
     "left_close_ratio",
     "right_close_ratio",
+    "left_raw_pos",
+    "right_raw_pos",
+    "left_close_segment_ratio",
+    "right_close_segment_ratio",
     "center_error_ratio",
     "center_error_m",
     "left_current",
@@ -70,6 +74,10 @@ class StandardHlsStatus:
     fault_reason: str = ""
     left_close_ratio: float = 0.0
     right_close_ratio: float = 0.0
+    left_raw_pos: float = 0.0
+    right_raw_pos: float = 0.0
+    left_close_segment_ratio: float = 0.0
+    right_close_segment_ratio: float = 0.0
     center_error_ratio: float = 0.0
     center_error_m: float = 0.0
     left_current: float = 0.0
@@ -144,6 +152,10 @@ class HandheldHlsGraspTest(Node):
                     "state",
                     "left_close_ratio",
                     "right_close_ratio",
+                    "left_raw_pos",
+                    "right_raw_pos",
+                    "left_close_segment_ratio",
+                    "right_close_segment_ratio",
                     "center_error_ratio",
                     "center_error_m",
                     "left_contact",
@@ -271,6 +283,8 @@ class HandheldHlsGraspTest(Node):
         self.get_logger().info(
             f"CH10 mode={mode} raw={self.raw_command_mode} state={msg.state} "
             f"center={msg.center_error_m:+.4f}m ratio={msg.center_error_ratio:+.3f} "
+            f"pos=({msg.left_raw_pos:.0f},{msg.right_raw_pos:.0f}) "
+            f"seg=({msg.left_close_segment_ratio:.2f},{msg.right_close_segment_ratio:.2f}) "
             f"contact=({int(msg.left_contact)},{int(msg.right_contact)}) "
             f"limit=({int(msg.left_at_close_limit)},{int(msg.right_at_close_limit)}) "
             f"move={int(msg.single_contact_need_motion)} dir={msg.single_contact_direction:+.0f} "
@@ -291,6 +305,10 @@ class HandheldHlsGraspTest(Node):
                 "state": msg.state,
                 "left_close_ratio": f"{msg.left_close_ratio:.6f}",
                 "right_close_ratio": f"{msg.right_close_ratio:.6f}",
+                "left_raw_pos": f"{msg.left_raw_pos:.3f}",
+                "right_raw_pos": f"{msg.right_raw_pos:.3f}",
+                "left_close_segment_ratio": f"{msg.left_close_segment_ratio:.6f}",
+                "right_close_segment_ratio": f"{msg.right_close_segment_ratio:.6f}",
                 "center_error_ratio": f"{msg.center_error_ratio:.6f}",
                 "center_error_m": f"{msg.center_error_m:.6f}",
                 "left_contact": int(msg.left_contact),
