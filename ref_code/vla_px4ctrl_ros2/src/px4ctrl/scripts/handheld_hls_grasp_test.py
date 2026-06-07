@@ -384,7 +384,7 @@ def parse_args() -> HandheldHlsConfig:
     parser.add_argument("--open-command", type=float, default=100.0)
     parser.add_argument("--close-command", type=float, default=0.0)
     parser.add_argument("--publish-period-s", type=float, default=0.5)
-    parser.add_argument("--grasp-mode-stable-s", type=float, default=0.3)
+    parser.add_argument("--grasp-mode-stable-s", type=float, default=0.8)
     parser.add_argument("--open-mode-stable-s", type=float, default=0.0)
     parser.add_argument("--hold-mode-timeout-s", type=float, default=1.5)
     parser.add_argument("--rc-stale-mode", choices=("hold", "open"), default="open")

@@ -536,9 +536,9 @@ class HlsGripperNode(Node):
         self.search_speed_param = int(self.declare_parameter("search_speed", -1).value)
         self.search_acc_param = int(self.declare_parameter("search_acc", -1).value)
         self.search_torque_limit_param = int(self.declare_parameter("search_torque_limit", -1).value)
-        self.open_speed = int(self.declare_parameter("open_speed", 40).value)
-        self.open_acc = int(self.declare_parameter("open_acc", 10).value)
-        self.open_torque_limit = int(self.declare_parameter("open_torque_limit", 300).value)
+        self.open_speed = int(self.declare_parameter("open_speed", 24).value)
+        self.open_acc = int(self.declare_parameter("open_acc", 6).value)
+        self.open_torque_limit = int(self.declare_parameter("open_torque_limit", 120).value)
         self.low_current = int(self.declare_parameter("low_current", 25).value)
         self.lift_current = int(self.declare_parameter("lift_current", 70).value)
         self.center_hold_current_param = int(self.declare_parameter("center_hold_current", -1).value)
@@ -1189,7 +1189,7 @@ class HlsGripperNode(Node):
             self._write_lift_current_if_due(now)
 
     def _write_open_if_due(self, now: float) -> None:
-        if now - self.last_open_write_s < 0.25:
+        if now - self.last_open_write_s < 1.0:
             return
         self._write_open_direct(now)
 
