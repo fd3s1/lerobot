@@ -548,9 +548,9 @@ class HlsGripperNode(Node):
         self.grip_chase_position_speed_param = int(self.declare_parameter("grip_chase_position_speed", -1).value)
         self.grip_chase_position_acc_param = int(self.declare_parameter("grip_chase_position_acc", -1).value)
         self.grip_chase_position_torque_param = int(self.declare_parameter("grip_chase_position_torque_limit", -1).value)
-        self.grip_chase_slip_ratio = float(self.declare_parameter("grip_chase_slip_ratio", 0.06).value)
-        self.grip_chase_position_period_s = float(self.declare_parameter("grip_chase_position_period_s", 0.35).value)
-        self.grip_chase_position_pulse_s = float(self.declare_parameter("grip_chase_position_pulse_s", 0.16).value)
+        self.grip_chase_slip_ratio = float(self.declare_parameter("grip_chase_slip_ratio", 0.03).value)
+        self.grip_chase_position_period_s = float(self.declare_parameter("grip_chase_position_period_s", 0.05).value)
+        self.grip_chase_position_pulse_s = float(self.declare_parameter("grip_chase_position_pulse_s", 0.80).value)
         self.center_timeout_action = str(self.declare_parameter("center_timeout_action", "final_grip").value)
         self.final_grip_ramp_s = float(self.declare_parameter("final_grip_ramp_s", 1.2).value)
         self.contact_current_threshold = float(self.declare_parameter("contact_current_threshold", -1.0).value)
@@ -607,17 +607,17 @@ class HlsGripperNode(Node):
         self.grip_chase_position_speed = (
             self.grip_chase_position_speed_param
             if self.grip_chase_position_speed_param > 0
-            else max(3, min(self.search_speed, 8))
+            else max(8, min(self.motion_profile.speed, 18))
         )
         self.grip_chase_position_acc = (
             self.grip_chase_position_acc_param
             if self.grip_chase_position_acc_param > 0
-            else max(2, min(self.search_acc, 4))
+            else max(4, min(self.motion_profile.acc, 6))
         )
         self.grip_chase_position_torque_limit = (
             self.grip_chase_position_torque_param
             if self.grip_chase_position_torque_param > 0
-            else max(40, min(self.search_torque_limit, self.center_push_current + 40))
+            else max(self.center_push_current + 40, min(self.motion_profile.torque_limit, self.center_push_current + 100))
         )
         self.contact_detection = self._build_contact_detection()
         self.current_inward_sign = self._build_current_inward_sign()
