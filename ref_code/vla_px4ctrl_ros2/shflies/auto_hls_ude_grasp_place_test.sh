@@ -7,7 +7,8 @@ WORKSPACE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 START_STACK="${START_STACK:-true}"
 START_PX4CTRL="${START_PX4CTRL:-true}"
 STACK_STARTUP_WAIT_S="${STACK_STARTUP_WAIT_S:-8}"
-WAIT_FOR_ENTER="${WAIT_FOR_ENTER:-true}"
+WAIT_FOR_ENTER="${WAIT_FOR_ENTER:-false}"
+CONFIRM_BEFORE_TAKEOFF="${CONFIRM_BEFORE_TAKEOFF:-true}"
 KEEP_STACK_ON_INTERRUPT="${KEEP_STACK_ON_INTERRUPT:-false}"
 CLEANUP_STACK_ON_EXIT="${CLEANUP_STACK_ON_EXIT:-true}"
 
@@ -152,6 +153,7 @@ echo "[auto-hls-ude-test] box topic: ${BOX_POSE_TOPIC}"
 echo "[auto-hls-ude-test] landing: mode=${LANDING_MODE} cmd_z=${CMD_LAND_Z} no_land=${NO_LAND}"
 echo "[auto-hls-ude-test] CH10 safety: topic=${RC_TOPIC} timeout=${RC_TIMEOUT_S}s stale_action=${RC_STALE_ACTION} index=${CH10_INDEX} open<=${CH10_OPEN_PWM}"
 echo "[auto-hls-ude-test] offsets: target=(${TARGET_OFFSET_X}, ${TARGET_OFFSET_Y}, ${TARGET_OFFSET_Z}) box=(${BOX_OFFSET_X}, ${BOX_OFFSET_Y}, ${BOX_OFFSET_Z})"
+echo "[auto-hls-ude-test] takeoff confirmation: inner_confirm=${CONFIRM_BEFORE_TAKEOFF} outer_wait=${WAIT_FOR_ENTER}"
 
 if bool_is_true "${START_STACK}"; then
   echo "[auto-hls-ude-test] starting mocap/MAVROS/bridge/px4ctrl stack"
@@ -185,7 +187,7 @@ fi
 if bool_is_true "${WAIT_FOR_ENTER}"; then
   echo
   echo "[auto-hls-ude-test] Keep RC in hover+command mode, sticks centered, CH10 not low/open."
-  echo "[auto-hls-ude-test] Press Enter to start automatic takeoff, HLS grasp, box release, and CMD landing."
+  echo "[auto-hls-ude-test] Press Enter to start preflight pose locking. A second inner confirmation may be used before TAKEOFF."
   read -r _
 fi
 
@@ -202,6 +204,7 @@ export HLS_SINGLE_CONTACT_OFFSET_LIMIT_M
 export TARGET_OFFSET_X TARGET_OFFSET_Y TARGET_OFFSET_Z BOX_OFFSET_X BOX_OFFSET_Y BOX_OFFSET_Z
 export TARGET_HOVER_Z_OFFSET TARGET_GRASP_Z_OFFSET BOX_HOVER_Z_OFFSET BOX_PLACE_Z_OFFSET
 export WAYPOINT_ARRIVAL_TOLERANCE_M WAYPOINT_ARRIVAL_SETTLE_S WAYPOINT_ARRIVAL_TIMEOUT_S
+export CONFIRM_BEFORE_TAKEOFF
 export LANDING_MODE CMD_LAND_Z CMD_LAND_SPEED NO_LAND POSE_PREFLIGHT_REQUIRED SKIP_POSE_PREFLIGHT POSE_PREFLIGHT_TIMEOUT_S
 
 set +e

@@ -64,7 +64,7 @@ ros2 topic echo --once /mavros/state
 
 ### 4. 无桨自动流程检查
 
-先保持 `WAIT_FOR_ENTER=true`，让脚本启动后停在确认点：
+默认会在自动节点内部等待确认：脚本先完成 topic 检查、目标/box/无人机 pose 稳定检查并打印锁定快照，然后暂停 ROS 回调刷新；这时按一次 Enter 会立即发布 `TAKEOFF`。px4ctrl 收到 `TAKEOFF` 后仍会执行自身的电机加速阶段，再进入竖直起飞。
 
 ```bash
 cd /home/user/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
@@ -87,8 +87,10 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 - `px4ctrl state is live`
 - `MAVROS state is live`
 - `CH10 safety: ... open<=1300`
+- `takeoff confirmation: inner_confirm=true outer_wait=false`
+- `Pre-takeoff pose snapshot is locked`
 
-在按 Enter 前，确认 CH10 不在低位，遥控器姿态安全，必要时保持随时切 CH10 低位释放。
+在按 Enter 前，确认打印出的 drone/target/box 坐标合理、CH10 不在低位、遥控器姿态安全，必要时保持随时切 CH10 低位释放。按下 Enter 后不再继续刷新起飞前快照，会直接发 `TAKEOFF`。
 
 ### 5. CH10 安全释放检查
 
@@ -164,8 +166,8 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 | 阶段 | 飞机动作 | 夹爪动作 | 保护逻辑 |
 | --- | --- | --- | --- |
 | 启动检查 | 启动 stack，检查 pose/RC/state | 不 close | topic 缺失可拒绝启动 |
-| 等待 Enter | 悬停/地面待命 | 保持 open | CH10 低位不会允许自动抓取 |
-| 自动起飞 | 发布 `TakeoffLand.TAKEOFF` | 发布 open | 等待 `AUTO_HOVER` |
+| 起飞前确认 | 锁定起飞前 pose 快照，暂停回调等待一次 Enter | 保持 open | Enter 后重新检查 CH10，低位不会起飞 |
+| 自动起飞 | 发布 `TakeoffLand.TAKEOFF` | 发布 open | px4ctrl 执行电机加速并等待 `AUTO_HOVER` |
 | 进入 `CMD_CTRL` | 发布当前位置 `/position_cmd` | 保持 open | 进入失败则退出 |
 | 飞到目标上方 | 跟随目标 live waypoint | 保持 open | 未到位不夹 |
 | 下降到抓取点 | 到目标抓取高度 | 保持 open | 到位误差和 settle 检查 |
@@ -185,7 +187,8 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 | `START_STACK` | `true` | 是否由一键脚本启动 mocap、MAVROS、vision bridge、px4ctrl。 | 已手动启动这些节点时设为 `false`。 |
 | `START_PX4CTRL` | `true` | 传给 `run_mocap_mavros.sh`，决定是否启动 `px4ctrl_node`。 | 只想用已有 px4ctrl 时设为 `false`。 |
 | `STACK_STARTUP_WAIT_S` | `8` | 启动底层 stack 后等待的秒数。 | 电脑慢或 MAVROS 启动慢时增大。 |
-| `WAIT_FOR_ENTER` | `true` | preflight 后是否等待人工按 Enter。 | 自动化回归可设 `false`，真机建议保持 `true`。 |
+| `WAIT_FOR_ENTER` | `false` | 一键 shell 外层是否额外等待 Enter。 | 默认 `false`，避免两次 Enter；通常不改。 |
+| `CONFIRM_BEFORE_TAKEOFF` | `true` | 自动节点完成 pose 锁定后是否等待一次 Enter 再发 `TAKEOFF`。 | 真机建议保持 `true`；自动化回归可设 `false`。 |
 | `KEEP_STACK_ON_INTERRUPT` | `false` | Ctrl+C 后是否保留 stack。 | 空中调试时可临时设 `true`，避免误杀控制链。 |
 | `CLEANUP_STACK_ON_EXIT` | `true` | 脚本退出时是否关闭由它启动的 stack。 | 想保留 MAVROS/px4ctrl 继续观察时设 `false`。 |
 

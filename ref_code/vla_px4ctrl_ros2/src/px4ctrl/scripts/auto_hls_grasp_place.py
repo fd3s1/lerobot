@@ -290,6 +290,12 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
             self.publish_gripper(self.hls_config.open_command, repeats=1, interval_s=0.0)
             self.last_pregrasp_open_s = now
 
+    def before_takeoff(self) -> None:
+        # The confirmation prompt intentionally pauses spinning callbacks. Refresh
+        # CH10 immediately after Enter so a safety-open switch during the wait
+        # still prevents automatic takeoff.
+        self.wait_for_rc_safety_ready()
+
     def publish_cmd(self, pose: PoseSample) -> None:
         self.raise_if_safety_abort("position command")
         super().publish_cmd(pose)

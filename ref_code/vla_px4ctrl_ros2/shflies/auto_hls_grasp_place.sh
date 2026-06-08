@@ -137,6 +137,7 @@ CLOSE_COMMAND="${CLOSE_COMMAND:-0.0}"
 WAYPOINT_ARRIVAL_TOLERANCE_M="${WAYPOINT_ARRIVAL_TOLERANCE_M:-0.06}"
 WAYPOINT_ARRIVAL_SETTLE_S="${WAYPOINT_ARRIVAL_SETTLE_S:-0.4}"
 WAYPOINT_ARRIVAL_TIMEOUT_S="${WAYPOINT_ARRIVAL_TIMEOUT_S:-5.0}"
+CONFIRM_BEFORE_TAKEOFF="${CONFIRM_BEFORE_TAKEOFF:-false}"
 POSE_PREFLIGHT_TIMEOUT_S="${POSE_PREFLIGHT_TIMEOUT_S:-6}"
 POSE_PREFLIGHT_REQUIRED="${POSE_PREFLIGHT_REQUIRED:-false}"
 SKIP_POSE_PREFLIGHT="${SKIP_POSE_PREFLIGHT:-false}"
@@ -216,6 +217,7 @@ echo "[auto-hls-grasp-place] single-contact: vmax=${SINGLE_CONTACT_VMAX_MPS} off
 echo "[auto-hls-grasp-place] planning offsets: target=(${TARGET_OFFSET_X}, ${TARGET_OFFSET_Y}, ${TARGET_OFFSET_Z})m box=(${BOX_OFFSET_X}, ${BOX_OFFSET_Y}, ${BOX_OFFSET_Z})m"
 echo "[auto-hls-grasp-place] optional z offsets: target_hover=${TARGET_HOVER_Z_OFFSET:-<auto>} target_grasp=${TARGET_GRASP_Z_OFFSET:-<auto>} box_hover=${BOX_HOVER_Z_OFFSET:-<auto>} box_place=${BOX_PLACE_Z_OFFSET:-<auto>}"
 echo "[auto-hls-grasp-place] actual arrival gate: tol=${WAYPOINT_ARRIVAL_TOLERANCE_M}m settle=${WAYPOINT_ARRIVAL_SETTLE_S}s timeout=${WAYPOINT_ARRIVAL_TIMEOUT_S}s"
+echo "[auto-hls-grasp-place] takeoff confirmation: ${CONFIRM_BEFORE_TAKEOFF}"
 echo "[auto-hls-grasp-place] no LeRobot record process will be started."
 
 set +u
@@ -423,6 +425,11 @@ if bool_is_true "${SMOOTH_TRAJECTORY}"; then
   auto_args+=(--smooth-trajectory)
 else
   auto_args+=(--no-smooth-trajectory)
+fi
+if bool_is_true "${CONFIRM_BEFORE_TAKEOFF}"; then
+  auto_args+=(--confirm-before-takeoff)
+else
+  auto_args+=(--no-confirm-before-takeoff)
 fi
 if bool_is_true "${NO_LAND}"; then
   auto_args+=(--no-land)

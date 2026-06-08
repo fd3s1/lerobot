@@ -149,6 +149,7 @@ class AutoConfig:
     waypoint_arrival_tolerance_m: float
     waypoint_arrival_settle_s: float
     waypoint_arrival_timeout_s: float
+    confirm_before_takeoff: bool
     record_duration_s: float
     record_start_hold_s: float
     grasp_mode: Literal["soft", "continuous_center"]
@@ -494,6 +495,51 @@ class AutoGraspPlaceDataset(Node):
             self.record_gate_pub.publish(msg)
             rclpy.spin_once(self, timeout_sec=0.0)
             time.sleep(0.05)
+
+    def wait_for_takeoff_confirmation(
+        self,
+        raw_target: PoseSample,
+        raw_box: PoseSample,
+        target: PoseSample,
+        box: PoseSample,
+        drone: PoseSample,
+    ) -> None:
+        if not self.config.confirm_before_takeoff:
+            return
+        if not sys.stdin.isatty():
+            raise RuntimeError(
+                "Takeoff confirmation needs an interactive terminal. "
+                "Use --no-confirm-before-takeoff to disable the Enter gate."
+            )
+
+        print("", flush=True)
+        print("[auto-grasp-place] Pre-takeoff pose snapshot is locked; ROS callbacks are paused here.", flush=True)
+        print(
+            "[auto-grasp-place] "
+            f"drone=({drone.x:.3f}, {drone.y:.3f}, {drone.z:.3f}), yaw={drone.yaw:.3f}",
+            flush=True,
+        )
+        print(
+            "[auto-grasp-place] "
+            f"target raw=({raw_target.x:.3f}, {raw_target.y:.3f}, {raw_target.z:.3f}) "
+            f"adjusted=({target.x:.3f}, {target.y:.3f}, {target.z:.3f})",
+            flush=True,
+        )
+        print(
+            "[auto-grasp-place] "
+            f"box raw=({raw_box.x:.3f}, {raw_box.y:.3f}, {raw_box.z:.3f}) "
+            f"adjusted=({box.x:.3f}, {box.y:.3f}, {box.z:.3f})",
+            flush=True,
+        )
+        print(
+            "[auto-grasp-place] Press Enter once to publish TAKEOFF. "
+            "px4ctrl should then run its built-in motor speed-up before vertical climb.",
+            flush=True,
+        )
+        input()
+
+    def before_takeoff(self) -> None:
+        return
 
     def checked_pose(self, x: float, y: float, z: float, yaw: float) -> PoseSample:
         if x < self.config.x_min - BOUNDS_EPS or x > self.config.x_max + BOUNDS_EPS:
@@ -951,6 +997,8 @@ class AutoGraspPlaceDataset(Node):
         )
         self.validate_box_fit()
 
+        self.wait_for_takeoff_confirmation(raw_target, raw_box, target, box, drone)
+        self.before_takeoff()
         self.publish_gripper(self.config.gripper_open, repeats=5)
         self.publish_takeoff()
         self.wait_for_state("AUTO_HOVER", self.config.takeoff_timeout_s)
@@ -1219,6 +1267,20 @@ def parse_args() -> AutoConfig:
     parser.add_argument("--waypoint-arrival-tolerance-m", type=float, default=0.08)
     parser.add_argument("--waypoint-arrival-settle-s", type=float, default=0.3)
     parser.add_argument("--waypoint-arrival-timeout-s", type=float, default=5.0)
+    confirm_group = parser.add_mutually_exclusive_group()
+    confirm_group.add_argument(
+        "--confirm-before-takeoff",
+        dest="confirm_before_takeoff",
+        action="store_true",
+        help="After preflight pose checks, pause ROS callbacks and wait for one Enter before TAKEOFF.",
+    )
+    confirm_group.add_argument(
+        "--no-confirm-before-takeoff",
+        dest="confirm_before_takeoff",
+        action="store_false",
+        help="Publish TAKEOFF immediately after preflight checks.",
+    )
+    parser.set_defaults(confirm_before_takeoff=False)
     parser.add_argument("--record-duration-s", type=float, default=30.0)
     parser.add_argument("--record-start-hold-s", type=float, default=0.06)
     parser.add_argument("--grasp-mode", choices=("soft", "continuous_center"), default="continuous_center")
