@@ -336,7 +336,8 @@ bash shflies/handheld_hls_grasp_test.sh
 | `GRIPPER_COMMAND_PAIR_TOPIC` | `/gripper/command_pair` | 自动流程给夹爪发双侧命令的话题。 |
 | `TAKEOFF_LAND_TOPIC` | `/px4ctrl/takeoff_land` | 起降命令话题。 |
 | `PX4CTRL_STATE_TOPIC` | `/px4ctrl/state` | px4ctrl 状态话题。 |
-| `CONFIRM_BEFORE_TAKEOFF` | 一键飞行脚本默认 `true` | 自动节点完成 pose 稳定检查并锁定快照后，等待一次 Enter 再发布 `TAKEOFF`。 |
+| `TAKEOFF_MODE` | HLS-UDE 一键脚本默认 `manual`，通用脚本默认 `auto` | `manual` 表示不发布 `TAKEOFF`，等待手动起飞后的 `AUTO_HOVER`；`auto` 表示发布 `TakeoffLand.TAKEOFF`。 |
+| `CONFIRM_BEFORE_TAKEOFF` | HLS-UDE 一键脚本默认 `false` | 自动节点完成 pose 稳定检查并锁定快照后，是否等待一次 Enter 再继续。 |
 | `RC_TOPIC` | `/mavros/rc/in` | 自动 HLS 流程读取 CH10 安全释放的话题。 |
 | `RC_TIMEOUT_S` | `0.5` | 自动 HLS 流程判断 RC topic 新鲜度的阈值。起飞前要求 fresh，飞行中默认 stale 只告警。 |
 | `RC_STALE_ACTION` | `warn` | 飞行中 RC topic 超时后的动作。`warn` 只报警继续；`abort` 会 open 并中止。 |

@@ -145,6 +145,7 @@ class AutoConfig:
     stable_duration_s: float
     stable_pos_tolerance_m: float
     takeoff_timeout_s: float
+    takeoff_mode: str
     cmd_ctrl_timeout_s: float
     record_ready_timeout_s: float
     waypoint_arrival_tolerance_m: float
@@ -543,8 +544,12 @@ class AutoGraspPlaceDataset(Node):
             flush=True,
         )
         print(
-            "[auto-grasp-place] Press Enter once to publish TAKEOFF. "
-            "px4ctrl should then run its built-in motor speed-up before vertical climb.",
+            "[auto-grasp-place] Press Enter once to start. "
+            + (
+                "The node will publish TAKEOFF; px4ctrl should then run its built-in motor speed-up before vertical climb."
+                if self.config.takeoff_mode == "auto"
+                else "Manual takeoff mode is active; the node will not publish TAKEOFF and will wait for AUTO_HOVER."
+            ),
             flush=True,
         )
         input()
@@ -1044,7 +1049,12 @@ class AutoGraspPlaceDataset(Node):
         self.wait_for_takeoff_confirmation(raw_target, raw_box, target, box, drone, drone_arrival)
         self.before_takeoff()
         self.publish_gripper(self.config.gripper_open, repeats=5)
-        self.publish_takeoff()
+        if self.config.takeoff_mode == "auto":
+            self.publish_takeoff()
+        else:
+            self.get_logger().info(
+                "Manual takeoff mode: not publishing TAKEOFF; waiting for px4ctrl AUTO_HOVER."
+            )
         self.wait_for_state("AUTO_HOVER", self.config.takeoff_timeout_s)
 
         current_drone = self.poses.get("drone", drone)
@@ -1307,6 +1317,12 @@ def parse_args() -> AutoConfig:
     parser.add_argument("--stable-duration-s", type=float, default=0.5)
     parser.add_argument("--stable-pos-tolerance-m", type=float, default=0.03)
     parser.add_argument("--takeoff-timeout-s", type=float, default=30.0)
+    parser.add_argument(
+        "--takeoff-mode",
+        choices=("auto", "manual"),
+        default="auto",
+        help="'auto' publishes px4ctrl TAKEOFF; 'manual' waits for the pilot/manual flow to reach AUTO_HOVER.",
+    )
     parser.add_argument("--cmd-ctrl-timeout-s", type=float, default=10.0)
     parser.add_argument("--record-ready-timeout-s", type=float, default=60.0)
     parser.add_argument("--waypoint-arrival-tolerance-m", type=float, default=0.08)

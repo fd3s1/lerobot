@@ -6,14 +6,14 @@
 
 - `shflies/auto_hls_ude_grasp_place_test.sh`：一键飞行测试入口。
 - `shflies/auto_hls_grasp_place.sh`：自动 HLS 抓取放置入口，负责启动 HLS 节点并运行自动抓放节点。
-- `src/px4ctrl/scripts/auto_hls_grasp_place.py`：自动抓放节点，负责起飞、到点、HLS close、body-Y 居中、起吊、放置和命令降落。
+- `src/px4ctrl/scripts/auto_hls_grasp_place.py`：自动抓放节点，负责等待 `AUTO_HOVER`、到点、HLS close、body-Y 居中、起吊、放置和命令降落；也保留可选自动起飞模式。
 - `src/hls_gripper/scripts/hls_gripper_node.py`：HLS 力控夹爪状态机。
 
 ## 重要安全原则
 
 本测试会实际控制飞机和夹爪。每次上桨飞行前，应先完成无桨检查。
 
-- 起飞、飞向目标、下降和实际到位 settle 前，夹爪会持续保持 open。
+- 接管前、飞向目标、下降和实际到位 settle 前，夹爪会持续保持 open。
 - 只有 `Pre-grasp actual settle` 完成后，脚本才允许 HLS close。
 - CH10 低位、离开 `CMD_CTRL`、HLS 状态失效或 HLS fault 都会停止 close 并发布 open。`/mavros/rc/in` 超时默认只告警，避免把 ROS 话题回调间隔误判为遥控器丢失。
 - 释放到 box 后，撤离和命令降落阶段会持续保持 open。
@@ -86,7 +86,9 @@ bash shflies/test_ude_takeoff_hover.sh
 
 ### 5. 无桨自动流程检查
 
-默认会在自动节点内部等待确认：脚本先完成 topic 检查、目标/box/无人机 pose 稳定检查并打印锁定快照，然后暂停 ROS 回调刷新；这时按一次 Enter 会立即发布 `TAKEOFF`。px4ctrl 收到 `TAKEOFF` 后先执行水平姿态的电机加速推力渐增，避免未离地时产生水平倾角；加速结束后进入 UDE 竖直爬升。
+一键 HLS-UDE 脚本默认不发布 `TAKEOFF`，而是和单独 UDE 测试保持一致：启动 stack 和 HLS 后等待你按以前的流程手动起飞，直到 px4ctrl 进入 `AUTO_HOVER`，再发布当前位置 hold `/position_cmd` 进入 `CMD_CTRL` 并开始自动抓取流程。
+
+如果明确需要恢复“脚本发布 `TAKEOFF`”的旧流程，可显式设置 `TAKEOFF_MODE=auto`，并按需要设置 `CONFIRM_BEFORE_TAKEOFF=true`。该模式会经过 px4ctrl 内部 `AUTO_TAKEOFF`，其中电机加速阶段是水平姿态和推力渐增，不是 UDE 位置闭环；若你观察到起飞阶段后退，优先使用默认 `TAKEOFF_MODE=manual`。
 
 ```bash
 cd /home/user/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
@@ -109,16 +111,16 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 - `px4ctrl state is live`
 - `MAVROS state is live`
 - `CH10 safety: ... open<=1300`
-- `takeoff confirmation: inner_confirm=true outer_wait=false`
-- `Pre-takeoff pose snapshot is locked`
+- `takeoff: mode=manual inner_confirm=false outer_wait=false`
+- `Manual takeoff mode: not publishing TAKEOFF; waiting for px4ctrl AUTO_HOVER.`
 
-在按 Enter 前，确认打印出的 drone/target/box 坐标合理、CH10 不在低位、遥控器姿态安全，必要时保持随时切 CH10 低位释放。按下 Enter 后不再继续刷新起飞前快照，会直接发 `TAKEOFF`。
+默认模式下无需按 Enter 触发起飞。确认 drone/target/box 坐标合理、CH10 不在低位、遥控器姿态安全后，按以前验证过的流程手动起飞；脚本看到 `AUTO_HOVER` 后才接管自动抓取。
 
 ### 6. CH10 安全释放检查
 
 无桨时做两类检查：
 
-1. CH10 低位启动：脚本应拒绝自动起飞或自动抓取。
+1. CH10 低位启动：脚本应拒绝自动抓取。
 2. 自动抓取中切 CH10 低位：HLS 应立即 open，自动任务中止，不再继续 close。
 
 观察话题：
@@ -135,7 +137,7 @@ ros2 topic echo /hls_gripper/single_contact_need_motion
 
 推荐顺序：
 
-1. 空目标或非常轻目标测试：确认起飞、到目标上方、下降、命令降落流程。
+1. 空目标或非常轻目标测试：手动起飞到 `AUTO_HOVER` 后，确认自动接管、到目标上方、下降、命令降落流程。
 2. 固定目标测试：确认到位后才夹，夹爪进入 `SEARCH_OBJECT -> LEFT/RIGHT_CONTACT -> BOTH_CONTACT/CENTERING -> FINAL_GRIP -> LIFT_READY`。
 3. 偏左/偏右目标测试：确认单侧接触时飞机只在 `single_contact_need_motion=true` 后低速 body-Y 让位。
 4. 放置测试：确认飞到 box 上方、下降、open 释放、撤离、命令下降到 `z=-0.3`。
@@ -188,8 +190,7 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 | 阶段 | 飞机动作 | 夹爪动作 | 保护逻辑 |
 | --- | --- | --- | --- |
 | 启动检查 | 启动 stack，检查 pose/RC/state | 不 close | topic 缺失可拒绝启动 |
-| 起飞前确认 | 锁定起飞前 pose 快照，暂停回调等待一次 Enter | 保持 open | Enter 后重新检查 CH10，低位不会起飞 |
-| 自动起飞 | 发布 `TakeoffLand.TAKEOFF`，加速期水平姿态，随后 UDE 竖直爬升 | 发布 open | 等待 `AUTO_HOVER` |
+| 等待起飞 | 默认不发 `TAKEOFF`，等待手动起飞后的 `AUTO_HOVER` | 保持 open | `TAKEOFF_MODE=auto` 时才发布 `TakeoffLand.TAKEOFF` |
 | 进入 `CMD_CTRL` | 发布当前位置 `/position_cmd` | 保持 open | 进入失败则退出 |
 | 飞到目标上方 | 跟随目标 live waypoint | 保持 open | 未到位不夹 |
 | 下降到抓取点 | 到目标抓取高度 | 保持 open | 到位误差和 settle 检查 |
@@ -210,7 +211,8 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 | `START_PX4CTRL` | `true` | 传给 `run_mocap_mavros.sh`，决定是否启动 `px4ctrl_node`。 | 只想用已有 px4ctrl 时设为 `false`。 |
 | `STACK_STARTUP_WAIT_S` | `8` | 启动底层 stack 后等待的秒数。 | 电脑慢或 MAVROS 启动慢时增大。 |
 | `WAIT_FOR_ENTER` | `false` | 一键 shell 外层是否额外等待 Enter。 | 默认 `false`，避免两次 Enter；通常不改。 |
-| `CONFIRM_BEFORE_TAKEOFF` | `true` | 自动节点完成 pose 锁定后是否等待一次 Enter 再发 `TAKEOFF`。 | 真机建议保持 `true`；自动化回归可设 `false`。 |
+| `TAKEOFF_MODE` | `manual` | 一键 HLS-UDE 脚本的起飞方式。 | 默认 `manual`：不发 `TAKEOFF`，等待手动起飞到 `AUTO_HOVER`；设 `auto` 才由脚本发布 `TAKEOFF`。 |
+| `CONFIRM_BEFORE_TAKEOFF` | `false` | 自动节点完成 pose 锁定后是否等待一次 Enter 再继续。 | 默认 `false`，避免两次确认；只在 `TAKEOFF_MODE=auto` 且需要人工确认时设 `true`。 |
 | `KEEP_STACK_ON_INTERRUPT` | `false` | Ctrl+C 后是否保留 stack。 | 空中调试时可临时设 `true`，避免误杀控制链。 |
 | `CLEANUP_STACK_ON_EXIT` | `true` | 脚本退出时是否关闭由它启动的 stack。 | 想保留 MAVROS/px4ctrl 继续观察时设 `false`。 |
 
@@ -547,7 +549,7 @@ Emergency CMD_CTRL descent with gripper open
 飞行中重点看这些日志：
 
 - `CH10 safety ready`
-- `Publishing TAKEOFF`
+- `Manual takeoff mode: not publishing TAKEOFF; waiting for px4ctrl AUTO_HOVER.`
 - `px4ctrl state reached AUTO_HOVER`
 - `px4ctrl state reached CMD_CTRL`
 - `Target hover actual settle`
