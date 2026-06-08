@@ -15,17 +15,21 @@ from std_msgs.msg import Bool, Float64, String
 from auto_grasp_place_dataset import AutoConfig, AutoGraspPlaceDataset, PoseSample, parse_args as parse_auto_args
 
 
-HLS_PRE_LIFT_STATES = {
-    "SEARCH_OBJECT",
-    "LEFT_CONTACT",
-    "RIGHT_CONTACT",
-    "BOTH_CONTACT",
-    "CENTERING",
-    "CENTERED",
-    "FINAL_GRIP",
-}
+HLS_SINGLE_CONTACT_STATES = {"LEFT_CONTACT", "RIGHT_CONTACT"}
+HLS_BODY_Y_CENTERING_STATES = {"BOTH_CONTACT", "CENTERING", "CENTERED", "FINAL_GRIP"}
+HLS_OFFSET_LIMIT_GRACE_S = 0.8
 
-HLS_CENTERING_STATES = {"BOTH_CONTACT", "CENTERING"}
+
+def clamp(value: float, min_value: float, max_value: float) -> float:
+    return max(min_value, min(max_value, value))
+
+
+def sign_nonzero(value: float) -> float:
+    if value > 0.0:
+        return 1.0
+    if value < 0.0:
+        return -1.0
+    return 0.0
 
 
 @dataclass(frozen=True)
@@ -138,7 +142,17 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
 
     def hls_status_fresh(self) -> bool:
         now = time.monotonic()
-        for name in ("state", "centering_offset_m", "safe_to_lift", "fault", "single_contact_need_motion", "single_contact_direction"):
+        for name in (
+            "state",
+            "centering_offset_m",
+            "single_contact_offset_m",
+            "safe_to_lift",
+            "fault",
+            "left_contact",
+            "right_contact",
+            "single_contact_need_motion",
+            "single_contact_direction",
+        ):
             stamp = self.hls_status_stamps.get(name)
             if stamp is None or now - stamp > self.hls_config.hls_status_timeout_s:
                 return False
@@ -175,6 +189,34 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
         )
         return self.fly_segment(current, abort_pose, self.hls_config.abort_rise_speed, "Abort rise after failed HLS grasp")
 
+    def body_y_assist_command(
+        self,
+        status: StandardHlsStatus,
+    ) -> tuple[str, bool, float, float, float, float]:
+        """Return phase, active flag, raw target, clamped target, limit, and vmax."""
+        cfg = self.hls_config
+        if status.state in HLS_SINGLE_CONTACT_STATES and status.left_contact != status.right_contact:
+            offset_limit_m = cfg.single_contact_offset_max_m
+            if not status.single_contact_need_motion:
+                return "single_hold", False, 0.0, 0.0, offset_limit_m, cfg.single_contact_vmax_mps
+
+            direction = sign_nonzero(status.single_contact_direction)
+            raw_magnitude_m = abs(float(status.single_contact_offset_m))
+            if direction == 0.0 or raw_magnitude_m <= cfg.center_deadband_m:
+                return "single_hold", False, 0.0, 0.0, offset_limit_m, cfg.single_contact_vmax_mps
+
+            raw_target_m = cfg.single_contact_body_y_sign * direction * raw_magnitude_m
+            target_m = clamp(raw_target_m, -offset_limit_m, offset_limit_m)
+            return "single", True, raw_target_m, target_m, offset_limit_m, cfg.single_contact_vmax_mps
+
+        if status.state in HLS_BODY_Y_CENTERING_STATES:
+            offset_limit_m = cfg.center_offset_max_m
+            raw_target_m = cfg.center_command_sign * float(status.centering_offset_m)
+            target_m = clamp(raw_target_m, -offset_limit_m, offset_limit_m)
+            return "center", True, raw_target_m, target_m, offset_limit_m, cfg.center_vmax_mps
+
+        return "hold", False, 0.0, 0.0, cfg.center_offset_max_m, cfg.center_vmax_mps
+
     def soft_grasp(self, reference: PoseSample) -> PoseSample:
         self.wait_for_hls_status()
         self.hold_cmd(reference, 0.3)
@@ -186,10 +228,11 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
         body_y_offset_m = 0.0
         last_t = time.monotonic()
         last_log_s = 0.0
+        offset_limit_hit_since_s: float | None = None
 
         self.get_logger().info(
-            "HLS force grasp requested. Holding pre-grasp pose, using slow body-y motion for single-side "
-            "contact if requested, then applying small body-y centering corrections."
+            "HLS force grasp requested. Holding during search, using staged body-y assist for single-contact "
+            "motion requests and slower centering corrections while continuously commanding close."
         )
 
         while rclpy.ok() and time.monotonic() < deadline:
@@ -215,28 +258,42 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
                 self.get_logger().info("HLS reports safe_to_lift; automatic lift may start.")
                 return latest
 
-            target_offset_m = 0.0
-            offset_limit_m = self.hls_config.center_offset_max_m
-            if status.state in HLS_PRE_LIFT_STATES:
-                target_offset_m = self.hls_config.center_command_sign * float(status.centering_offset_m)
-                if status.left_contact != status.right_contact:
-                    offset_limit_m = min(offset_limit_m, self.hls_config.single_contact_offset_max_m)
+            phase, assist_active, raw_target_offset_m, target_offset_m, offset_limit_m, vmax_mps = (
+                self.body_y_assist_command(status)
+            )
 
-            target_offset_m = max(-offset_limit_m, min(offset_limit_m, target_offset_m))
-            if abs(target_offset_m) >= offset_limit_m and (status.left_contact or status.right_contact):
-                latest = self.pose_with_body_y_offset(reference, body_y_offset_m)
-                latest = self.abort_before_lift(latest, reference, "HLS centering offset limit")
-                raise RuntimeError("HLS centering offset reached body-y offset limit before safe_to_lift.")
+            if assist_active:
+                offset_error_m = target_offset_m - body_y_offset_m
+                if abs(offset_error_m) > self.hls_config.center_deadband_m:
+                    vy = self.hls_config.center_kp * offset_error_m
+                    vy = clamp(vy, -vmax_mps, vmax_mps)
+                    step = vy * dt
+                    if abs(step) > abs(offset_error_m):
+                        step = offset_error_m
+                    body_y_offset_m += step
+                    body_y_offset_m = clamp(body_y_offset_m, -offset_limit_m, offset_limit_m)
+            else:
+                offset_limit_hit_since_s = None
 
-            offset_error_m = target_offset_m - body_y_offset_m
-            if abs(offset_error_m) > self.hls_config.center_deadband_m:
-                vy = self.hls_config.center_kp * offset_error_m
-                vy = max(-self.hls_config.center_vmax_mps, min(self.hls_config.center_vmax_mps, vy))
-                step = vy * dt
-                if abs(step) > abs(offset_error_m):
-                    step = offset_error_m
-                body_y_offset_m += step
-                body_y_offset_m = max(-offset_limit_m, min(offset_limit_m, body_y_offset_m))
+            limit_hit = (
+                assist_active
+                and (status.left_contact or status.right_contact)
+                and abs(body_y_offset_m) >= max(0.0, offset_limit_m - self.hls_config.center_deadband_m)
+                and abs(raw_target_offset_m) >= max(0.0, offset_limit_m - self.hls_config.center_deadband_m)
+            )
+            if limit_hit:
+                if offset_limit_hit_since_s is None:
+                    offset_limit_hit_since_s = now
+                    self.get_logger().warn(
+                        f"HLS body-y assist reached {phase} offset limit; holding close command for "
+                        f"{HLS_OFFSET_LIMIT_GRACE_S:.1f}s before abort if not safe_to_lift."
+                    )
+                elif now - offset_limit_hit_since_s >= HLS_OFFSET_LIMIT_GRACE_S:
+                    latest = self.pose_with_body_y_offset(reference, body_y_offset_m)
+                    latest = self.abort_before_lift(latest, reference, "HLS body-y assist offset limit")
+                    raise RuntimeError("HLS body-y assist stayed at offset limit before safe_to_lift.")
+            elif assist_active:
+                offset_limit_hit_since_s = None
 
             latest = self.pose_with_body_y_offset(reference, body_y_offset_m)
 
@@ -246,8 +303,9 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
             if now - last_log_s >= 0.5:
                 last_log_s = now
                 self.get_logger().info(
-                    f"HLS state={status.state} center={status.center_error_m:+.4f}m "
-                    f"target_offset={target_offset_m:+.4f}m body_y_offset={body_y_offset_m:+.4f}m "
+                    f"HLS state={status.state} phase={phase} center={status.center_error_m:+.4f}m "
+                    f"target_offset={target_offset_m:+.4f}m raw={raw_target_offset_m:+.4f}m "
+                    f"body_y_offset={body_y_offset_m:+.4f}m vmax={vmax_mps:.3f} "
                     f"single_est={status.single_contact_offset_m:+.4f}m "
                     f"motion={int(status.single_contact_need_motion)} dir={status.single_contact_direction:+.0f} "
                     f"contact=({int(status.left_contact)},{int(status.right_contact)})"

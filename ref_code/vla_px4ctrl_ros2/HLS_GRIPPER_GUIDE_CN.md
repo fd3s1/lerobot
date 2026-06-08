@@ -310,6 +310,19 @@ bash shflies/handheld_hls_grasp_test.sh
 
 `auto_hls_grasp_place.sh` 复用上面所有 HLS 参数，并额外包含无人机抓放流程参数。本节只解释自动脚本新增的参数。
 
+### 自动飞行中的协同居中逻辑
+
+手持测试脚本不会发布 `/position_cmd`，所以手持测试里的 centering 只由 HLS 夹爪内部的电流差和追夹脉冲完成；飞机不会主动移动。
+
+自动抓放脚本会发布 `/position_cmd`，抓取阶段采用分阶段保守协同：
+
+1. `SEARCH_OBJECT`：飞机保持预抓取位置不横移，只让夹爪搜索闭合。
+2. `LEFT_CONTACT` / `RIGHT_CONTACT`：夹爪继续追夹。只有 HLS 发布 `single_contact_need_motion=true` 时，飞机才按 `single_contact_direction` 做低速 body-Y 让位，速度上限由 `SINGLE_CONTACT_VMAX_MPS` 控制。
+3. `BOTH_CONTACT` / `CENTERING` / `CENTERED` / `FINAL_GRIP`：飞机跟随 `centering_offset_m` 做小幅 body-Y 居中修正，速度上限由 `CENTER_VMAX_MPS` 控制，同时每个控制循环继续向 HLS 发布 close command，保证移动过程中夹爪仍然追夹物体。
+4. `LIFT_READY`：冻结当前 body-Y 偏移，进入后续提起流程。
+
+如果 body-Y 偏移真的走到 `SINGLE_CONTACT_OFFSET_MAX_M` 或 `CENTER_OFFSET_MAX_M` 附近，自动脚本不会立刻开爪中止，而是短暂保持 close command 等待 HLS 变为 `safe_to_lift`；如果持续卡在上限，才会执行开爪并上升撤离。
+
 ### 自动脚本话题参数
 
 | 参数 | 默认值 | 含义 |
@@ -408,12 +421,12 @@ bash shflies/handheld_hls_grasp_test.sh
 | `HLS_STATUS_TIMEOUT_S` | `0.8` | 自动流程认为 HLS 状态新鲜的超时时间。 |
 | `CENTER_DEADBAND_M` | `0.005` | 自动居中死区。 |
 | `CENTER_KP` | `0.8` | 自动居中比例控制增益。 |
-| `CENTER_VMAX_MPS` | `0.03` | 自动居中最大横向速度。 |
-| `CENTER_OFFSET_MAX_M` | `0.08` | 自动居中最大偏移量。 |
-| `CENTER_COMMAND_SIGN` | `1.0` | 自动居中指令方向符号。 |
-| `SINGLE_CONTACT_VMAX_MPS` | `0.015` | 单侧接触时自动横向寻找的最大速度。 |
-| `SINGLE_CONTACT_OFFSET_MAX_M` | `0.10` | 单侧接触时自动横向寻找的最大偏移。 |
-| `SINGLE_CONTACT_BODY_Y_SIGN` | `1.0` | 单侧接触横向寻找方向符号。 |
+| `CENTER_VMAX_MPS` | `0.03` | 双侧接触后根据 `centering_offset_m` 居中时的最大 body-Y 速度。 |
+| `CENTER_OFFSET_MAX_M` | `0.08` | 双侧接触后自动居中允许的最大 body-Y 偏移量。 |
+| `CENTER_COMMAND_SIGN` | `1.0` | 双侧居中指令方向符号。若飞机越修越偏，优先检查这个符号。 |
+| `SINGLE_CONTACT_VMAX_MPS` | `0.015` | 单侧接触且 HLS 请求 `single_contact_need_motion` 时，飞机让位的最大 body-Y 速度。该值应小于或等于 `CENTER_VMAX_MPS`。 |
+| `SINGLE_CONTACT_OFFSET_MAX_M` | `0.10` | 单侧接触让位允许的最大 body-Y 偏移。 |
+| `SINGLE_CONTACT_BODY_Y_SIGN` | `1.0` | 单侧接触让位方向符号。若左/右单侧接触时飞机让位方向反了，优先改这个符号。 |
 | `ABORT_RISE_M` | `0.25` | 抓取失败中止时上升距离。 |
 | `ABORT_RISE_SPEED` | `0.12` | 抓取失败中止时上升速度。 |
 | `OPEN_COMMAND` | `100.0` | 自动流程开爪命令值。 |
