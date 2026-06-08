@@ -26,6 +26,7 @@ REMOVED_TAKEOFF_COMP_ARGS = {
     "--takeoff-comp-y",
     "--takeoff-comp-z",
 }
+BOUNDS_EPS = 1e-6
 
 
 def clamp(value: float, low: float, high: float) -> float:
@@ -495,12 +496,15 @@ class AutoGraspPlaceDataset(Node):
             time.sleep(0.05)
 
     def checked_pose(self, x: float, y: float, z: float, yaw: float) -> PoseSample:
-        if not (self.config.x_min <= x <= self.config.x_max):
+        if x < self.config.x_min - BOUNDS_EPS or x > self.config.x_max + BOUNDS_EPS:
             raise RuntimeError(f"Waypoint x={x:.3f} outside [{self.config.x_min}, {self.config.x_max}].")
-        if not (self.config.y_min <= y <= self.config.y_max):
+        if y < self.config.y_min - BOUNDS_EPS or y > self.config.y_max + BOUNDS_EPS:
             raise RuntimeError(f"Waypoint y={y:.3f} outside [{self.config.y_min}, {self.config.y_max}].")
-        if not (self.config.z_min <= z <= self.config.z_max):
+        if z < self.config.z_min - BOUNDS_EPS or z > self.config.z_max + BOUNDS_EPS:
             raise RuntimeError(f"Waypoint z={z:.3f} outside [{self.config.z_min}, {self.config.z_max}].")
+        x = clamp(x, self.config.x_min, self.config.x_max)
+        y = clamp(y, self.config.y_min, self.config.y_max)
+        z = clamp(z, self.config.z_min, self.config.z_max)
         return PoseSample(x=x, y=y, z=z, yaw=yaw, received_s=time.monotonic(), frame_id=self.config.frame_id)
 
     def offset_pose(self, pose: PoseSample, dx: float, dy: float, dz: float) -> PoseSample:

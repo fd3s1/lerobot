@@ -41,6 +41,7 @@ class HlsTaskConfig:
     hls_grasp_timeout_s: float
     rc_topic: str
     rc_timeout_s: float
+    rc_stale_action: str
     ch10_index: int
     ch10_open_pwm: int
     ch10_close_pwm: int
@@ -103,6 +104,7 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
         self.hls_payload_attached = False
         self.last_pregrasp_open_s = 0.0
         self.last_safety_open_s = 0.0
+        self.last_rc_stale_warn_s = 0.0
         self.create_subscription(String, f"{self.status_prefix}/state", self._string_cb("state"), 10)
         self.create_subscription(String, f"{self.status_prefix}/fault_reason", self._string_cb("fault_reason"), 10)
         self.create_subscription(Float64, f"{self.status_prefix}/center_error_m", self._float_cb("center_error_m"), 10)
@@ -248,9 +250,17 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
             return
         if not self.rc_fresh():
             reason = f"RC stale during {phase}"
-            self.force_open_for_safety(reason)
-            raise AutoHlsSafetyAbort(reason)
-        if self.ch10_open_requested():
+            if self.hls_config.rc_stale_action == "abort":
+                self.force_open_for_safety(reason)
+                raise AutoHlsSafetyAbort(reason)
+            now = time.monotonic()
+            if now - self.last_rc_stale_warn_s >= 1.0:
+                self.get_logger().warn(
+                    f"{reason}; continuing with last CH10 pwm={self.last_ch10_pwm}. "
+                    "Set --rc-stale-action abort to make RC timeout abort the mission."
+                )
+                self.last_rc_stale_warn_s = now
+        elif self.ch10_open_requested():
             reason = f"CH10 low/open during {phase}; pwm={self.last_ch10_pwm}"
             self.force_open_for_safety(reason)
             raise AutoHlsSafetyAbort(reason)
@@ -504,6 +514,7 @@ def parse_configs() -> tuple[AutoConfig, HlsTaskConfig]:
     hls_parser.add_argument("--hls-grasp-timeout-s", type=float, default=12.0)
     hls_parser.add_argument("--rc-topic", default="/mavros/rc/in")
     hls_parser.add_argument("--rc-timeout-s", type=float, default=0.5)
+    hls_parser.add_argument("--rc-stale-action", choices=("warn", "abort"), default="warn")
     hls_parser.add_argument("--ch10-index", type=int, default=9)
     hls_parser.add_argument("--ch10-open-pwm", type=int, default=1300)
     hls_parser.add_argument("--ch10-close-pwm", type=int, default=1700)

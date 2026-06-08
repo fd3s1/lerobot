@@ -15,7 +15,7 @@
 
 - 起飞、飞向目标、下降和实际到位 settle 前，夹爪会持续保持 open。
 - 只有 `Pre-grasp actual settle` 完成后，脚本才允许 HLS close。
-- CH10 低位、RC 超时、离开 `CMD_CTRL`、HLS 状态失效或 HLS fault 都会停止 close 并发布 open。
+- CH10 低位、离开 `CMD_CTRL`、HLS 状态失效或 HLS fault 都会停止 close 并发布 open。`/mavros/rc/in` 超时默认只告警，避免把 ROS 话题回调间隔误判为遥控器丢失。
 - 释放到 box 后，撤离和命令降落阶段会持续保持 open。
 - 默认降落是 `CMD_CTRL` 位置命令下降到 `CMD_LAND_Z=-0.3`，不是 PX4 autoland；结束后仍需人工确认安全和必要时 disarm。
 
@@ -169,7 +169,7 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 | 进入 `CMD_CTRL` | 发布当前位置 `/position_cmd` | 保持 open | 进入失败则退出 |
 | 飞到目标上方 | 跟随目标 live waypoint | 保持 open | 未到位不夹 |
 | 下降到抓取点 | 到目标抓取高度 | 保持 open | 到位误差和 settle 检查 |
-| HLS 抓取 | body-Y 小幅辅助居中 | 持续 close/追夹 | CH10、RC、CMD_CTRL、HLS 状态持续检查 |
+| HLS 抓取 | body-Y 小幅辅助居中 | 持续 close/追夹 | CH10、CMD_CTRL、HLS 状态持续检查；RC topic stale 默认只告警 |
 | `LIFT_READY` | 提起到目标上方 | 保持 close/追夹 | HLS safe 后才起吊 |
 | 转运到 box | 飞向 box 上方 | 保持 close/追夹 | 避免中途松开 |
 | 下降到 box | 到放置高度 | 保持 close/追夹 | 到位后才释放 |
@@ -221,7 +221,8 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 | 参数 | 默认值 | 作用 | 调参建议 |
 | --- | --- | --- | --- |
 | `RC_TOPIC` | `/mavros/rc/in` | RC 输入话题。 | 通常不改。 |
-| `RC_TIMEOUT_S` | `0.5` | RC 超时阈值。超过该时间未收到新 RC，会 open 并 abort。 | 太小可能受 RC 抖动影响；太大安全释放响应变慢。 |
+| `RC_TIMEOUT_S` | `0.5` | 自动节点判定 `/mavros/rc/in` 是否新鲜的阈值。 | 起飞前必须 fresh；飞行中默认 stale 只告警。 |
+| `RC_STALE_ACTION` | `warn` | 飞行中 RC topic 超时后的动作。 | `warn` 表示继续任务，只在日志警告；`abort` 表示 open 并中止。注意这不是飞控真实遥控器 failsafe。 |
 | `CH10_INDEX` | `9` | CH10 在 MAVROS `channels[]` 中的 0-based 索引。 | CH10 是第 10 通道，所以默认 9。 |
 | `CH10_OPEN_PWM` | `1300` | CH10 小于等于该 PWM 时认为低位/安全释放。 | 按遥控器实际 PWM 调整。 |
 | `CH10_CLOSE_PWM` | `1700` | CH10 高于等于该 PWM 时认为未触发释放。 | 自动流程不由高位直接 close，只作为安全条件。 |
@@ -493,7 +494,7 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 - `ros2 topic echo --once --qos-reliability best_effort /mavros/rc/in`
 - CH10 是否真的是 `channels[9]`。
 - 低位 PWM 是否小于等于 `CH10_OPEN_PWM=1300`。
-- `RC_TIMEOUT_S` 是否过大。
+- `RC_TIMEOUT_S` 是否过大，或 `/mavros/rc/in` 是否在拨动 CH10 时有新消息。
 
 ## 关键日志和验收标准
 

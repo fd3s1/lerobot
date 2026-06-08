@@ -48,6 +48,7 @@ HLS_CENTER_ERROR_GAIN="${HLS_CENTER_ERROR_GAIN:-2.0}"
 HLS_SINGLE_CONTACT_OFFSET_LIMIT_M="${HLS_SINGLE_CONTACT_OFFSET_LIMIT_M:-0.12}"
 
 RC_TIMEOUT_S="${RC_TIMEOUT_S:-0.5}"
+RC_STALE_ACTION="${RC_STALE_ACTION:-warn}"
 CH10_INDEX="${CH10_INDEX:-9}"
 CH10_OPEN_PWM="${CH10_OPEN_PWM:-1300}"
 CH10_CLOSE_PWM="${CH10_CLOSE_PWM:-1700}"
@@ -149,7 +150,7 @@ echo "[auto-hls-ude-test] auto drone pose topic: ${DRONE_POSE_TOPIC}"
 echo "[auto-hls-ude-test] target topic: ${TARGET_POSE_TOPIC}"
 echo "[auto-hls-ude-test] box topic: ${BOX_POSE_TOPIC}"
 echo "[auto-hls-ude-test] landing: mode=${LANDING_MODE} cmd_z=${CMD_LAND_Z} no_land=${NO_LAND}"
-echo "[auto-hls-ude-test] CH10 safety: topic=${RC_TOPIC} timeout=${RC_TIMEOUT_S}s index=${CH10_INDEX} open<=${CH10_OPEN_PWM}"
+echo "[auto-hls-ude-test] CH10 safety: topic=${RC_TOPIC} timeout=${RC_TIMEOUT_S}s stale_action=${RC_STALE_ACTION} index=${CH10_INDEX} open<=${CH10_OPEN_PWM}"
 echo "[auto-hls-ude-test] offsets: target=(${TARGET_OFFSET_X}, ${TARGET_OFFSET_Y}, ${TARGET_OFFSET_Z}) box=(${BOX_OFFSET_X}, ${BOX_OFFSET_Y}, ${BOX_OFFSET_Z})"
 
 if bool_is_true "${START_STACK}"; then
@@ -188,7 +189,7 @@ if bool_is_true "${WAIT_FOR_ENTER}"; then
   read -r _
 fi
 
-export TARGET_POSE_TOPIC BOX_POSE_TOPIC DRONE_POSE_TOPIC RC_TOPIC RC_TIMEOUT_S
+export TARGET_POSE_TOPIC BOX_POSE_TOPIC DRONE_POSE_TOPIC RC_TOPIC RC_TIMEOUT_S RC_STALE_ACTION
 export CH10_INDEX CH10_OPEN_PWM CH10_CLOSE_PWM FORCE_OPEN_BELOW_Z
 export GRIPPER_MANAGER_PORT HLS_GRAVITY_COMP_PATH HLS_MOTION_PROFILE
 export HLS_SEARCH_SPEED HLS_SEARCH_ACC HLS_SEARCH_TORQUE_LIMIT

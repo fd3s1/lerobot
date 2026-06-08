@@ -335,6 +335,12 @@ bash shflies/handheld_hls_grasp_test.sh
 | `GRIPPER_COMMAND_PAIR_TOPIC` | `/gripper/command_pair` | 自动流程给夹爪发双侧命令的话题。 |
 | `TAKEOFF_LAND_TOPIC` | `/px4ctrl/takeoff_land` | 起降命令话题。 |
 | `PX4CTRL_STATE_TOPIC` | `/px4ctrl/state` | px4ctrl 状态话题。 |
+| `RC_TOPIC` | `/mavros/rc/in` | 自动 HLS 流程读取 CH10 安全释放的话题。 |
+| `RC_TIMEOUT_S` | `0.5` | 自动 HLS 流程判断 RC topic 新鲜度的阈值。起飞前要求 fresh，飞行中默认 stale 只告警。 |
+| `RC_STALE_ACTION` | `warn` | 飞行中 RC topic 超时后的动作。`warn` 只报警继续；`abort` 会 open 并中止。 |
+| `CH10_INDEX` | `9` | CH10 在 RC channel 数组中的索引，0 基。 |
+| `CH10_OPEN_PWM` | `1300` | CH10 低位/open 判定阈值。飞行中只要收到低位会立即 open 并中止。 |
+| `CH10_CLOSE_PWM` | `1700` | 起飞前安全检查中的 CH10 高位阈值。 |
 
 ### 自动脚本管理参数
 
