@@ -871,14 +871,14 @@ cd ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
 bash shflies/run_mocap_mavros.sh
 ```
 
-确认 `/mavros/vision_pose/pose`、`/strawberry_bear/pose`、`/box1/pose` 都有数据后，把 CH5 和 CH6 都拨到高位，在第二个终端运行：
+确认 `/mavros/vision_pose/pose`、`/mavros/local_position/odom`、`/strawberry_bear/pose`、`/box1/pose` 都有数据后，把 CH5 和 CH6 都拨到高位，在第二个终端运行：
 
 ```bash
 cd ~/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
 bash shflies/auto_record_grasp_place.sh
 ```
 
-`auto_record_grasp_place.sh` 启动 record 前会先用 `ros2 topic echo --once` 做一次位姿 topic 预检查，默认等待 `6s`。这个检查只作为提示：如果某个 topic 因 DDS 发现延迟没有被一次性命令捕获，脚本会打印 warning 并继续。真正的自动任务节点会持续等待 `/mavros/vision_pose/pose`、目标和盒子三个位姿都新鲜后才起飞。
+`auto_record_grasp_place.sh` 启动 record 前会先用 `ros2 topic echo --once` 做一次位姿 topic 预检查，默认等待 `6s`。这个检查只作为提示：如果某个 topic 因 DDS 发现延迟没有被一次性命令捕获，脚本会打印 warning 并继续。真正的自动任务节点会持续等待 `/mavros/local_position/odom`、目标和盒子三个位姿都新鲜后才起飞；`/mavros/vision_pose/pose` 只作为 MAVROS/EKF 的动捕输入链路。
 
 相关参数：
 
@@ -958,7 +958,7 @@ GRIPPER_X_OFFSET_M=0.08 bash shflies/auto_record_grasp_place.sh
 1. 总控脚本先启动 `feetech_gripper_node.py`，由它独占 `/dev/ttyACM1`，发布 `/gripper/feedback`，接收 `/gripper/command_pair` 和兼容旧流程的 `/gripper/command`。
 2. 总控脚本再启动 `record_vla_dataset.sh`，并临时设置 `USE_ROS_GRIPPER=true`。此时 LeRobot record 不再打开串口，只从 `/gripper/feedback` 读取夹爪状态。
 3. record 完成相机、夹爪反馈、ROS bridge 初始化后发布 `/lerobot_record/status = WAITING_GATE`，此时还没有起飞，也没有写 dataset。
-4. 自动任务脚本读取 `/strawberry_bear/pose`、`/box1/pose`、`/mavros/vision_pose/pose`，确认新鲜稳定。
+4. 自动任务脚本读取 `/strawberry_bear/pose`、`/box1/pose`、`/mavros/local_position/odom`，确认新鲜稳定。
 5. 自动发布夹爪全开 `100.0`，然后发布 `/px4ctrl/takeoff_land` 起飞。
 6. 等 `/px4ctrl/state = AUTO_HOVER`，表示 `AUTO_TAKEOFF` 已完成。
 7. 自动发布当前位置 hold 的 `/position_cmd`，让 px4ctrl 进入 `CMD_CTRL`。
@@ -970,7 +970,7 @@ GRIPPER_X_OFFSET_M=0.08 bash shflies/auto_record_grasp_place.sh
 - 自动任务启动前会先确认目标、盒子、无人机三者位姿新鲜稳定，但不会只使用这一刻的位置跑完整个任务。
 - 飞向草莓熊上方时，脚本会持续读取 `/strawberry_bear/pose`，实时刷新目标上方 waypoint。
 - 到达目标上方、下降到抓取高度、带载起吊、到达箱子上方、下降到投放高度后，脚本都会额外用动捕检查无人机实际位置是否到位。默认 `WAYPOINT_ARRIVAL_TOLERANCE_M=0.08`、`WAYPOINT_ARRIVAL_SETTLE_S=0.3`、`WAYPOINT_ARRIVAL_TIMEOUT_S=5.0`。这避免把“命令轨迹已经走完”误认为“飞机实际已到达关键点”。
-- 如果启用了起飞后的 `TAKEOFF_FORWARD_COMP_M` 或 `TAKEOFF_COMP_X/Y/Z` 重定位，record gate 打开前也会先等待动捕确认实际到位，避免把起飞后的重定位过程录进数据集开头。
+- 自动任务进入 `CMD_CTRL` 后不再做起飞后重定位；record gate 打开前只发布当前位置 hold，后续直接按目标/box 轨迹飞行。
 - 到达目标上方后，进入下降、闭合夹爪、抬升阶段，这些阶段可能遮挡草莓熊刚体；脚本会锁存最后一次新鲜目标位姿，避免遮挡导致 waypoint 跳变。
 - 夹爪闭合和带载起吊阶段不再启用位置放松或姿态控制。px4ctrl 始终通过 `/mavros/setpoint_raw/local` 发送 `PositionTarget`，自动脚本只发布 `/position_cmd` 和夹爪命令。更换力控舵机后，夹持策略需要重新从地面测试开始标定。
 - 飞向盒子上方时，脚本会持续读取 `/box1/pose`，实时刷新盒子上方 waypoint。
@@ -989,9 +989,7 @@ GRIPPER_X_OFFSET_M=0.08 bash shflies/auto_record_grasp_place.sh
 - `PAYLOAD_TRANSFER_SPEED` 默认 `0.16 m/s`，用于带载飞向箱子。
 - `POST_GRASP_SETTLE_S` 默认 `1.5 s`，夹住后原地等待，让负载先稳定。
 - `POST_LIFT_SETTLE_S` 默认 `1.5 s`，抬升后原地等待，降低摆振后再横移。
-- `TAKEOFF_FORWARD_COMP_M` 默认 `0.0 m`，起飞完成进入 `CMD_CTRL` 后、record 开始前，沿无人机当前机头方向做前向补偿。用于抵消机体后重导致的起飞后后窜。
 - `PAYLOAD_LIFT_FORWARD_COMP_M` 默认 `0.0 m`，夹住草莓熊后抬升时，沿无人机当前机头方向同步做前向补偿。用于抵消带载抬升阶段后窜。
-- `TAKEOFF_COMP_X/Y/Z` 默认 `0.0 m`，起飞后按 mocap/map 坐标系直接补偿位置，不依赖无人机 yaw。
 - `PAYLOAD_LIFT_COMP_X/Y/Z` 默认 `0.0 m`，夹住草莓熊后抬升时按 mocap/map 坐标系补偿位置。
 - `RETREAT_SPEED` 默认 `0.6 m/s`，用于放置后向前撤离。
 
@@ -1005,25 +1003,22 @@ POST_LIFT_SETTLE_S=2.0 \
 bash shflies/auto_record_grasp_place.sh
 ```
 
-如果机体后重导致起飞或带载抬升时明显往后窜，可先小量补偿，不建议一开始超过 `0.10 m`：
+如果带载抬升时明显往后窜，可先小量补偿，不建议一开始超过 `0.10 m`：
 
 ```bash
-TAKEOFF_FORWARD_COMP_M=0.05 \
 PAYLOAD_LIFT_FORWARD_COMP_M=0.05 \
 bash shflies/auto_record_grasp_place.sh
 ```
 
-如果发现 `TAKEOFF_FORWARD_COMP_M` 或 `PAYLOAD_LIFT_FORWARD_COMP_M` 方向不对，说明 mocap 刚体 yaw 和实际机头方向可能不一致。此时优先用 map 坐标系补偿，例如希望向 mocap `+X` 方向补 `5 cm`：
+如果发现 `PAYLOAD_LIFT_FORWARD_COMP_M` 方向不对，说明 mocap 刚体 yaw 和实际机头方向可能不一致。此时优先用 map 坐标系补偿，例如希望向 mocap `+X` 方向补 `5 cm`：
 
 ```bash
-TAKEOFF_FORWARD_COMP_M=0.0 \
 PAYLOAD_LIFT_FORWARD_COMP_M=0.0 \
-TAKEOFF_COMP_X=0.05 \
 PAYLOAD_LIFT_COMP_X=0.05 \
 bash shflies/auto_record_grasp_place.sh
 ```
 
-如果需要向 mocap `-X`、`+Y` 或 `-Y` 方向补偿，分别设置负号或对应轴，例如 `TAKEOFF_COMP_X=-0.05`、`TAKEOFF_COMP_Y=0.05`。
+如果需要向 mocap `-X`、`+Y` 或 `-Y` 方向补偿，分别设置负号或对应轴，例如 `PAYLOAD_LIFT_COMP_X=-0.05`、`PAYLOAD_LIFT_COMP_Y=0.05`。
 
 夹爪软夹持：
 

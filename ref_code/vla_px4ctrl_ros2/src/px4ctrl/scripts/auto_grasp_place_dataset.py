@@ -11,6 +11,7 @@ from typing import Literal
 
 import rclpy
 from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import Odometry
 from quadrotor_msgs.msg import GripperCommandPair, GripperFeedback, TakeoffLand
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -18,6 +19,13 @@ from rclpy.utilities import remove_ros_args
 from std_msgs.msg import Float64, String
 
 from gripper_soft_grasp_lib import GripperFeedbackState, SoftGraspConfig, SoftGraspController
+
+REMOVED_TAKEOFF_COMP_ARGS = {
+    "--takeoff-forward-comp-m",
+    "--takeoff-comp-x",
+    "--takeoff-comp-y",
+    "--takeoff-comp-z",
+}
 
 
 def clamp(value: float, low: float, high: float) -> float:
@@ -33,15 +41,13 @@ def yaw_to_quaternion(yaw: float) -> tuple[float, float, float, float]:
     return 0.0, 0.0, math.sin(half), math.cos(half)
 
 
-def quaternion_to_yaw(msg: PoseStamped) -> float:
-    q = msg.pose.orientation
+def quaternion_msg_to_yaw(q) -> float:
     siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
     cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
     return normalize_angle(math.atan2(siny_cosp, cosy_cosp))
 
 
-def quaternion_to_roll_pitch_yaw(msg: PoseStamped) -> tuple[float, float, float]:
-    q = msg.pose.orientation
+def quaternion_msg_to_roll_pitch_yaw(q) -> tuple[float, float, float]:
     sinr_cosp = 2.0 * (q.w * q.x + q.y * q.z)
     cosr_cosp = 1.0 - 2.0 * (q.x * q.x + q.y * q.y)
     roll = math.atan2(sinr_cosp, cosr_cosp)
@@ -52,8 +58,16 @@ def quaternion_to_roll_pitch_yaw(msg: PoseStamped) -> tuple[float, float, float]
     else:
         pitch = math.asin(sinp)
 
-    yaw = quaternion_to_yaw(msg)
+    yaw = quaternion_msg_to_yaw(q)
     return roll, pitch, yaw
+
+
+def quaternion_to_yaw(msg: PoseStamped) -> float:
+    return quaternion_msg_to_yaw(msg.pose.orientation)
+
+
+def quaternion_to_roll_pitch_yaw(msg: PoseStamped) -> tuple[float, float, float]:
+    return quaternion_msg_to_roll_pitch_yaw(msg.pose.orientation)
 
 
 @dataclass
@@ -92,11 +106,7 @@ class AutoConfig:
     post_grasp_settle_s: float
     post_lift_settle_s: float
     smooth_trajectory: bool
-    takeoff_forward_comp_m: float
     payload_lift_forward_comp_m: float
-    takeoff_comp_x: float
-    takeoff_comp_y: float
-    takeoff_comp_z: float
     payload_lift_comp_x: float
     payload_lift_comp_y: float
     payload_lift_comp_z: float
@@ -218,8 +228,12 @@ class AutoGraspPlaceDataset(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=10,
         )
-        callback = self._pose_cb(key)
-        self.pose_subscriptions.append(self.create_subscription(PoseStamped, topic, callback, best_effort_qos))
+        if key == "drone" and topic.rstrip("/").endswith("/odom"):
+            callback = self._odom_cb(key)
+            self.pose_subscriptions.append(self.create_subscription(Odometry, topic, callback, best_effort_qos))
+        else:
+            callback = self._pose_cb(key)
+            self.pose_subscriptions.append(self.create_subscription(PoseStamped, topic, callback, best_effort_qos))
 
     def _pose_cb(self, key: str):
         def callback(msg: PoseStamped) -> None:
@@ -228,6 +242,23 @@ class AutoGraspPlaceDataset(Node):
                 x=float(msg.pose.position.x),
                 y=float(msg.pose.position.y),
                 z=float(msg.pose.position.z),
+                yaw=yaw,
+                received_s=time.monotonic(),
+                frame_id=str(msg.header.frame_id),
+                roll=roll,
+                pitch=pitch,
+            )
+
+        return callback
+
+    def _odom_cb(self, key: str):
+        def callback(msg: Odometry) -> None:
+            pose = msg.pose.pose
+            roll, pitch, yaw = quaternion_msg_to_roll_pitch_yaw(pose.orientation)
+            self.poses[key] = PoseSample(
+                x=float(pose.position.x),
+                y=float(pose.position.y),
+                z=float(pose.position.z),
                 yaw=yaw,
                 received_s=time.monotonic(),
                 frame_id=str(msg.header.frame_id),
@@ -933,52 +964,6 @@ class AutoGraspPlaceDataset(Node):
         if self.px4ctrl_state != "CMD_CTRL":
             raise RuntimeError(f"Failed to enter CMD_CTRL; latest px4ctrl state={self.px4ctrl_state!r}.")
 
-        if abs(self.config.takeoff_forward_comp_m) > 1e-6:
-            recentered = self.pose_relative_forward(
-                hold,
-                forward_m=self.config.takeoff_forward_comp_m,
-                up_m=0.0,
-            )
-            hold = self.fly_segment(
-                hold,
-                recentered,
-                self.config.approach_speed,
-                "Recenter forward after takeoff",
-            )
-            hold = self.wait_for_drone_near(
-                hold,
-                "Takeoff forward recenter actual settle",
-                keep_gripper_open=True,
-            )
-        if any(abs(value) > 1e-6 for value in (
-            self.config.takeoff_comp_x,
-            self.config.takeoff_comp_y,
-            self.config.takeoff_comp_z,
-        )):
-            compensated = self.offset_pose(
-                hold,
-                self.config.takeoff_comp_x,
-                self.config.takeoff_comp_y,
-                self.config.takeoff_comp_z,
-            )
-            self.get_logger().info(
-                "Recenter in mocap/map frame after takeoff: "
-                f"dx={self.config.takeoff_comp_x:.3f}, "
-                f"dy={self.config.takeoff_comp_y:.3f}, "
-                f"dz={self.config.takeoff_comp_z:.3f}."
-            )
-            hold = self.fly_segment(
-                hold,
-                compensated,
-                self.config.approach_speed,
-                "Recenter map-frame after takeoff",
-            )
-            hold = self.wait_for_drone_near(
-                hold,
-                "Takeoff map recenter actual settle",
-                keep_gripper_open=True,
-            )
-
         self.publish_record_gate()
         gate_s = time.monotonic()
         self.hold_cmd(hold, self.config.record_start_hold_s)
@@ -1114,8 +1099,14 @@ class AutoGraspPlaceDataset(Node):
 
 
 def parse_args() -> AutoConfig:
+    raw_args = remove_ros_args(args=sys.argv)[1:]
+    for arg in raw_args:
+        name = arg.split("=", 1)[0]
+        if name in REMOVED_TAKEOFF_COMP_ARGS:
+            removed = ", ".join(sorted(REMOVED_TAKEOFF_COMP_ARGS))
+            raise ValueError(f"{name} was removed from automatic flight flows; removed args: {removed}.")
     parser = argparse.ArgumentParser(description="Automatic grasp/place data collection driver.")
-    parser.add_argument("--drone-pose-topic", default="/mavros/vision_pose/pose")
+    parser.add_argument("--drone-pose-topic", default="/mavros/local_position/odom")
     parser.add_argument("--target-pose-topic", default="/strawberry_bear/pose")
     parser.add_argument("--box-pose-topic", default="/box1/pose")
     parser.add_argument("--cmd-topic", default="/position_cmd")
@@ -1138,20 +1129,11 @@ def parse_args() -> AutoConfig:
     parser.add_argument("--post-lift-settle-s", type=float, default=1.5)
     parser.add_argument("--smooth-trajectory", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
-        "--takeoff-forward-comp-m",
-        type=float,
-        default=0.0,
-        help="Body-forward correction after AUTO_TAKEOFF and before recording starts.",
-    )
-    parser.add_argument(
         "--payload-lift-forward-comp-m",
         type=float,
         default=0.0,
         help="Body-forward correction applied while lifting the grasped payload.",
     )
-    parser.add_argument("--takeoff-comp-x", type=float, default=0.0)
-    parser.add_argument("--takeoff-comp-y", type=float, default=0.0)
-    parser.add_argument("--takeoff-comp-z", type=float, default=0.0)
     parser.add_argument("--payload-lift-comp-x", type=float, default=0.0)
     parser.add_argument("--payload-lift-comp-y", type=float, default=0.0)
     parser.add_argument("--payload-lift-comp-z", type=float, default=0.0)

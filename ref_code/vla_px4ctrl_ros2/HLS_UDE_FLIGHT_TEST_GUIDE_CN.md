@@ -196,8 +196,8 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 | `VRPN_SERVER` | `10.1.1.198` | VRPN 服务器 IP。 | 在 `run_mocap_mavros.sh` 中使用。 |
 | `VRPN_PORT` | `3883` | VRPN 端口。 | 通常不改。 |
 | `VRPN_SOURCE_TOPIC` | `/vla_drone1/pose` | 无人机 VRPN pose 话题。 | 对应 mocap 中无人机刚体名。 |
-| `MAVROS_VISION_TOPIC` | `/mavros/vision_pose/pose` | vision bridge 输出给 MAVROS 的位姿话题。 | `px4ctrl` 默认使用该链路。 |
-| `DRONE_POSE_TOPIC` | `${MAVROS_VISION_TOPIC}` | 自动抓放节点读取的无人机 pose。 | 通常用 MAVROS vision pose，保证和控制器一致。 |
+| `MAVROS_VISION_TOPIC` | `/mavros/vision_pose/pose` | vision bridge 输出给 MAVROS 的位姿话题。 | 给 MAVROS/EKF 输入动捕位姿。 |
+| `DRONE_POSE_TOPIC` | `/mavros/local_position/odom` | 自动抓放节点读取的无人机 odom。 | 必须使用 MAVROS odom，和 `test_ude_takeoff_hover.sh` 的稳定控制坐标源保持一致；目标和 box 仍用 mocap 刚体话题。 |
 | `TARGET_POSE_TOPIC` | `/strawberry_bear/pose` | 目标物 mocap pose。 | 如果目标刚体名不同，需要修改。 |
 | `BOX_POSE_TOPIC` | `/box1/pose` | 放置 box mocap pose。 | 如果 box 刚体名不同，需要修改。 |
 | `FCU_URL` | `/dev/ttyACM0:921600` | MAVROS 到飞控的串口。 | 飞控端口变化时修改。 |
@@ -284,12 +284,10 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 
 脚本环境变量目前没有显式包装所有速度参数；如果要改这些基础自动节点参数，可以直接在 `auto_hls_grasp_place.sh` 中补充，或直接运行 Python 节点传入对应 `--xxx` 参数。常规测试优先只改一键脚本已暴露的偏置、HLS 力控和安全参数。
 
-### 起飞后/携带补偿参数
+### 携带补偿参数
 
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
-| `--takeoff-forward-comp-m` | `0.0` | 起飞后沿当前 yaw 前向补偿。 |
-| `--takeoff-comp-x/y/z` | `0.0` | 起飞后在 mocap/map 坐标系补偿位置。 |
 | `--payload-lift-forward-comp-m` | `0.0` | 起吊目标上方点沿 yaw 前向补偿。 |
 | `--payload-lift-comp-x/y/z` | `0.0` | 起吊目标上方点在 mocap/map 坐标系补偿。 |
 

@@ -329,7 +329,7 @@ bash shflies/handheld_hls_grasp_test.sh
 | --- | --- | --- |
 | `TARGET_POSE_TOPIC` | `/strawberry_bear/pose` | 被抓目标位姿话题。 |
 | `BOX_POSE_TOPIC` | `/box1/pose` | 放置盒子位姿话题。 |
-| `DRONE_POSE_TOPIC` | `/mavros/vision_pose/pose` | 无人机视觉/动捕位姿话题。 |
+| `DRONE_POSE_TOPIC` | `/mavros/local_position/odom` | 无人机 MAVROS odom 话题。自动抓取用这个作为当前位置，和 UDE 单独测试保持一致。 |
 | `CMD_TOPIC` | `/position_cmd` | 发布给 px4ctrl 的位置命令。 |
 | `GRIPPER_TOPIC` | `/gripper/command` | 自动流程给夹爪发标量命令的话题。 |
 | `GRIPPER_COMMAND_PAIR_TOPIC` | `/gripper/command_pair` | 自动流程给夹爪发双侧命令的话题。 |
@@ -359,15 +359,11 @@ bash shflies/handheld_hls_grasp_test.sh
 | `POST_LIFT_SETTLE_S` | `1.0` | 提升后的等待时间。 |
 | `SMOOTH_TRAJECTORY` | `true` | 是否使用平滑轨迹。 |
 
-### 起飞和带载补偿参数
+### 带载补偿参数
 
 | 参数 | 默认值 | 含义 |
 | --- | --- | --- |
-| `TAKEOFF_FORWARD_COMP_M` | `0.0` | 起飞阶段前向补偿，旧式单轴参数。 |
 | `PAYLOAD_LIFT_FORWARD_COMP_M` | `0.0` | 带载提升前向补偿，旧式单轴参数。 |
-| `TAKEOFF_COMP_X` | `0.0` | 起飞阶段 X 补偿。 |
-| `TAKEOFF_COMP_Y` | `0.0` | 起飞阶段 Y 补偿。 |
-| `TAKEOFF_COMP_Z` | `0.0` | 起飞阶段 Z 补偿。 |
 | `PAYLOAD_LIFT_COMP_X` | `0.0` | 带载提升 X 补偿。 |
 | `PAYLOAD_LIFT_COMP_Y` | `0.0` | 带载提升 Y 补偿。 |
 | `PAYLOAD_LIFT_COMP_Z` | `0.0` | 带载提升 Z 补偿。 |
