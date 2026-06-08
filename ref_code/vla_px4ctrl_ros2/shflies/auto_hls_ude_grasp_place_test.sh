@@ -17,6 +17,7 @@ MAVROS_VISION_TOPIC="${MAVROS_VISION_TOPIC:-/mavros/vision_pose/pose}"
 TARGET_POSE_TOPIC="${TARGET_POSE_TOPIC:-/strawberry_bear/pose}"
 BOX_POSE_TOPIC="${BOX_POSE_TOPIC:-/box1/pose}"
 DRONE_POSE_TOPIC="${DRONE_POSE_TOPIC:-/mavros/local_position/odom}"
+ARRIVAL_POSE_TOPIC="${ARRIVAL_POSE_TOPIC:-/mavros/vision_pose/pose}"
 RC_TOPIC="${RC_TOPIC:-/mavros/rc/in}"
 PX4CTRL_STATE_TOPIC="${PX4CTRL_STATE_TOPIC:-/px4ctrl/state}"
 MAVROS_STATE_TOPIC="${MAVROS_STATE_TOPIC:-/mavros/state}"
@@ -147,7 +148,8 @@ set -u
 
 echo "[auto-hls-ude-test] workspace: ${WORKSPACE_DIR}"
 echo "[auto-hls-ude-test] drone vrpn: ${VRPN_SOURCE_TOPIC} -> ${MAVROS_VISION_TOPIC}"
-echo "[auto-hls-ude-test] auto drone pose topic: ${DRONE_POSE_TOPIC}"
+echo "[auto-hls-ude-test] control drone pose topic: ${DRONE_POSE_TOPIC}"
+echo "[auto-hls-ude-test] arrival check pose topic: ${ARRIVAL_POSE_TOPIC}"
 echo "[auto-hls-ude-test] target topic: ${TARGET_POSE_TOPIC}"
 echo "[auto-hls-ude-test] box topic: ${BOX_POSE_TOPIC}"
 echo "[auto-hls-ude-test] landing: mode=${LANDING_MODE} cmd_z=${CMD_LAND_Z} no_land=${NO_LAND}"
@@ -170,7 +172,8 @@ fi
 
 if ! bool_is_true "${SKIP_POSE_PREFLIGHT}"; then
   preflight_failed=false
-  check_topic_once "drone pose" "${DRONE_POSE_TOPIC}" --qos-reliability best_effort || preflight_failed=true
+  check_topic_once "control drone pose" "${DRONE_POSE_TOPIC}" --qos-reliability best_effort || preflight_failed=true
+  check_topic_once "arrival check pose" "${ARRIVAL_POSE_TOPIC}" --qos-reliability best_effort || preflight_failed=true
   check_topic_once "target pose" "${TARGET_POSE_TOPIC}" --qos-reliability best_effort || preflight_failed=true
   check_topic_once "box pose" "${BOX_POSE_TOPIC}" --qos-reliability best_effort || preflight_failed=true
   check_topic_once "RC input" "${RC_TOPIC}" --qos-reliability best_effort || preflight_failed=true
@@ -191,7 +194,7 @@ if bool_is_true "${WAIT_FOR_ENTER}"; then
   read -r _
 fi
 
-export TARGET_POSE_TOPIC BOX_POSE_TOPIC DRONE_POSE_TOPIC RC_TOPIC RC_TIMEOUT_S RC_STALE_ACTION
+export TARGET_POSE_TOPIC BOX_POSE_TOPIC DRONE_POSE_TOPIC ARRIVAL_POSE_TOPIC RC_TOPIC RC_TIMEOUT_S RC_STALE_ACTION
 export CH10_INDEX CH10_OPEN_PWM CH10_CLOSE_PWM FORCE_OPEN_BELOW_Z
 export GRIPPER_MANAGER_PORT HLS_GRAVITY_COMP_PATH HLS_MOTION_PROFILE
 export HLS_SEARCH_SPEED HLS_SEARCH_ACC HLS_SEARCH_TORQUE_LIMIT

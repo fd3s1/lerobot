@@ -13,6 +13,7 @@ fi
 TARGET_POSE_TOPIC="${TARGET_POSE_TOPIC:-/strawberry_bear/pose}"
 BOX_POSE_TOPIC="${BOX_POSE_TOPIC:-/box1/pose}"
 DRONE_POSE_TOPIC="${DRONE_POSE_TOPIC:-/mavros/local_position/odom}"
+ARRIVAL_POSE_TOPIC="${ARRIVAL_POSE_TOPIC:-/mavros/vision_pose/pose}"
 CMD_TOPIC="${CMD_TOPIC:-/position_cmd}"
 GRIPPER_TOPIC="${GRIPPER_TOPIC:-/gripper/command}"
 GRIPPER_COMMAND_PAIR_TOPIC="${GRIPPER_COMMAND_PAIR_TOPIC:-/gripper/command_pair}"
@@ -199,7 +200,8 @@ trap on_signal INT TERM HUP
 
 echo "[auto-hls-grasp-place] target topic: ${TARGET_POSE_TOPIC}"
 echo "[auto-hls-grasp-place] box topic: ${BOX_POSE_TOPIC}"
-echo "[auto-hls-grasp-place] drone topic: ${DRONE_POSE_TOPIC}"
+echo "[auto-hls-grasp-place] control drone pose topic: ${DRONE_POSE_TOPIC}"
+echo "[auto-hls-grasp-place] arrival check pose topic: ${ARRIVAL_POSE_TOPIC}"
 echo "[auto-hls-grasp-place] cmd topic: ${CMD_TOPIC}"
 echo "[auto-hls-grasp-place] rc safety: topic=${RC_TOPIC} timeout=${RC_TIMEOUT_S}s stale_action=${RC_STALE_ACTION} ch10_index=${CH10_INDEX} open<=${CH10_OPEN_PWM} close>=${CH10_CLOSE_PWM} force_open_below_z=${FORCE_OPEN_BELOW_Z}"
 echo "[auto-hls-grasp-place] gripper topics: scalar=${GRIPPER_TOPIC} pair=${GRIPPER_COMMAND_PAIR_TOPIC} feedback=${GRIPPER_FEEDBACK_TOPIC} status=${HLS_STATUS_TOPIC}"
@@ -227,7 +229,8 @@ set -u
 
 if ! bool_is_true "${SKIP_POSE_PREFLIGHT}"; then
   preflight_failed=false
-  check_pose_topic_once "drone" "${DRONE_POSE_TOPIC}" || preflight_failed=true
+  check_pose_topic_once "control drone" "${DRONE_POSE_TOPIC}" || preflight_failed=true
+  check_pose_topic_once "arrival check drone" "${ARRIVAL_POSE_TOPIC}" || preflight_failed=true
   check_pose_topic_once "target" "${TARGET_POSE_TOPIC}" || preflight_failed=true
   check_pose_topic_once "box" "${BOX_POSE_TOPIC}" || preflight_failed=true
   if [[ "${preflight_failed}" == "true" ]] && bool_is_true "${POSE_PREFLIGHT_REQUIRED}"; then
@@ -335,6 +338,7 @@ fi
 
 auto_args=(
   --drone-pose-topic "${DRONE_POSE_TOPIC}"
+  --arrival-pose-topic "${ARRIVAL_POSE_TOPIC}"
   --target-pose-topic "${TARGET_POSE_TOPIC}"
   --box-pose-topic "${BOX_POSE_TOPIC}"
   --cmd-topic "${CMD_TOPIC}"

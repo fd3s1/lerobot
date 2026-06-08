@@ -86,6 +86,7 @@ class PoseSample:
 @dataclass(frozen=True)
 class AutoConfig:
     drone_pose_topic: str
+    arrival_pose_topic: str
     target_pose_topic: str
     box_pose_topic: str
     cmd_topic: str
@@ -201,6 +202,7 @@ class AutoGraspPlaceDataset(Node):
         self.pose_subscriptions = []
 
         self._create_pose_subscription("drone", config.drone_pose_topic)
+        self._create_pose_subscription("drone_arrival", config.arrival_pose_topic)
         self._create_pose_subscription("target", config.target_pose_topic)
         self._create_pose_subscription("box", config.box_pose_topic)
         self.create_subscription(String, config.px4ctrl_state_topic, self._state_cb, 10)
@@ -230,7 +232,7 @@ class AutoGraspPlaceDataset(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=10,
         )
-        if key == "drone" and topic.rstrip("/").endswith("/odom"):
+        if topic.rstrip("/").endswith("/odom"):
             callback = self._odom_cb(key)
             self.pose_subscriptions.append(self.create_subscription(Odometry, topic, callback, best_effort_qos))
         else:
@@ -331,14 +333,15 @@ class AutoGraspPlaceDataset(Node):
     def wait_for_fresh_poses(self) -> None:
         self.get_logger().info(
             "Waiting for fresh poses: "
-            f"drone={self.config.drone_pose_topic}, "
+            f"drone_control={self.config.drone_pose_topic}, "
+            f"drone_arrival={self.config.arrival_pose_topic}, "
             f"target={self.config.target_pose_topic}, "
             f"box={self.config.box_pose_topic}."
         )
         last_log_s = 0.0
         while rclpy.ok():
             rclpy.spin_once(self, timeout_sec=0.05)
-            if all(self.pose_fresh(key) for key in ("drone", "target", "box")):
+            if all(self.pose_fresh(key) for key in ("drone", "drone_arrival", "target", "box")):
                 return
             now_s = time.monotonic()
             if now_s - last_log_s >= 2.0:
@@ -346,6 +349,7 @@ class AutoGraspPlaceDataset(Node):
                 status_parts = []
                 for key, topic in (
                     ("drone", self.config.drone_pose_topic),
+                    ("drone_arrival", self.config.arrival_pose_topic),
                     ("target", self.config.target_pose_topic),
                     ("box", self.config.box_pose_topic),
                 ):
@@ -503,6 +507,7 @@ class AutoGraspPlaceDataset(Node):
         target: PoseSample,
         box: PoseSample,
         drone: PoseSample,
+        drone_arrival: PoseSample,
     ) -> None:
         if not self.config.confirm_before_takeoff:
             return
@@ -516,7 +521,13 @@ class AutoGraspPlaceDataset(Node):
         print("[auto-grasp-place] Pre-takeoff pose snapshot is locked; ROS callbacks are paused here.", flush=True)
         print(
             "[auto-grasp-place] "
-            f"drone=({drone.x:.3f}, {drone.y:.3f}, {drone.z:.3f}), yaw={drone.yaw:.3f}",
+            f"drone control odom=({drone.x:.3f}, {drone.y:.3f}, {drone.z:.3f}), yaw={drone.yaw:.3f}",
+            flush=True,
+        )
+        print(
+            "[auto-grasp-place] "
+            f"drone arrival check=({drone_arrival.x:.3f}, {drone_arrival.y:.3f}, {drone_arrival.z:.3f}), "
+            f"yaw={drone_arrival.yaw:.3f}",
             flush=True,
         )
         print(
@@ -797,25 +808,36 @@ class AutoGraspPlaceDataset(Node):
         deadline = time.monotonic() + self.config.waypoint_arrival_timeout_s
         settled_since: float | None = None
         last_log_s = 0.0
-        latest_drone = self.poses.get("drone")
+        latest_arrival = self.poses.get("drone_arrival")
+        latest_control = self.poses.get("drone")
 
         while rclpy.ok() and time.monotonic() < deadline:
             self.publish_cmd(pose)
             if keep_gripper_open:
                 self.publish_gripper(self.config.gripper_open, repeats=1, interval_s=0.0)
             rclpy.spin_once(self, timeout_sec=0.0)
-            drone = self.poses.get("drone")
-            if drone is not None and self.pose_fresh("drone"):
-                latest_drone = drone
-                err = math.dist((drone.x, drone.y, drone.z), (pose.x, pose.y, pose.z))
+            control_drone = self.poses.get("drone")
+            if control_drone is not None and self.pose_fresh("drone"):
+                latest_control = control_drone
+            arrival_drone = self.poses.get("drone_arrival")
+            if arrival_drone is not None and self.pose_fresh("drone_arrival"):
+                latest_arrival = arrival_drone
+                err = math.dist((arrival_drone.x, arrival_drone.y, arrival_drone.z), (pose.x, pose.y, pose.z))
                 if err <= self.config.waypoint_arrival_tolerance_m:
                     if settled_since is None:
                         settled_since = time.monotonic()
                     elif time.monotonic() - settled_since >= self.config.waypoint_arrival_settle_s:
+                        if latest_control is None or not self.pose_fresh("drone"):
+                            self.get_logger().warn(
+                                f"{label}: arrival pose is settled but control odom is not fresh; waiting."
+                            )
+                            settled_since = None
+                            time.sleep(period)
+                            continue
                         self.get_logger().info(
-                            f"{label}: actual drone arrived, err={err:.3f}m."
+                            f"{label}: actual drone arrived by arrival pose, err={err:.3f}m."
                         )
-                        return self.checked_pose(drone.x, drone.y, drone.z, pose.yaw)
+                        return self.checked_pose(latest_control.x, latest_control.y, latest_control.z, pose.yaw)
                 else:
                     settled_since = None
 
@@ -823,18 +845,39 @@ class AutoGraspPlaceDataset(Node):
                 if now_s - last_log_s >= 1.0:
                     last_log_s = now_s
                     self.get_logger().info(
-                        f"{label}: waiting actual drone, err={err:.3f}m "
+                        f"{label}: waiting actual drone by arrival pose, err={err:.3f}m "
                         f"target=({pose.x:.3f},{pose.y:.3f},{pose.z:.3f}) "
-                        f"actual=({drone.x:.3f},{drone.y:.3f},{drone.z:.3f})."
+                        f"arrival=({arrival_drone.x:.3f},{arrival_drone.y:.3f},{arrival_drone.z:.3f})."
                     )
+            else:
+                now_s = time.monotonic()
+                if now_s - last_log_s >= 1.0:
+                    last_log_s = now_s
+                    if arrival_drone is None:
+                        self.get_logger().warn(f"{label}: waiting for arrival pose; no sample yet.")
+                    else:
+                        age = now_s - arrival_drone.received_s
+                        self.get_logger().warn(
+                            f"{label}: waiting for fresh arrival pose; age={age:.2f}s "
+                            f"topic={self.config.arrival_pose_topic}."
+                        )
             time.sleep(period)
             if self.px4ctrl_state != "CMD_CTRL":
                 raise RuntimeError(f"px4ctrl left CMD_CTRL during {label}; latest={self.px4ctrl_state!r}.")
 
-        if latest_drone is not None:
-            err = math.dist((latest_drone.x, latest_drone.y, latest_drone.z), (pose.x, pose.y, pose.z))
-            raise RuntimeError(f"{label}: actual drone did not arrive before timeout; final err={err:.3f}m.")
-        raise RuntimeError(f"{label}: no fresh drone pose while waiting for actual arrival.")
+        if latest_arrival is not None:
+            age = time.monotonic() - latest_arrival.received_s
+            err = math.dist((latest_arrival.x, latest_arrival.y, latest_arrival.z), (pose.x, pose.y, pose.z))
+            if age > self.config.pose_timeout_s:
+                raise RuntimeError(
+                    f"{label}: arrival pose stale/no fresh before timeout; "
+                    f"arrival_age={age:.2f}s, topic={self.config.arrival_pose_topic}."
+                )
+            raise RuntimeError(
+                f"{label}: actual drone did not arrive before timeout by arrival pose; "
+                f"final err={err:.3f}m, arrival_age={age:.2f}s."
+            )
+        raise RuntimeError(f"{label}: no fresh arrival pose while waiting for actual arrival.")
 
     def _hold_pair_step(
         self,
@@ -964,6 +1007,7 @@ class AutoGraspPlaceDataset(Node):
         target = self.wait_for_stable_pose("target")
         box = self.wait_for_stable_pose("box")
         drone = self.wait_for_stable_pose("drone")
+        drone_arrival = self.wait_for_stable_pose("drone_arrival")
         raw_target = target
         raw_box = box
         target = self.adjusted_object_pose("target", require_fresh=True)
@@ -997,7 +1041,7 @@ class AutoGraspPlaceDataset(Node):
         )
         self.validate_box_fit()
 
-        self.wait_for_takeoff_confirmation(raw_target, raw_box, target, box, drone)
+        self.wait_for_takeoff_confirmation(raw_target, raw_box, target, box, drone, drone_arrival)
         self.before_takeoff()
         self.publish_gripper(self.config.gripper_open, repeats=5)
         self.publish_takeoff()
@@ -1159,6 +1203,7 @@ def parse_args() -> AutoConfig:
             raise ValueError(f"{name} was removed from automatic flight flows; removed args: {removed}.")
     parser = argparse.ArgumentParser(description="Automatic grasp/place data collection driver.")
     parser.add_argument("--drone-pose-topic", default="/mavros/local_position/odom")
+    parser.add_argument("--arrival-pose-topic", default="/mavros/vision_pose/pose")
     parser.add_argument("--target-pose-topic", default="/strawberry_bear/pose")
     parser.add_argument("--box-pose-topic", default="/box1/pose")
     parser.add_argument("--cmd-topic", default="/position_cmd")
@@ -1265,8 +1310,8 @@ def parse_args() -> AutoConfig:
     parser.add_argument("--cmd-ctrl-timeout-s", type=float, default=10.0)
     parser.add_argument("--record-ready-timeout-s", type=float, default=60.0)
     parser.add_argument("--waypoint-arrival-tolerance-m", type=float, default=0.08)
-    parser.add_argument("--waypoint-arrival-settle-s", type=float, default=0.3)
-    parser.add_argument("--waypoint-arrival-timeout-s", type=float, default=5.0)
+    parser.add_argument("--waypoint-arrival-settle-s", type=float, default=0.4)
+    parser.add_argument("--waypoint-arrival-timeout-s", type=float, default=15.0)
     confirm_group = parser.add_mutually_exclusive_group()
     confirm_group.add_argument(
         "--confirm-before-takeoff",

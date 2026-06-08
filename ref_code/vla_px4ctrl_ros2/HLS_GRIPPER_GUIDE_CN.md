@@ -329,7 +329,8 @@ bash shflies/handheld_hls_grasp_test.sh
 | --- | --- | --- |
 | `TARGET_POSE_TOPIC` | `/strawberry_bear/pose` | 被抓目标位姿话题。 |
 | `BOX_POSE_TOPIC` | `/box1/pose` | 放置盒子位姿话题。 |
-| `DRONE_POSE_TOPIC` | `/mavros/local_position/odom` | 无人机 MAVROS odom 话题。自动抓取用这个作为当前位置，和 UDE 单独测试保持一致。 |
+| `DRONE_POSE_TOPIC` | `/mavros/local_position/odom` | 无人机控制位姿话题。自动抓取用它生成 `/position_cmd`，和 UDE 单独测试保持一致，不要改成 vision pose。 |
+| `ARRIVAL_POSE_TOPIC` | `/mavros/vision_pose/pose` | 无人机实际到位判定位姿话题。只用于判断是否到达目标/抓取/box 关键点。 |
 | `CMD_TOPIC` | `/position_cmd` | 发布给 px4ctrl 的位置命令。 |
 | `GRIPPER_TOPIC` | `/gripper/command` | 自动流程给夹爪发标量命令的话题。 |
 | `GRIPPER_COMMAND_PAIR_TOPIC` | `/gripper/command_pair` | 自动流程给夹爪发双侧命令的话题。 |
@@ -440,7 +441,7 @@ bash shflies/handheld_hls_grasp_test.sh
 | 参数 | 默认值 | 含义 |
 | --- | --- | --- |
 | `WAYPOINT_ARRIVAL_TOLERANCE_M` | `0.08` | 航点到达位置容差。 |
-| `WAYPOINT_ARRIVAL_SETTLE_S` | `0.3` | 到达航点后的稳定等待时间。 |
+| `WAYPOINT_ARRIVAL_SETTLE_S` | `0.4` | 到达航点后的稳定等待时间。 |
 | `WAYPOINT_ARRIVAL_TIMEOUT_S` | `15.0` | 航点到达超时。 |
 | `POSE_PREFLIGHT_TIMEOUT_S` | `6` | 启动前检查位姿话题的超时时间。 |
 | `POSE_PREFLIGHT_REQUIRED` | `false` | 位姿预检失败是否直接退出。 |

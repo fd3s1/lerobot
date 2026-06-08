@@ -14,6 +14,7 @@ CONDA_ENV="${CONDA_ENV:-vla-drone-v044}"
 TARGET_POSE_TOPIC="${TARGET_POSE_TOPIC:-/strawberry_bear/pose}"
 BOX_POSE_TOPIC="${BOX_POSE_TOPIC:-/box1/pose}"
 DRONE_POSE_TOPIC="${DRONE_POSE_TOPIC:-/mavros/local_position/odom}"
+ARRIVAL_POSE_TOPIC="${ARRIVAL_POSE_TOPIC:-/mavros/vision_pose/pose}"
 CMD_TOPIC="${CMD_TOPIC:-/position_cmd}"
 GRIPPER_TOPIC="${GRIPPER_TOPIC:-/gripper/command}"
 GRIPPER_COMMAND_PAIR_TOPIC="${GRIPPER_COMMAND_PAIR_TOPIC:-/gripper/command_pair}"
@@ -77,8 +78,8 @@ GRIPPER_CLOSE_DURATION_S="${GRIPPER_CLOSE_DURATION_S:-4.0}"
 GRIPPER_X_OFFSET_M="${GRIPPER_X_OFFSET_M:-0.0}"
 GRIPPER_Y_OFFSET_M="${GRIPPER_Y_OFFSET_M:-0.0}"
 WAYPOINT_ARRIVAL_TOLERANCE_M="${WAYPOINT_ARRIVAL_TOLERANCE_M:-0.08}"
-WAYPOINT_ARRIVAL_SETTLE_S="${WAYPOINT_ARRIVAL_SETTLE_S:-0.3}"
-WAYPOINT_ARRIVAL_TIMEOUT_S="${WAYPOINT_ARRIVAL_TIMEOUT_S:-5.0}"
+WAYPOINT_ARRIVAL_SETTLE_S="${WAYPOINT_ARRIVAL_SETTLE_S:-0.4}"
+WAYPOINT_ARRIVAL_TIMEOUT_S="${WAYPOINT_ARRIVAL_TIMEOUT_S:-15.0}"
 GRIPPER_OPEN_DURATION_S="${GRIPPER_OPEN_DURATION_S:-0.4}"
 GRASP_STEP_SIZE="${GRASP_STEP_SIZE:-3.0}"
 GRASP_STEP_SETTLE_S="${GRASP_STEP_SETTLE_S:-0.10}"
@@ -185,7 +186,8 @@ trap on_signal INT TERM HUP
 
 echo "[auto-record-grasp-place] target topic: ${TARGET_POSE_TOPIC}"
 echo "[auto-record-grasp-place] box topic: ${BOX_POSE_TOPIC}"
-echo "[auto-record-grasp-place] drone topic: ${DRONE_POSE_TOPIC}"
+echo "[auto-record-grasp-place] control drone pose topic: ${DRONE_POSE_TOPIC}"
+echo "[auto-record-grasp-place] arrival check pose topic: ${ARRIVAL_POSE_TOPIC}"
 echo "[auto-record-grasp-place] gripper scalar topic: ${GRIPPER_TOPIC}"
 echo "[auto-record-grasp-place] gripper pair topic: ${GRIPPER_COMMAND_PAIR_TOPIC}"
 echo "[auto-record-grasp-place] gripper feedback topic: ${GRIPPER_FEEDBACK_TOPIC}"
@@ -216,7 +218,8 @@ set -u
 
 if ! bool_is_true "${SKIP_POSE_PREFLIGHT}"; then
   preflight_failed=false
-  check_pose_topic_once "drone" "${DRONE_POSE_TOPIC}" || preflight_failed=true
+  check_pose_topic_once "control drone" "${DRONE_POSE_TOPIC}" || preflight_failed=true
+  check_pose_topic_once "arrival check drone" "${ARRIVAL_POSE_TOPIC}" || preflight_failed=true
   check_pose_topic_once "target" "${TARGET_POSE_TOPIC}" || preflight_failed=true
   check_pose_topic_once "box" "${BOX_POSE_TOPIC}" || preflight_failed=true
   if [[ "${preflight_failed}" == "true" ]]; then
@@ -266,6 +269,7 @@ record_uses_setsid=true
 
 auto_args=(
   --drone-pose-topic "${DRONE_POSE_TOPIC}"
+  --arrival-pose-topic "${ARRIVAL_POSE_TOPIC}"
   --target-pose-topic "${TARGET_POSE_TOPIC}"
   --box-pose-topic "${BOX_POSE_TOPIC}"
   --cmd-topic "${CMD_TOPIC}"

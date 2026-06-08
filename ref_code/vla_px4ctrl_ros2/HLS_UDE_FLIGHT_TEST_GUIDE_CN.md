@@ -221,8 +221,9 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 | `VRPN_SERVER` | `10.1.1.198` | VRPN 服务器 IP。 | 在 `run_mocap_mavros.sh` 中使用。 |
 | `VRPN_PORT` | `3883` | VRPN 端口。 | 通常不改。 |
 | `VRPN_SOURCE_TOPIC` | `/vla_drone1/pose` | 无人机 VRPN pose 话题。 | 对应 mocap 中无人机刚体名。 |
-| `MAVROS_VISION_TOPIC` | `/mavros/vision_pose/pose` | vision bridge 输出给 MAVROS 的位姿话题。 | 给 MAVROS/EKF 输入动捕位姿。 |
-| `DRONE_POSE_TOPIC` | `/mavros/local_position/odom` | 自动抓放节点读取的无人机 odom。 | 必须使用 MAVROS odom，和 `test_ude_takeoff_hover.sh` 的稳定控制坐标源保持一致；目标和 box 仍用 mocap 刚体话题。 |
+| `MAVROS_VISION_TOPIC` | `/mavros/vision_pose/pose` | vision bridge 输出给 MAVROS 的位姿话题。 | 给 MAVROS/EKF 输入动捕位姿，同时默认作为到位判定来源。 |
+| `DRONE_POSE_TOPIC` | `/mavros/local_position/odom` | 自动抓放节点读取的无人机控制位姿。 | 必须使用 MAVROS odom，和 `test_ude_takeoff_hover.sh` 的稳定控制坐标源保持一致；不要改成 vision pose。 |
+| `ARRIVAL_POSE_TOPIC` | `/mavros/vision_pose/pose` | 自动流程实际到位判定使用的无人机位姿。 | 只用于检查是否到目标/抓取/box 关键点，不用于生成 `/position_cmd`。 |
 | `TARGET_POSE_TOPIC` | `/strawberry_bear/pose` | 目标物 mocap pose。 | 如果目标刚体名不同，需要修改。 |
 | `BOX_POSE_TOPIC` | `/box1/pose` | 放置 box mocap pose。 | 如果 box 刚体名不同，需要修改。 |
 | `FCU_URL` | `/dev/ttyACM0:921600` | MAVROS 到飞控的串口。 | 飞控端口变化时修改。 |
@@ -324,6 +325,7 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 | `WAYPOINT_ARRIVAL_TOLERANCE_M` | `0.08` | 实际无人机位置到命令点的容许误差。 | 越小越严格，太小可能等不到；真机初测不建议低于 `0.08`。 |
 | `WAYPOINT_ARRIVAL_SETTLE_S` | `0.4` | 误差进入容差后必须持续稳定的时间。 | 越大越稳但流程变慢。 |
 | `WAYPOINT_ARRIVAL_TIMEOUT_S` | `15.0` | 等待实际到位的最长时间。 | 控制响应慢时可加大；超时会触发 open 并执行安全下降。 |
+| `ARRIVAL_POSE_TOPIC` / `--arrival-pose-topic` | `/mavros/vision_pose/pose` | 到位判定使用的无人机实际位置。 | 控制仍使用 `DRONE_POSE_TOPIC=/mavros/local_position/odom`；不要把控制位姿改成 vision pose。 |
 | `POSE_TIMEOUT_S` / `--pose-timeout-s` | `0.5` | pose 新鲜度阈值。 | mocap 丢帧时会触发 stale。 |
 | `STABLE_DURATION_S` / `--stable-duration-s` | `0.5` | 起飞前等待目标/box/drone 姿态稳定时间。 | 目标抖动大时增大。 |
 | `STABLE_POS_TOLERANCE_M` / `--stable-pos-tolerance-m` | `0.03` | 稳定判定的位置波动容许值。 | mocap 噪声大时适当放宽。 |
@@ -509,8 +511,9 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 
 - `WAYPOINT_ARRIVAL_TOLERANCE_M` 是否过大。
 - `WAYPOINT_ARRIVAL_SETTLE_S` 是否过小。
-- `DRONE_POSE_TOPIC` 是否和控制器使用的位姿一致。
-- 日志中是否出现 `Pre-grasp actual settle: actual drone arrived`。
+- `DRONE_POSE_TOPIC` 是否仍是 `/mavros/local_position/odom`，保证控制链没有被改成 vision pose。
+- `ARRIVAL_POSE_TOPIC` 是否是 `/mavros/vision_pose/pose` 且数据新鲜，保证到位判定用的是动捕/vision 位姿。
+- 日志中是否出现 `Pre-grasp actual settle: actual drone arrived by arrival pose`。
 
 ### 到目标上方后自动 open 并下降
 
@@ -527,7 +530,7 @@ Emergency CMD_CTRL descent with gripper open
 
 - 看 `final err=...m`。如果只差十几厘米且仍在收敛，优先增大 `WAYPOINT_ARRIVAL_TIMEOUT_S`。
 - 如果悬停误差长期稳定在 8cm 以上，可把 `WAYPOINT_ARRIVAL_TOLERANCE_M` 小幅放宽，但不要大到导致 `Pre-grasp actual settle` 过早通过。
-- 确认 `DRONE_POSE_TOPIC=/mavros/local_position/odom`，目标/box 仍用 mocap 刚体话题。
+- 确认 `ARRIVAL_POSE_TOPIC=/mavros/vision_pose/pose` 有新鲜数据；`DRONE_POSE_TOPIC=/mavros/local_position/odom` 只负责控制。
 - 确认目标和 box 没有被遮挡导致长时间使用 latched pose。
 
 ### CH10 低位没有立即释放
