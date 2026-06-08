@@ -321,9 +321,9 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 
 | 参数 | 默认值 | 作用 | 调参建议 |
 | --- | --- | --- | --- |
-| `WAYPOINT_ARRIVAL_TOLERANCE_M` | `0.06` | 实际无人机位置到命令点的容许误差。 | 越小越严格，太小可能等不到。 |
+| `WAYPOINT_ARRIVAL_TOLERANCE_M` | `0.08` | 实际无人机位置到命令点的容许误差。 | 越小越严格，太小可能等不到；真机初测不建议低于 `0.08`。 |
 | `WAYPOINT_ARRIVAL_SETTLE_S` | `0.4` | 误差进入容差后必须持续稳定的时间。 | 越大越稳但流程变慢。 |
-| `WAYPOINT_ARRIVAL_TIMEOUT_S` | `5.0` | 等待实际到位的最长时间。 | 控制响应慢时可加大。 |
+| `WAYPOINT_ARRIVAL_TIMEOUT_S` | `15.0` | 等待实际到位的最长时间。 | 控制响应慢时可加大；超时会触发 open 并执行安全下降。 |
 | `POSE_TIMEOUT_S` / `--pose-timeout-s` | `0.5` | pose 新鲜度阈值。 | mocap 丢帧时会触发 stale。 |
 | `STABLE_DURATION_S` / `--stable-duration-s` | `0.5` | 起飞前等待目标/box/drone 姿态稳定时间。 | 目标抖动大时增大。 |
 | `STABLE_POS_TOLERANCE_M` / `--stable-pos-tolerance-m` | `0.03` | 稳定判定的位置波动容许值。 | mocap 噪声大时适当放宽。 |
@@ -511,6 +511,24 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 - `WAYPOINT_ARRIVAL_SETTLE_S` 是否过小。
 - `DRONE_POSE_TOPIC` 是否和控制器使用的位姿一致。
 - 日志中是否出现 `Pre-grasp actual settle: actual drone arrived`。
+
+### 到目标上方后自动 open 并下降
+
+如果日志出现：
+
+```text
+Automatic HLS sequence failed: Target hover actual settle: actual drone did not arrive before timeout
+Emergency CMD_CTRL descent with gripper open
+```
+
+含义是飞机还没有满足实际到位判定，脚本为了避免未到位夹持而中止，并按安全路径 open 后命令下降到 `CMD_LAND_Z`。这通常不是 CH10 触发，也不是 HLS fault。
+
+处理顺序：
+
+- 看 `final err=...m`。如果只差十几厘米且仍在收敛，优先增大 `WAYPOINT_ARRIVAL_TIMEOUT_S`。
+- 如果悬停误差长期稳定在 8cm 以上，可把 `WAYPOINT_ARRIVAL_TOLERANCE_M` 小幅放宽，但不要大到导致 `Pre-grasp actual settle` 过早通过。
+- 确认 `DRONE_POSE_TOPIC=/mavros/local_position/odom`，目标/box 仍用 mocap 刚体话题。
+- 确认目标和 box 没有被遮挡导致长时间使用 latched pose。
 
 ### CH10 低位没有立即释放
 

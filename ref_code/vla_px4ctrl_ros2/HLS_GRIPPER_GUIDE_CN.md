@@ -441,7 +441,7 @@ bash shflies/handheld_hls_grasp_test.sh
 | --- | --- | --- |
 | `WAYPOINT_ARRIVAL_TOLERANCE_M` | `0.08` | 航点到达位置容差。 |
 | `WAYPOINT_ARRIVAL_SETTLE_S` | `0.3` | 到达航点后的稳定等待时间。 |
-| `WAYPOINT_ARRIVAL_TIMEOUT_S` | `5.0` | 航点到达超时。 |
+| `WAYPOINT_ARRIVAL_TIMEOUT_S` | `15.0` | 航点到达超时。 |
 | `POSE_PREFLIGHT_TIMEOUT_S` | `6` | 启动前检查位姿话题的超时时间。 |
 | `POSE_PREFLIGHT_REQUIRED` | `false` | 位姿预检失败是否直接退出。 |
 | `SKIP_POSE_PREFLIGHT` | `false` | 是否跳过位姿预检。 |
