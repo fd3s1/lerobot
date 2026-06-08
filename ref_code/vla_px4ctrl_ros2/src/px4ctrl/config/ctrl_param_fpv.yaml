@@ -85,12 +85,12 @@ px4ctrl:
       KAng_diag: [6.0, 6.0, 3.0]
 
     thrust_model:
-      hover_thrust: 0.30
+      hover_thrust: 0.36
       enable_estimation: true
       print_value: false
-      rho2: 0.998
+      rho2: 0.995
       min_thr2acc: 5.0
-      max_thr2acc: 40.0
+      max_thr2acc: 45.0
 
 feetech_gripper_node:
   ros__parameters:
