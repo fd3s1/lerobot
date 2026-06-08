@@ -64,7 +64,7 @@ ros2 topic echo --once /mavros/state
 
 ### 4. 无桨自动流程检查
 
-默认会在自动节点内部等待确认：脚本先完成 topic 检查、目标/box/无人机 pose 稳定检查并打印锁定快照，然后暂停 ROS 回调刷新；这时按一次 Enter 会立即发布 `TAKEOFF`。px4ctrl 收到 `TAKEOFF` 后仍会执行自身的电机加速阶段，再进入竖直起飞。
+默认会在自动节点内部等待确认：脚本先完成 topic 检查、目标/box/无人机 pose 稳定检查并打印锁定快照，然后暂停 ROS 回调刷新；这时按一次 Enter 会立即发布 `TAKEOFF`。px4ctrl 收到 `TAKEOFF` 后先执行水平姿态的电机加速推力渐增，避免未离地时产生水平倾角；加速结束后进入 UDE 竖直爬升。
 
 ```bash
 cd /home/user/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
@@ -167,7 +167,7 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 | --- | --- | --- | --- |
 | 启动检查 | 启动 stack，检查 pose/RC/state | 不 close | topic 缺失可拒绝启动 |
 | 起飞前确认 | 锁定起飞前 pose 快照，暂停回调等待一次 Enter | 保持 open | Enter 后重新检查 CH10，低位不会起飞 |
-| 自动起飞 | 发布 `TakeoffLand.TAKEOFF` | 发布 open | px4ctrl 执行电机加速并等待 `AUTO_HOVER` |
+| 自动起飞 | 发布 `TakeoffLand.TAKEOFF`，加速期水平姿态，随后 UDE 竖直爬升 | 发布 open | 等待 `AUTO_HOVER` |
 | 进入 `CMD_CTRL` | 发布当前位置 `/position_cmd` | 保持 open | 进入失败则退出 |
 | 飞到目标上方 | 跟随目标 live waypoint | 保持 open | 未到位不夹 |
 | 下降到抓取点 | 到目标抓取高度 | 保持 open | 到位误差和 settle 检查 |

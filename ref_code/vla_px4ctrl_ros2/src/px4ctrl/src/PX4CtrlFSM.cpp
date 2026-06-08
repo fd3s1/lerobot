@@ -39,6 +39,7 @@ void PX4CtrlFSM::process()
   const rclcpp::Time now_time = node_->now();
   Desired_State_t des(odom_data);
   bool rotor_low_speed_during_land = false;
+  bool rotor_speedup_during_takeoff = false;
 
   switch (state) {
     case MANUAL_CTRL: {
@@ -171,6 +172,7 @@ void PX4CtrlFSM::process()
       } else if (
         (now_time - takeoff_land.toggle_takeoff_land_time).seconds() <
         AutoTakeoffLand_t::MOTORS_SPEEDUP_TIME) {
+        rotor_speedup_during_takeoff = true;
         des = get_rotor_speed_up_des(now_time);
       } else if (odom_data.p(2) >= takeoff_land.start_pose(2) + param.takeoff_land.height) {
         change_state(AUTO_HOVER);
@@ -239,13 +241,23 @@ void PX4CtrlFSM::process()
 
     const Desired_State_t safe_des = clamp_desired(des);
     Controller_Output_t u;
-    if (state == MANUAL_CTRL || rotor_low_speed_during_land) {
-      u.q = odom_data.q;
+    if (state == MANUAL_CTRL || rotor_low_speed_during_land || rotor_speedup_during_takeoff) {
+      u.q = rotor_speedup_during_takeoff ?
+        uav_utils::yaw_to_quaternion(takeoff_land.start_pose(3)) :
+        odom_data.q;
       u.bodyrates.setZero();
-      u.thrust = clamp(
-        param.thrust_model.hover_thrust,
-        param.controller.min_thrust,
-        param.controller.max_thrust);
+      double thrust = param.thrust_model.hover_thrust;
+      if (rotor_speedup_during_takeoff) {
+        const double elapsed = (now_time - takeoff_land.toggle_takeoff_land_time).seconds();
+        const double ratio = clamp(
+          elapsed / std::max(AutoTakeoffLand_t::MOTORS_SPEEDUP_TIME, 1e-3),
+          0.0,
+          1.0);
+        thrust =
+          param.controller.min_thrust +
+          ratio * (param.thrust_model.hover_thrust - param.controller.min_thrust);
+      }
+      u.thrust = clamp(thrust, param.controller.min_thrust, param.controller.max_thrust);
       controller.resetControlState();
     } else {
       u = controller.calculateControl(safe_des, odom_data, imu_data, now_time);
@@ -303,6 +315,7 @@ Desired_State_t PX4CtrlFSM::get_takeoff_land_des(double speed)
 
   Desired_State_t des;
   des.p = takeoff_land.start_pose.head<3>() + Eigen::Vector3d(0, 0, speed * delta_t);
+  des.v = Eigen::Vector3d(0.0, 0.0, speed);
   des.yaw = takeoff_land.start_pose(3);
   return des;
 }

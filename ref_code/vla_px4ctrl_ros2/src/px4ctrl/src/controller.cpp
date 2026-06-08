@@ -145,7 +145,7 @@ Controller_Output_t LinearControl::calculateControl(
   const Eigen::Vector3d Kd = diagVector(param_.ude.Kd_diag);
   const Eigen::Vector3d T = diagVector(param_.ude.T_diag);
   const Eigen::Vector3d e = des.p - odom.p;
-  const Eigen::Vector3d e_dot = -odom.v;
+  const Eigen::Vector3d e_dot = des.v - odom.v;
   const Eigen::Vector3d u0 = Kp.asDiagonal() * e + Kd.asDiagonal() * e_dot;
   if (dt > 0.0 && u0.allFinite()) {
     integral_u0_ += u0 * dt;
@@ -162,7 +162,7 @@ Controller_Output_t LinearControl::calculateControl(
   u_acc = clampVectorByAxis(u_acc, param_.ude.max_u_acc);
 
   Eigen::Vector3d thrust_acc =
-    u_acc + Eigen::Vector3d(0.0, 0.0, finite_or(param_.controller.gravity, 9.81));
+    u_acc + des.a + Eigen::Vector3d(0.0, 0.0, finite_or(param_.controller.gravity, 9.81));
   thrust_acc = computeLimitedTotalAcc(thrust_acc);
 
   Eigen::Quaterniond desired_attitude = odom.q;
