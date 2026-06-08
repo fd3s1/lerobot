@@ -10,6 +10,7 @@ STACK_STARTUP_WAIT_S="${STACK_STARTUP_WAIT_S:-8}"
 CLEANUP_STACK_ON_EXIT="${CLEANUP_STACK_ON_EXIT:-auto}"
 KEEP_STACK_ON_INTERRUPT="${KEEP_STACK_ON_INTERRUPT:-false}"
 TEST_ENTER_CMD="${TEST_ENTER_CMD:-false}"
+TEST_PUBLISH_TAKEOFF="${TEST_PUBLISH_TAKEOFF:-false}"
 TEST_AUTO_CONFIRM="${TEST_AUTO_CONFIRM:-false}"
 
 STACK_PID=""
@@ -78,6 +79,12 @@ fi
 HELPER_ARGS=("$@")
 if [[ "${TEST_ENTER_CMD}" == "true" ]]; then
   HELPER_ARGS+=("--enter-cmd")
+fi
+if [[ "${TEST_PUBLISH_TAKEOFF}" == "true" ]]; then
+  HELPER_ARGS+=("--publish-takeoff")
+  echo "[ude-test] takeoff mode: helper publishes TAKEOFF"
+else
+  echo "[ude-test] takeoff mode: manual; helper waits for AUTO_HOVER"
 fi
 if [[ "${TEST_AUTO_CONFIRM}" == "true" ]]; then
   HELPER_ARGS+=("--auto-confirm")

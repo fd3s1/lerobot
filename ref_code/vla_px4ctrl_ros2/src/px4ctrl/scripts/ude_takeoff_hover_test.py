@@ -242,7 +242,7 @@ class TakeoffHoverTest(Node):
 
     def safe_to_clean_stack(self) -> bool:
         armed = self.mavros_state.armed if self.mavros_state is not None else True
-        return (not self.takeoff_sent) or ((not armed) and self.fsm_state == "MANUAL_CTRL")
+        return (not armed) and self.fsm_state in (None, "MANUAL_CTRL")
 
     def print_status(self) -> None:
         mavros = self.mavros_state
@@ -317,7 +317,7 @@ class TakeoffHoverTest(Node):
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Independent UDE/bodyrate AUTO_TAKEOFF -> AUTO_HOVER test helper."
+        description="Independent UDE/bodyrate manual-takeoff AUTO_HOVER test helper."
     )
     parser.add_argument("--state-topic", default="/px4ctrl/state")
     parser.add_argument("--takeoff-land-topic", default="/px4ctrl/takeoff_land")
@@ -339,7 +339,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cmd-state-timeout", type=float, default=5.0)
     parser.add_argument("--cmd-return-timeout", type=float, default=3.0)
     parser.add_argument("--enter-cmd", action="store_true")
-    parser.add_argument("--auto-confirm", action="store_true")
+    parser.add_argument(
+        "--publish-takeoff",
+        action="store_true",
+        help=(
+            "Publish /px4ctrl/takeoff_land TAKEOFF from this helper. "
+            "By default the helper waits for manual takeoff and AUTO_HOVER."
+        ),
+    )
+    parser.add_argument(
+        "--auto-confirm",
+        action="store_true",
+        help="Only used with --publish-takeoff; publish TAKEOFF without typing TAKEOFF.",
+    )
     parser.add_argument("--skip-mavros-connected-check", action="store_true")
     parser.add_argument("--skip-setpoint-check", action="store_true")
     return parser
@@ -363,24 +375,37 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
         node.print_status()
-        if node.fsm_state != "MANUAL_CTRL":
-            node.get_logger().warn(
-                "This test expects px4ctrl to start from MANUAL_CTRL before AUTO_TAKEOFF."
+
+        if args.publish_takeoff:
+            if node.fsm_state != "MANUAL_CTRL":
+                node.get_logger().warn(
+                    "Publishing TAKEOFF usually expects px4ctrl to start from MANUAL_CTRL."
+                )
+
+            print(
+                "\nBefore takeoff: keep RC in hover+command mode, sticks centered, "
+                "and verify the flight area is clear."
+            )
+            if args.auto_confirm:
+                print("--auto-confirm is set; publishing TAKEOFF.")
+            else:
+                confirm = input("Type TAKEOFF to publish /px4ctrl/takeoff_land: ").strip()
+                if confirm != "TAKEOFF":
+                    node.get_logger().warn("Takeoff confirmation not received. Exiting.")
+                    return 0
+
+            node.publish_takeoff()
+        else:
+            if args.auto_confirm:
+                node.get_logger().warn(
+                    "--auto-confirm is ignored because --publish-takeoff is not set."
+                )
+            print(
+                "\nManual takeoff mode: this helper will not publish "
+                "/px4ctrl/takeoff_land. Take off manually with the normal UDE "
+                "procedure, then the helper will wait for px4ctrl AUTO_HOVER."
             )
 
-        print(
-            "\nBefore takeoff: keep RC in hover+command mode, sticks centered, "
-            "and verify the flight area is clear."
-        )
-        if args.auto_confirm:
-            print("--auto-confirm is set; publishing TAKEOFF.")
-        else:
-            confirm = input("Type TAKEOFF to publish /px4ctrl/takeoff_land: ").strip()
-            if confirm != "TAKEOFF":
-                node.get_logger().warn("Takeoff confirmation not received. Exiting.")
-                return 0
-
-        node.publish_takeoff()
         if not node.wait_for_auto_hover():
             node.get_logger().error(
                 "AUTO_HOVER was not reached. Check px4ctrl logs for takeoff rejection conditions."

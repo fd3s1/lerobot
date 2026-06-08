@@ -62,7 +62,29 @@ ros2 topic echo --once /mavros/state
 
 一键脚本也会做这些检查。如果 `POSE_PREFLIGHT_REQUIRED=true`，任何关键 topic 检查失败都会退出。
 
-### 4. 无桨自动流程检查
+### 4. 单独 UDE 手动起飞检查
+
+如果只想验证和以前一致的 UDE 起飞/悬停控制链，使用：
+
+```bash
+cd /home/user/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
+
+bash shflies/test_ude_takeoff_hover.sh
+```
+
+这个脚本默认不会发布 `/px4ctrl/takeoff_land`，也不会要求按 Enter 或输入 `TAKEOFF` 来触发起飞。你仍按以前的流程手动起飞；脚本只等待 px4ctrl 进入 `AUTO_HOVER`，然后进入状态查看/降落菜单。
+
+只有在明确需要恢复“helper 代发 TAKEOFF”的旧流程时，才使用：
+
+```bash
+TEST_PUBLISH_TAKEOFF=true \
+TEST_AUTO_CONFIRM=true \
+bash shflies/test_ude_takeoff_hover.sh
+```
+
+其中 `TEST_PUBLISH_TAKEOFF=true` 表示由 helper 发布 `TakeoffLand.TAKEOFF`；`TEST_AUTO_CONFIRM=true` 只在这个模式下生效，表示不再输入 `TAKEOFF` 确认。
+
+### 5. 无桨自动流程检查
 
 默认会在自动节点内部等待确认：脚本先完成 topic 检查、目标/box/无人机 pose 稳定检查并打印锁定快照，然后暂停 ROS 回调刷新；这时按一次 Enter 会立即发布 `TAKEOFF`。px4ctrl 收到 `TAKEOFF` 后先执行水平姿态的电机加速推力渐增，避免未离地时产生水平倾角；加速结束后进入 UDE 竖直爬升。
 
@@ -92,7 +114,7 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 
 在按 Enter 前，确认打印出的 drone/target/box 坐标合理、CH10 不在低位、遥控器姿态安全，必要时保持随时切 CH10 低位释放。按下 Enter 后不再继续刷新起飞前快照，会直接发 `TAKEOFF`。
 
-### 5. CH10 安全释放检查
+### 6. CH10 安全释放检查
 
 无桨时做两类检查：
 
@@ -109,7 +131,7 @@ ros2 topic echo /hls_gripper/centering_offset_m
 ros2 topic echo /hls_gripper/single_contact_need_motion
 ```
 
-### 6. 上桨低风险飞行测试
+### 7. 上桨低风险飞行测试
 
 推荐顺序：
 
