@@ -21,6 +21,12 @@ HLS_STATUS_TOPIC="${HLS_STATUS_TOPIC:-/hls_gripper/status}"
 ATTITUDE_TOPIC="${ATTITUDE_TOPIC:-/mavros/imu/data}"
 TAKEOFF_LAND_TOPIC="${TAKEOFF_LAND_TOPIC:-/px4ctrl/takeoff_land}"
 PX4CTRL_STATE_TOPIC="${PX4CTRL_STATE_TOPIC:-/px4ctrl/state}"
+RC_TOPIC="${RC_TOPIC:-/mavros/rc/in}"
+RC_TIMEOUT_S="${RC_TIMEOUT_S:-0.5}"
+CH10_INDEX="${CH10_INDEX:-9}"
+CH10_OPEN_PWM="${CH10_OPEN_PWM:-1300}"
+CH10_CLOSE_PWM="${CH10_CLOSE_PWM:-1700}"
+FORCE_OPEN_BELOW_Z="${FORCE_OPEN_BELOW_Z:-0.20}"
 
 START_GRIPPER_MANAGER="${START_GRIPPER_MANAGER:-true}"
 GRIPPER_MANAGER_TYPE="${GRIPPER_MANAGER_TYPE:-hls}"
@@ -103,6 +109,10 @@ TARGET_OFFSET_Z="${TARGET_OFFSET_Z:-0.0}"
 BOX_OFFSET_X="${BOX_OFFSET_X:-0.0}"
 BOX_OFFSET_Y="${BOX_OFFSET_Y:-0.0}"
 BOX_OFFSET_Z="${BOX_OFFSET_Z:-0.0}"
+TARGET_HOVER_Z_OFFSET="${TARGET_HOVER_Z_OFFSET:-}"
+TARGET_GRASP_Z_OFFSET="${TARGET_GRASP_Z_OFFSET:-}"
+BOX_HOVER_Z_OFFSET="${BOX_HOVER_Z_OFFSET:-}"
+BOX_PLACE_Z_OFFSET="${BOX_PLACE_Z_OFFSET:-}"
 RELEASE_RETREAT_UP_M="${RELEASE_RETREAT_UP_M:-0.3}"
 RELEASE_RETREAT_FORWARD_M="${RELEASE_RETREAT_FORWARD_M:-1.0}"
 RETREAT_SPEED="${RETREAT_SPEED:-0.4}"
@@ -127,8 +137,8 @@ ABORT_RISE_SPEED="${ABORT_RISE_SPEED:-0.12}"
 OPEN_COMMAND="${OPEN_COMMAND:-100.0}"
 CLOSE_COMMAND="${CLOSE_COMMAND:-0.0}"
 
-WAYPOINT_ARRIVAL_TOLERANCE_M="${WAYPOINT_ARRIVAL_TOLERANCE_M:-0.08}"
-WAYPOINT_ARRIVAL_SETTLE_S="${WAYPOINT_ARRIVAL_SETTLE_S:-0.3}"
+WAYPOINT_ARRIVAL_TOLERANCE_M="${WAYPOINT_ARRIVAL_TOLERANCE_M:-0.06}"
+WAYPOINT_ARRIVAL_SETTLE_S="${WAYPOINT_ARRIVAL_SETTLE_S:-0.4}"
 WAYPOINT_ARRIVAL_TIMEOUT_S="${WAYPOINT_ARRIVAL_TIMEOUT_S:-5.0}"
 POSE_PREFLIGHT_TIMEOUT_S="${POSE_PREFLIGHT_TIMEOUT_S:-6}"
 POSE_PREFLIGHT_REQUIRED="${POSE_PREFLIGHT_REQUIRED:-false}"
@@ -193,6 +203,7 @@ echo "[auto-hls-grasp-place] target topic: ${TARGET_POSE_TOPIC}"
 echo "[auto-hls-grasp-place] box topic: ${BOX_POSE_TOPIC}"
 echo "[auto-hls-grasp-place] drone topic: ${DRONE_POSE_TOPIC}"
 echo "[auto-hls-grasp-place] cmd topic: ${CMD_TOPIC}"
+echo "[auto-hls-grasp-place] rc safety: topic=${RC_TOPIC} timeout=${RC_TIMEOUT_S}s ch10_index=${CH10_INDEX} open<=${CH10_OPEN_PWM} close>=${CH10_CLOSE_PWM} force_open_below_z=${FORCE_OPEN_BELOW_Z}"
 echo "[auto-hls-grasp-place] gripper topics: scalar=${GRIPPER_TOPIC} pair=${GRIPPER_COMMAND_PAIR_TOPIC} feedback=${GRIPPER_FEEDBACK_TOPIC} status=${HLS_STATUS_TOPIC}"
 echo "[auto-hls-grasp-place] manager: type=${GRIPPER_MANAGER_TYPE} start=${START_GRIPPER_MANAGER} port=${GRIPPER_MANAGER_PORT} dry_run=${HLS_DRY_RUN}"
 echo "[auto-hls-grasp-place] hls sdk root: ${HLS_SDK_ROOT:-<auto>}"
@@ -205,6 +216,9 @@ echo "[auto-hls-grasp-place] hls motion profile: name=${HLS_MOTION_PROFILE:-<jso
 echo "[auto-hls-grasp-place] hls search override: speed=${HLS_SEARCH_SPEED:-<profile>} acc=${HLS_SEARCH_ACC:-<profile>} torque=${HLS_SEARCH_TORQUE_LIMIT:-<profile>}"
 echo "[auto-hls-grasp-place] centering: kp=${CENTER_KP} vmax=${CENTER_VMAX_MPS} deadband=${CENTER_DEADBAND_M} offset_max=${CENTER_OFFSET_MAX_M} sign=${CENTER_COMMAND_SIGN} hls_error_gain=${HLS_CENTER_ERROR_GAIN}"
 echo "[auto-hls-grasp-place] single-contact: vmax=${SINGLE_CONTACT_VMAX_MPS} offset_max=${SINGLE_CONTACT_OFFSET_MAX_M} sign=${SINGLE_CONTACT_BODY_Y_SIGN} timeout=${HLS_SINGLE_CONTACT_TIMEOUT_S} limit_ratio=${HLS_SINGLE_CONTACT_LIMIT_RATIO} hls_offset_limit=${HLS_SINGLE_CONTACT_OFFSET_LIMIT_M}"
+echo "[auto-hls-grasp-place] planning offsets: target=(${TARGET_OFFSET_X}, ${TARGET_OFFSET_Y}, ${TARGET_OFFSET_Z})m box=(${BOX_OFFSET_X}, ${BOX_OFFSET_Y}, ${BOX_OFFSET_Z})m"
+echo "[auto-hls-grasp-place] optional z offsets: target_hover=${TARGET_HOVER_Z_OFFSET:-<auto>} target_grasp=${TARGET_GRASP_Z_OFFSET:-<auto>} box_hover=${BOX_HOVER_Z_OFFSET:-<auto>} box_place=${BOX_PLACE_Z_OFFSET:-<auto>}"
+echo "[auto-hls-grasp-place] actual arrival gate: tol=${WAYPOINT_ARRIVAL_TOLERANCE_M}m settle=${WAYPOINT_ARRIVAL_SETTLE_S}s timeout=${WAYPOINT_ARRIVAL_TIMEOUT_S}s"
 echo "[auto-hls-grasp-place] no LeRobot record process will be started."
 
 set +u
@@ -376,6 +390,12 @@ auto_args=(
   --hls-status-topic "${HLS_STATUS_TOPIC}"
   --hls-status-timeout-s "${HLS_STATUS_TIMEOUT_S}"
   --hls-grasp-timeout-s "${HLS_GRASP_TIMEOUT_S}"
+  --rc-topic "${RC_TOPIC}"
+  --rc-timeout-s "${RC_TIMEOUT_S}"
+  --ch10-index "${CH10_INDEX}"
+  --ch10-open-pwm "${CH10_OPEN_PWM}"
+  --ch10-close-pwm "${CH10_CLOSE_PWM}"
+  --force-open-below-z "${FORCE_OPEN_BELOW_Z}"
   --open-command "${OPEN_COMMAND}"
   --close-command "${CLOSE_COMMAND}"
   --center-deadband-m "${CENTER_DEADBAND_M}"
@@ -392,6 +412,18 @@ auto_args=(
 
 if [[ -n "${CMD_LAND_Z}" ]]; then
   auto_args+=(--cmd-land-z "${CMD_LAND_Z}")
+fi
+if [[ -n "${TARGET_HOVER_Z_OFFSET}" ]]; then
+  auto_args+=(--target-hover-z-offset "${TARGET_HOVER_Z_OFFSET}")
+fi
+if [[ -n "${TARGET_GRASP_Z_OFFSET}" ]]; then
+  auto_args+=(--target-grasp-z-offset "${TARGET_GRASP_Z_OFFSET}")
+fi
+if [[ -n "${BOX_HOVER_Z_OFFSET}" ]]; then
+  auto_args+=(--box-hover-z-offset "${BOX_HOVER_Z_OFFSET}")
+fi
+if [[ -n "${BOX_PLACE_Z_OFFSET}" ]]; then
+  auto_args+=(--box-place-z-offset "${BOX_PLACE_Z_OFFSET}")
 fi
 if bool_is_true "${SMOOTH_TRAJECTORY}"; then
   auto_args+=(--smooth-trajectory)

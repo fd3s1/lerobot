@@ -8,7 +8,9 @@ import sys
 import time
 from dataclasses import dataclass, replace
 
+from mavros_msgs.msg import RCIn
 import rclpy
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.utilities import remove_ros_args
 from std_msgs.msg import Bool, Float64, String
 
@@ -37,6 +39,12 @@ class HlsTaskConfig:
     hls_status_topic: str
     hls_status_timeout_s: float
     hls_grasp_timeout_s: float
+    rc_topic: str
+    rc_timeout_s: float
+    ch10_index: int
+    ch10_open_pwm: int
+    ch10_close_pwm: int
+    force_open_below_z: float
     open_command: float
     close_command: float
     center_deadband_m: float
@@ -68,6 +76,10 @@ class StandardHlsStatus:
     right_at_close_limit: bool = False
 
 
+class AutoHlsSafetyAbort(RuntimeError):
+    pass
+
+
 def status_prefix_from_topic(topic: str) -> str:
     topic = topic.rstrip("/")
     if topic.endswith("/status"):
@@ -82,6 +94,15 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
         self.status_prefix = status_prefix_from_topic(hls_config.hls_status_topic)
         self.hls_status = StandardHlsStatus()
         self.hls_status_stamps: dict[str, float] = {}
+        self.rc: RCIn | None = None
+        self.rc_received_s: float | None = None
+        self.last_ch10_pwm: int | None = None
+        self.mission_safety_armed = False
+        self.safety_abort_active = False
+        self.hls_close_allowed = False
+        self.hls_payload_attached = False
+        self.last_pregrasp_open_s = 0.0
+        self.last_safety_open_s = 0.0
         self.create_subscription(String, f"{self.status_prefix}/state", self._string_cb("state"), 10)
         self.create_subscription(String, f"{self.status_prefix}/fault_reason", self._string_cb("fault_reason"), 10)
         self.create_subscription(Float64, f"{self.status_prefix}/center_error_m", self._float_cb("center_error_m"), 10)
@@ -108,9 +129,17 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
             "right_at_close_limit",
         ):
             self.create_subscription(Bool, f"{self.status_prefix}/{name}", self._bool_cb(name), 10)
+        rc_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+        self.create_subscription(RCIn, hls_config.rc_topic, self._rc_cb, rc_qos)
         self.get_logger().info(
             "Auto HLS grasp/place started without dataset recording. "
-            f"status_prefix={self.status_prefix}"
+            f"status_prefix={self.status_prefix} rc_topic={hls_config.rc_topic} "
+            f"ch10_index={hls_config.ch10_index}"
         )
 
     def _string_cb(self, name: str):
@@ -133,6 +162,14 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
             self.hls_status_stamps[name] = time.monotonic()
 
         return callback
+
+    def _rc_cb(self, msg: RCIn) -> None:
+        self.rc = msg
+        self.rc_received_s = time.monotonic()
+        if 0 <= self.hls_config.ch10_index < len(msg.channels):
+            self.last_ch10_pwm = int(msg.channels[self.hls_config.ch10_index])
+        else:
+            self.last_ch10_pwm = None
 
     def wait_for_record_ready(self) -> None:
         return
@@ -171,6 +208,104 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
                 return self.hls_status
         raise RuntimeError(f"Timed out waiting for HLS gripper standard status under {self.status_prefix}.")
 
+    def rc_fresh(self) -> bool:
+        return (
+            self.rc is not None
+            and self.rc_received_s is not None
+            and time.monotonic() - self.rc_received_s <= self.hls_config.rc_timeout_s
+        )
+
+    def ch10_open_requested(self) -> bool:
+        return self.last_ch10_pwm is None or self.last_ch10_pwm <= self.hls_config.ch10_open_pwm
+
+    def wait_for_rc_safety_ready(self) -> None:
+        deadline = time.monotonic() + max(1.0, self.config.state_timeout_s)
+        while rclpy.ok() and time.monotonic() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.05)
+            if self.rc_fresh():
+                if self.ch10_open_requested():
+                    raise AutoHlsSafetyAbort(
+                        f"CH10 is low/open before automatic takeoff; pwm={self.last_ch10_pwm}."
+                    )
+                self.get_logger().info(
+                    f"CH10 safety ready: pwm={self.last_ch10_pwm}, "
+                    f"open<={self.hls_config.ch10_open_pwm}, close>={self.hls_config.ch10_close_pwm}."
+                )
+                return
+        raise AutoHlsSafetyAbort(f"No fresh RC input on {self.hls_config.rc_topic} before automatic takeoff.")
+
+    def force_open_for_safety(self, reason: str) -> None:
+        now = time.monotonic()
+        self.hls_close_allowed = False
+        self.hls_payload_attached = False
+        if now - self.last_safety_open_s >= 0.2:
+            self.get_logger().warn(f"HLS safety open: {reason}")
+            self.publish_gripper(self.hls_config.open_command, repeats=3, interval_s=0.0)
+            self.last_safety_open_s = now
+
+    def raise_if_safety_abort(self, phase: str) -> None:
+        if self.safety_abort_active or not self.mission_safety_armed:
+            return
+        if not self.rc_fresh():
+            reason = f"RC stale during {phase}"
+            self.force_open_for_safety(reason)
+            raise AutoHlsSafetyAbort(reason)
+        if self.ch10_open_requested():
+            reason = f"CH10 low/open during {phase}; pwm={self.last_ch10_pwm}"
+            self.force_open_for_safety(reason)
+            raise AutoHlsSafetyAbort(reason)
+        if self.hls_close_allowed or self.hls_payload_attached:
+            if self.px4ctrl_state != "CMD_CTRL":
+                reason = f"px4ctrl left CMD_CTRL during {phase}; latest={self.px4ctrl_state!r}"
+                self.force_open_for_safety(reason)
+                raise AutoHlsSafetyAbort(reason)
+            drone = self.poses.get("drone")
+            if (
+                drone is not None
+                and self.pose_fresh("drone")
+                and drone.z <= self.hls_config.force_open_below_z
+            ):
+                reason = (
+                    f"drone below gripper safety height during {phase}: "
+                    f"z={drone.z:.3f} <= {self.hls_config.force_open_below_z:.3f}"
+                )
+                self.force_open_for_safety(reason)
+                raise AutoHlsSafetyAbort(reason)
+
+    def keep_open_before_close_if_needed(self) -> None:
+        if self.safety_abort_active or self.hls_close_allowed or self.hls_payload_attached:
+            return
+        now = time.monotonic()
+        if now - self.last_pregrasp_open_s >= 0.2:
+            self.publish_gripper(self.hls_config.open_command, repeats=1, interval_s=0.0)
+            self.last_pregrasp_open_s = now
+
+    def publish_cmd(self, pose: PoseSample) -> None:
+        self.raise_if_safety_abort("position command")
+        super().publish_cmd(pose)
+        self.keep_open_before_close_if_needed()
+
+    def publish_gripper_ramp(
+        self,
+        start: float,
+        end: float,
+        duration_s: float,
+        hold_pose: PoseSample | None = None,
+    ) -> None:
+        if end >= self.hls_config.open_command - 1e-6:
+            self.hls_close_allowed = False
+            self.hls_payload_attached = False
+        super().publish_gripper_ramp(start, end, duration_s, hold_pose)
+
+    def run_sequence(self) -> None:
+        self.wait_for_rc_safety_ready()
+        self.mission_safety_armed = True
+        try:
+            super().run_sequence()
+        finally:
+            self.hls_close_allowed = False
+            self.hls_payload_attached = False
+
     def pose_with_body_y_offset(self, reference: PoseSample, body_y_offset_m: float) -> PoseSample:
         return self.checked_pose(
             x=reference.x - math.sin(reference.yaw) * body_y_offset_m,
@@ -181,6 +316,8 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
 
     def abort_before_lift(self, current: PoseSample, reference: PoseSample, reason: str) -> PoseSample:
         self.get_logger().error(f"HLS grasp failed before lift: {reason}")
+        self.hls_close_allowed = False
+        self.hls_payload_attached = False
         self.publish_gripper(self.hls_config.open_command, repeats=5)
         abort_z = min(self.config.z_max, max(current.z, reference.z + self.hls_config.abort_rise_m))
         abort_pose = self.checked_pose(current.x, current.y, abort_z, current.yaw)
@@ -220,6 +357,9 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
     def soft_grasp(self, reference: PoseSample) -> PoseSample:
         self.wait_for_hls_status()
         self.hold_cmd(reference, 0.3)
+        self.raise_if_safety_abort("pre-HLS grasp")
+        self.hls_close_allowed = True
+        self.hls_payload_attached = False
         self.publish_gripper(self.hls_config.close_command, repeats=5)
 
         period = 1.0 / self.config.rate_hz
@@ -243,6 +383,11 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
 
             if self.px4ctrl_state != "CMD_CTRL":
                 raise RuntimeError(f"px4ctrl left CMD_CTRL during HLS grasp; latest={self.px4ctrl_state!r}.")
+            try:
+                self.raise_if_safety_abort("HLS grasp")
+            except AutoHlsSafetyAbort as exc:
+                latest = self.abort_before_lift(latest, reference, str(exc))
+                raise
 
             try:
                 status = self.latest_hls_status_or_raise()
@@ -256,6 +401,7 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
 
             if status.safe_to_lift or status.state == "LIFT_READY":
                 self.get_logger().info("HLS reports safe_to_lift; automatic lift may start.")
+                self.hls_payload_attached = True
                 return latest
 
             phase, assist_active, raw_target_offset_m, target_offset_m, offset_limit_m, vmax_mps = (
@@ -316,14 +462,38 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
         raise RuntimeError("HLS grasp timed out before safe_to_lift.")
 
     def emergency_open_and_land(self) -> None:
+        self.safety_abort_active = True
+        self.hls_close_allowed = False
+        self.hls_payload_attached = False
         self.get_logger().warn("Emergency cleanup: opening HLS gripper.")
         self.publish_gripper(self.hls_config.open_command, repeats=5)
-        if not self.config.no_land:
+        if self.config.no_land:
+            return
+        if self.px4ctrl_state != "CMD_CTRL" or not self.pose_fresh("drone"):
             self.get_logger().warn(
-                f"Stopping position commands for {self.config.command_stop_before_land_s:.1f}s before LAND."
+                "Emergency cleanup will not command-land because CMD_CTRL or fresh drone pose is unavailable. "
+                f"px4ctrl_state={self.px4ctrl_state!r} pose_fresh={self.pose_fresh('drone')}."
             )
-            self.spin_sleep(self.config.command_stop_before_land_s)
-            self.publish_land()
+            return
+        drone = self.poses["drone"]
+        current = self.checked_pose(drone.x, drone.y, drone.z, drone.yaw)
+        landing_z = (
+            self.config.cmd_land_z
+            if self.config.cmd_land_z is not None
+            else drone.z + self.config.cmd_land_z_offset_m
+        )
+        landing_pose = self.checked_pose(current.x, current.y, landing_z, current.yaw)
+        self.get_logger().warn(
+            f"Emergency CMD_CTRL descent with gripper open: z={landing_pose.z:.3f} "
+            f"speed={self.config.cmd_land_speed:.3f}."
+        )
+        self.fly_segment(
+            current,
+            landing_pose,
+            self.config.cmd_land_speed,
+            "Emergency CMD_CTRL descent landing",
+            keep_gripper_open=True,
+        )
 
 
 def parse_configs() -> tuple[AutoConfig, HlsTaskConfig]:
@@ -332,6 +502,12 @@ def parse_configs() -> tuple[AutoConfig, HlsTaskConfig]:
     hls_parser.add_argument("--hls-status-topic", default="/hls_gripper/status")
     hls_parser.add_argument("--hls-status-timeout-s", type=float, default=0.8)
     hls_parser.add_argument("--hls-grasp-timeout-s", type=float, default=12.0)
+    hls_parser.add_argument("--rc-topic", default="/mavros/rc/in")
+    hls_parser.add_argument("--rc-timeout-s", type=float, default=0.5)
+    hls_parser.add_argument("--ch10-index", type=int, default=9)
+    hls_parser.add_argument("--ch10-open-pwm", type=int, default=1300)
+    hls_parser.add_argument("--ch10-close-pwm", type=int, default=1700)
+    hls_parser.add_argument("--force-open-below-z", type=float, default=0.20)
     hls_parser.add_argument("--open-command", type=float, default=100.0)
     hls_parser.add_argument("--close-command", type=float, default=0.0)
     hls_parser.add_argument("--center-deadband-m", type=float, default=0.005)
@@ -365,6 +541,14 @@ def parse_configs() -> tuple[AutoConfig, HlsTaskConfig]:
         raise ValueError("--hls-status-timeout-s must be positive.")
     if hls_config.hls_grasp_timeout_s <= 0.0:
         raise ValueError("--hls-grasp-timeout-s must be positive.")
+    if hls_config.rc_timeout_s <= 0.0:
+        raise ValueError("--rc-timeout-s must be positive.")
+    if hls_config.ch10_index < 0:
+        raise ValueError("--ch10-index must be non-negative.")
+    if hls_config.ch10_open_pwm >= hls_config.ch10_close_pwm:
+        raise ValueError("--ch10-open-pwm must be less than --ch10-close-pwm.")
+    if hls_config.force_open_below_z < auto_config.z_min or hls_config.force_open_below_z > auto_config.z_max:
+        raise ValueError("--force-open-below-z must be inside configured flight z limits.")
     if hls_config.center_kp < 0.0 or hls_config.center_vmax_mps <= 0.0 or hls_config.center_offset_max_m <= 0.0:
         raise ValueError("--center-kp must be non-negative; center speed/offset limits must be positive.")
     if hls_config.single_contact_vmax_mps <= 0.0 or hls_config.single_contact_offset_max_m <= 0.0:
