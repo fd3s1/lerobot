@@ -99,7 +99,6 @@ private:
   void motors_idling(Desired_State_t &des);
   void land_detector(State_t state, const Desired_State_t &des, const Odom_Data_t &odom);
   void set_start_pose_for_takeoff_land(const Odom_Data_t &odom);
-  void refresh_takeoff_start_lateral(const Odom_Data_t &odom);
   void set_hov_with_odom();
   void set_hov_with_rc();
   void publish_ctrl(const Controller_Output_t &u, const rclcpp::Time &stamp);

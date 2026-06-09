@@ -146,6 +146,7 @@ class AutoConfig:
     stable_pos_tolerance_m: float
     takeoff_timeout_s: float
     takeoff_mode: str
+    post_takeoff_settle_s: float
     cmd_ctrl_timeout_s: float
     record_ready_timeout_s: float
     waypoint_arrival_tolerance_m: float
@@ -1056,6 +1057,11 @@ class AutoGraspPlaceDataset(Node):
                 "Manual takeoff mode: not publishing TAKEOFF; waiting for px4ctrl AUTO_HOVER."
             )
         self.wait_for_state("AUTO_HOVER", self.config.takeoff_timeout_s)
+        if self.config.post_takeoff_settle_s > 0.0:
+            self.get_logger().info(
+                f"Holding AUTO_HOVER for {self.config.post_takeoff_settle_s:.2f}s before entering CMD_CTRL."
+            )
+            self.spin_sleep(self.config.post_takeoff_settle_s)
 
         current_drone = self.poses.get("drone", drone)
         hold = self.checked_pose(current_drone.x, current_drone.y, current_drone.z, current_drone.yaw)
@@ -1323,6 +1329,12 @@ def parse_args() -> AutoConfig:
         default="auto",
         help="'auto' publishes px4ctrl TAKEOFF; 'manual' waits for the pilot/manual flow to reach AUTO_HOVER.",
     )
+    parser.add_argument(
+        "--post-takeoff-settle-s",
+        type=float,
+        default=2.0,
+        help="After AUTO_TAKEOFF reaches AUTO_HOVER, wait this long before publishing /position_cmd.",
+    )
     parser.add_argument("--cmd-ctrl-timeout-s", type=float, default=10.0)
     parser.add_argument("--record-ready-timeout-s", type=float, default=60.0)
     parser.add_argument("--waypoint-arrival-tolerance-m", type=float, default=0.08)
@@ -1407,6 +1419,8 @@ def parse_args() -> AutoConfig:
         raise ValueError("--payload-lift-speed and --payload-transfer-speed must be positive.")
     if args.post_grasp_settle_s < 0.0 or args.post_lift_settle_s < 0.0:
         raise ValueError("--post-grasp-settle-s and --post-lift-settle-s must be non-negative.")
+    if args.post_takeoff_settle_s < 0.0:
+        raise ValueError("--post-takeoff-settle-s must be non-negative.")
     if args.retreat_speed <= 0.0:
         raise ValueError("--retreat-speed must be positive.")
     if args.cmd_land_speed <= 0.0:

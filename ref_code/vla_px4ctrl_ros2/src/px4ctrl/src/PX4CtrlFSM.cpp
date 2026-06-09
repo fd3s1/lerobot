@@ -24,6 +24,23 @@ Eigen::Vector3d limit_norm(const Eigen::Vector3d &value, double max_norm)
   return value * (max_norm / norm);
 }
 
+Eigen::Vector3d quaternion_to_rpy(const Eigen::Quaterniond &q)
+{
+  const double sinr_cosp = 2.0 * (q.w() * q.x() + q.y() * q.z());
+  const double cosr_cosp = 1.0 - 2.0 * (q.x() * q.x() + q.y() * q.y());
+  const double roll = std::atan2(sinr_cosp, cosr_cosp);
+
+  const double sinp = 2.0 * (q.w() * q.y() - q.z() * q.x());
+  const double pitch = std::abs(sinp) >= 1.0 ?
+    std::copysign(1.5707963267948966, sinp) :
+    std::asin(sinp);
+
+  const double siny_cosp = 2.0 * (q.w() * q.z() + q.x() * q.y());
+  const double cosy_cosp = 1.0 - 2.0 * (q.y() * q.y() + q.z() * q.z());
+  const double yaw = std::atan2(siny_cosp, cosy_cosp);
+  return Eigen::Vector3d(roll, pitch, yaw);
+}
+
 }  // namespace
 
 PX4CtrlFSM::PX4CtrlFSM(Parameter_t &param_, LinearControl &controller_, rclcpp::Node *node)
@@ -172,7 +189,6 @@ void PX4CtrlFSM::process()
       } else if (
         (now_time - takeoff_land.toggle_takeoff_land_time).seconds() <
         AutoTakeoffLand_t::MOTORS_SPEEDUP_TIME) {
-        refresh_takeoff_start_lateral(odom_data);
         rotor_speedup_during_takeoff = true;
         des = get_rotor_speed_up_des(now_time);
       } else if (odom_data.p(2) >= takeoff_land.start_pose(2) + param.takeoff_land.height) {
@@ -185,6 +201,25 @@ void PX4CtrlFSM::process()
       } else {
         des = get_takeoff_land_des(param.takeoff_land.speed);
       }
+      RCLCPP_INFO_THROTTLE(
+        node_->get_logger(),
+        *node_->get_clock(),
+        500,
+        "[px4ctrl] AUTO_TAKEOFF phase=%s odom=(%.3f,%.3f,%.3f) start=(%.3f,%.3f,%.3f) "
+        "des=(%.3f,%.3f,%.3f) vel=(%.3f,%.3f,%.3f)",
+        rotor_speedup_during_takeoff ? "speedup" : "climb",
+        odom_data.p.x(),
+        odom_data.p.y(),
+        odom_data.p.z(),
+        takeoff_land.start_pose.x(),
+        takeoff_land.start_pose.y(),
+        takeoff_land.start_pose.z(),
+        des.p.x(),
+        des.p.y(),
+        des.p.z(),
+        odom_data.v.x(),
+        odom_data.v.y(),
+        odom_data.v.z());
       break;
     }
 
@@ -271,6 +306,25 @@ void PX4CtrlFSM::process()
       controller.resetControlState();
     } else {
       u = controller.calculateControl(safe_des, odom_data, imu_data, now_time);
+    }
+    if (state == AUTO_TAKEOFF) {
+      const Eigen::Vector3d cmd_rpy = quaternion_to_rpy(u.q);
+      RCLCPP_INFO_THROTTLE(
+        node_->get_logger(),
+        *node_->get_clock(),
+        500,
+        "[px4ctrl] AUTO_TAKEOFF output err=(%.3f,%.3f,%.3f) cmd_rpy=(%.3f,%.3f,%.3f) "
+        "thrust=%.3f bodyrate=(%.3f,%.3f,%.3f)",
+        safe_des.p.x() - odom_data.p.x(),
+        safe_des.p.y() - odom_data.p.y(),
+        safe_des.p.z() - odom_data.p.z(),
+        cmd_rpy.x(),
+        cmd_rpy.y(),
+        cmd_rpy.z(),
+        u.thrust,
+        u.bodyrates.x(),
+        u.bodyrates.y(),
+        u.bodyrates.z());
     }
     publish_ctrl(u, now_time);
     publish_expert_pose(safe_des, now_time);
@@ -394,14 +448,6 @@ void PX4CtrlFSM::set_start_pose_for_takeoff_land(const Odom_Data_t &odom)
   takeoff_land.start_pose(3) =
     uav_utils::normalize_angle(uav_utils::get_yaw_from_quaternion(odom.q));
   takeoff_land.toggle_takeoff_land_time = node_->now();
-}
-
-void PX4CtrlFSM::refresh_takeoff_start_lateral(const Odom_Data_t &odom)
-{
-  takeoff_land.start_pose.x() = odom.p.x();
-  takeoff_land.start_pose.y() = odom.p.y();
-  takeoff_land.start_pose(3) =
-    uav_utils::normalize_angle(uav_utils::get_yaw_from_quaternion(odom.q));
 }
 
 void PX4CtrlFSM::set_hov_with_odom()
@@ -570,7 +616,7 @@ void PX4CtrlFSM::publish_gripper_safety(const rclcpp::Time &now_time)
 
 void PX4CtrlFSM::publish_gripper_from_rc()
 {
-  if (!gripper_cmd_pub || !rc_data.received) {
+  if (!gripper_cmd_pub || !rc_data.received || param.gripper.rc_channel <= 0) {
     return;
   }
 

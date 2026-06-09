@@ -485,6 +485,9 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
         self.publish_gripper(self.hls_config.open_command, repeats=5)
         if self.config.no_land:
             return
+        refresh_deadline = time.monotonic() + 0.5
+        while rclpy.ok() and time.monotonic() < refresh_deadline and not self.pose_fresh("drone"):
+            rclpy.spin_once(self, timeout_sec=0.05)
         if self.px4ctrl_state != "CMD_CTRL" or not self.pose_fresh("drone"):
             self.get_logger().warn(
                 "Emergency cleanup will not command-land because CMD_CTRL or fresh drone pose is unavailable. "

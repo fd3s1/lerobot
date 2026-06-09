@@ -20,6 +20,7 @@ MAVROS_LIGHT="${MAVROS_LIGHT:-true}"
 MAVROS_LIGHT_PLUGINLISTS_FILE="${MAVROS_LIGHT_PLUGINLISTS_FILE:-${WORKSPACE_DIR}/config/mavros_vla_pluginlists.yaml}"
 MAVROS_FULL_PLUGINLISTS_FILE="${MAVROS_FULL_PLUGINLISTS_FILE:-/opt/ros/humble/share/mavros/launch/px4_pluginlists.yaml}"
 START_PX4CTRL="${START_PX4CTRL:-true}"
+PX4CTRL_GRIPPER_RC_CHANNEL="${PX4CTRL_GRIPPER_RC_CHANNEL:-}"
 
 PIDS=()
 CLEANED_UP=false
@@ -70,6 +71,9 @@ echo "[run-mocap-mavros] bridge restamp: ${BRIDGE_RESTAMP}"
 echo "[run-mocap-mavros] mavros light mode: ${MAVROS_LIGHT}"
 echo "[run-mocap-mavros] start px4ctrl: ${START_PX4CTRL}"
 echo "[run-mocap-mavros] px4ctrl params: ${PX4CTRL_PARAMS_FILE}"
+if [[ -n "${PX4CTRL_GRIPPER_RC_CHANNEL}" ]]; then
+  echo "[run-mocap-mavros] px4ctrl gripper.rc_channel override: ${PX4CTRL_GRIPPER_RC_CHANNEL}"
+fi
 
 if [[ "${MAVROS_LIGHT}" == "true" ]]; then
   MAVROS_PLUGINLISTS_FILE="${MAVROS_LIGHT_PLUGINLISTS_FILE}"
@@ -104,7 +108,11 @@ start_process ros2 run px4ctrl vrpn_to_mavros_vision_bridge.py --ros-args \
 sleep 1
 
 if [[ "${START_PX4CTRL}" == "true" ]]; then
-  start_process ros2 run px4ctrl px4ctrl_node --ros-args --params-file "${PX4CTRL_PARAMS_FILE}"
+  px4ctrl_args=(ros2 run px4ctrl px4ctrl_node --ros-args --params-file "${PX4CTRL_PARAMS_FILE}")
+  if [[ -n "${PX4CTRL_GRIPPER_RC_CHANNEL}" ]]; then
+    px4ctrl_args+=(-p "gripper.rc_channel:=${PX4CTRL_GRIPPER_RC_CHANNEL}")
+  fi
+  start_process "${px4ctrl_args[@]}"
 else
   echo "[run-mocap-mavros] skipping px4ctrl_node because START_PX4CTRL=${START_PX4CTRL}"
 fi

@@ -86,7 +86,7 @@ bash shflies/test_ude_takeoff_hover.sh
 
 ### 5. 无桨自动流程检查
 
-一键 HLS-UDE 脚本默认发布 `TAKEOFF` 自动起飞。自动节点会先完成 topic 检查、目标/box/无人机 pose 稳定检查并打印锁定快照，然后暂停 ROS 回调刷新；按一次 Enter 后发布 `TAKEOFF`。px4ctrl 在电机加速阶段会持续刷新起飞参考的 x/y/yaw，并使用 UDE 姿态闭环稳住横向，推力仍按斜坡从最小值缓慢增加到 hover thrust，因此真正开始爬升时不会使用 3 秒前收到 `TAKEOFF` 时的旧横向参考。
+一键 HLS-UDE 脚本默认发布 `TAKEOFF` 自动起飞。自动节点会先完成 topic 检查、目标/box/无人机 pose 稳定检查并打印锁定快照，然后暂停 ROS 回调刷新；按一次 Enter 后发布 `TAKEOFF`。px4ctrl 在电机加速阶段锁定起飞 x/y/yaw 参考，并使用 UDE 姿态闭环稳住横向，推力仍按斜坡从最小值缓慢增加到 hover thrust；正式爬升段继续由 UDE 正常计算推力和姿态。
 
 如果需要临时回到手动起飞接管流程，可显式设置 `TAKEOFF_MODE=manual`。该模式不发布 `TAKEOFF`，只等待你手动起飞后进入 `AUTO_HOVER`。
 
@@ -191,7 +191,7 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 | 阶段 | 飞机动作 | 夹爪动作 | 保护逻辑 |
 | --- | --- | --- | --- |
 | 启动检查 | 启动 stack，检查 pose/RC/state | 不 close | topic 缺失可拒绝启动 |
-| 自动起飞 | 发布 `TakeoffLand.TAKEOFF`，加速段刷新横向参考并用 UDE 姿态闭环、推力斜坡限幅，随后 UDE 竖直爬升 | 保持 open | 等待 `AUTO_HOVER`；`TAKEOFF_MODE=manual` 时才等待手动起飞 |
+| 自动起飞 | 发布 `TakeoffLand.TAKEOFF`，加速段锁定起飞参考并用 UDE 姿态闭环、推力斜坡限幅，随后 UDE 竖直爬升 | 保持 open | 等待 `AUTO_HOVER`；`TAKEOFF_MODE=manual` 时才等待手动起飞 |
 | 进入 `CMD_CTRL` | 发布当前位置 `/position_cmd` | 保持 open | 进入失败则退出 |
 | 飞到目标上方 | 跟随目标 live waypoint | 保持 open | 未到位不夹 |
 | 下降到抓取点 | 到目标抓取高度 | 保持 open | 到位误差和 settle 检查 |
@@ -210,10 +210,12 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 | --- | --- | --- | --- |
 | `START_STACK` | `true` | 是否由一键脚本启动 mocap、MAVROS、vision bridge、px4ctrl。 | 已手动启动这些节点时设为 `false`。 |
 | `START_PX4CTRL` | `true` | 传给 `run_mocap_mavros.sh`，决定是否启动 `px4ctrl_node`。 | 只想用已有 px4ctrl 时设为 `false`。 |
+| `PX4CTRL_GRIPPER_RC_CHANNEL` | `0` | HLS-UDE 一键脚本启动 px4ctrl 时覆盖 `gripper.rc_channel`。 | 默认禁用 px4ctrl 的 CH10 直接 open/close，CH10 安全释放由自动 HLS 节点处理；若设回 `10`，px4ctrl 会把 CH10 高位直接发 close 到 `/gripper/command`。 |
 | `STACK_STARTUP_WAIT_S` | `8` | 启动底层 stack 后等待的秒数。 | 电脑慢或 MAVROS 启动慢时增大。 |
 | `WAIT_FOR_ENTER` | `false` | 一键 shell 外层是否额外等待 Enter。 | 默认 `false`，避免两次 Enter；通常不改。 |
 | `TAKEOFF_MODE` | `auto` | 一键 HLS-UDE 脚本的起飞方式。 | 默认 `auto`：发布 `TAKEOFF` 自动起飞；设 `manual` 时不发布 `TAKEOFF`，只等待手动起飞到 `AUTO_HOVER`。 |
 | `CONFIRM_BEFORE_TAKEOFF` | `true` | 自动节点完成 pose 锁定后是否等待一次 Enter 再继续。 | 真机建议保持 `true`，避免 topic 检查通过后立刻起飞。 |
+| `POST_TAKEOFF_SETTLE_S` | `2.0` | 自动起飞到 `AUTO_HOVER` 后，进入 `CMD_CTRL` 前额外等待的稳定悬停时间。 | 起飞后姿态/速度还没稳时增大；想更快接管时减小。 |
 | `KEEP_STACK_ON_INTERRUPT` | `false` | Ctrl+C 后是否保留 stack。 | 空中调试时可临时设 `true`，避免误杀控制链。 |
 | `CLEANUP_STACK_ON_EXIT` | `true` | 脚本退出时是否关闭由它启动的 stack。 | 想保留 MAVROS/px4ctrl 继续观察时设 `false`。 |
 
@@ -325,9 +327,9 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 
 | 参数 | 默认值 | 作用 | 调参建议 |
 | --- | --- | --- | --- |
-| `WAYPOINT_ARRIVAL_TOLERANCE_M` | `0.08` | 实际无人机位置到命令点的容许误差。 | 越小越严格，太小可能等不到；真机初测不建议低于 `0.08`。 |
+| `WAYPOINT_ARRIVAL_TOLERANCE_M` | `0.12` | 实际无人机位置到命令点的容许误差。 | 越小越严格，太小可能等不到；真机初测不建议低于 `0.10`。 |
 | `WAYPOINT_ARRIVAL_SETTLE_S` | `0.4` | 误差进入容差后必须持续稳定的时间。 | 越大越稳但流程变慢。 |
-| `WAYPOINT_ARRIVAL_TIMEOUT_S` | `15.0` | 等待实际到位的最长时间。 | 控制响应慢时可加大；超时会触发 open 并执行安全下降。 |
+| `WAYPOINT_ARRIVAL_TIMEOUT_S` | `30.0` | 等待实际到位的最长时间。 | 控制响应慢时可加大；超时会触发 open 并执行安全下降。 |
 | `ARRIVAL_POSE_TOPIC` / `--arrival-pose-topic` | `/mavros/vision_pose/pose` | 到位判定使用的无人机实际位置。 | 控制仍使用 `DRONE_POSE_TOPIC=/mavros/local_position/odom`；不要把控制位姿改成 vision pose。 |
 | `POSE_TIMEOUT_S` / `--pose-timeout-s` | `0.5` | pose 新鲜度阈值。 | mocap 丢帧时会触发 stale。 |
 | `STABLE_DURATION_S` / `--stable-duration-s` | `0.5` | 起飞前等待目标/box/drone 姿态稳定时间。 | 目标抖动大时增大。 |
