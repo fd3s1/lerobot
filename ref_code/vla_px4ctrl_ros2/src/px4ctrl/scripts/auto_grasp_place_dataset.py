@@ -10,13 +10,13 @@ from dataclasses import dataclass
 from typing import Literal
 
 import rclpy
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Vector3Stamped
 from nav_msgs.msg import Odometry
 from quadrotor_msgs.msg import GripperCommandPair, GripperFeedback, TakeoffLand
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.utilities import remove_ros_args
-from std_msgs.msg import Float64, String
+from std_msgs.msg import Float64, Int32, String
 
 from gripper_soft_grasp_lib import GripperFeedbackState, SoftGraspConfig, SoftGraspController
 
@@ -127,6 +127,7 @@ class AutoConfig:
     target_offset_x: float
     target_offset_y: float
     target_offset_z: float
+    target_grasp_z_bias_m: float
     box_offset_x: float
     box_offset_y: float
     box_offset_z: float
@@ -150,8 +151,20 @@ class AutoConfig:
     cmd_ctrl_timeout_s: float
     record_ready_timeout_s: float
     waypoint_arrival_tolerance_m: float
+    waypoint_arrival_xy_tolerance_m: float
+    waypoint_arrival_z_tolerance_m: float
+    pregrasp_arrival_xy_tolerance_m: float
+    pregrasp_arrival_z_tolerance_m: float
+    pregrasp_z_speed_mps: float
     waypoint_arrival_settle_s: float
     waypoint_arrival_timeout_s: float
+    mocap_correction_enable: bool
+    mocap_correction_max_xy_m: float
+    mocap_correction_max_z_m: float
+    mocap_correction_vxy_mps: float
+    mocap_correction_vz_mps: float
+    mocap_correction_hls_xy_vmax_mps: float
+    mocap_correction_freeze_z_on_contact: bool
     confirm_before_takeoff: bool
     record_duration_s: float
     record_start_hold_s: float
@@ -202,6 +215,15 @@ class AutoGraspPlaceDataset(Node):
         self.px4ctrl_state: str | None = None
         self.record_status: str | None = None
         self.pose_subscriptions = []
+        self.mocap_correction_x = 0.0
+        self.mocap_correction_y = 0.0
+        self.mocap_correction_z = 0.0
+        self.mocap_correction_allow_xy = True
+        self.mocap_correction_allow_z = True
+        self.mocap_correction_xy_vmax_override: float | None = None
+        self.mocap_correction_z_vmax_override: float | None = None
+        self.mocap_correction_update_enabled = True
+        self.last_mocap_correction_update_s = time.monotonic()
 
         self._create_pose_subscription("drone", config.drone_pose_topic)
         self._create_pose_subscription("drone_arrival", config.arrival_pose_topic)
@@ -226,6 +248,12 @@ class AutoGraspPlaceDataset(Node):
             self.create_subscription(String, config.record_status_topic, self._record_status_cb, status_qos)
 
         self.cmd_pub = self.create_publisher(PoseStamped, config.cmd_topic, 10)
+        self.nominal_cmd_pub = self.create_publisher(PoseStamped, "/auto_hls_grasp_place/nominal_position_cmd", 10)
+        self.corrected_cmd_pub = self.create_publisher(PoseStamped, "/auto_hls_grasp_place/corrected_position_cmd", 10)
+        self.arrival_error_pub = self.create_publisher(Vector3Stamped, "/auto_hls_grasp_place/arrival_error", 10)
+        self.mocap_correction_pub = self.create_publisher(Vector3Stamped, "/auto_hls_grasp_place/mocap_correction", 10)
+        self.hls_body_y_offset_pub = self.create_publisher(Float64, "/auto_hls_grasp_place/hls_body_y_offset", 10)
+        self.grasp_attempt_pub = self.create_publisher(Int32, "/auto_hls_grasp_place/grasp_attempt", 10)
         self.gripper_pub = self.create_publisher(Float64, config.gripper_topic, 10)
         self.gripper_pair_pub = self.create_publisher(GripperCommandPair, config.gripper_command_pair_topic, 10)
         self.takeoff_land_pub = self.create_publisher(TakeoffLand, config.takeoff_land_topic, 10)
@@ -397,7 +425,7 @@ class AutoGraspPlaceDataset(Node):
 
         raise RuntimeError(f"Pose {key!r} did not become stable before timeout.")
 
-    def publish_cmd(self, pose: PoseSample) -> None:
+    def pose_to_msg(self, pose: PoseSample) -> PoseStamped:
         msg = PoseStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = self.config.frame_id
@@ -409,7 +437,134 @@ class AutoGraspPlaceDataset(Node):
         msg.pose.orientation.y = qy
         msg.pose.orientation.z = qz
         msg.pose.orientation.w = qw
-        self.cmd_pub.publish(msg)
+        return msg
+
+    def publish_vector_diag(self, pub, x: float, y: float, z: float) -> None:
+        msg = Vector3Stamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = self.config.frame_id
+        msg.vector.x = float(x)
+        msg.vector.y = float(y)
+        msg.vector.z = float(z)
+        pub.publish(msg)
+
+    def set_mocap_correction_mode(
+        self,
+        *,
+        allow_xy: bool | None = None,
+        allow_z: bool | None = None,
+        update_enabled: bool | None = None,
+        xy_vmax: float | None = None,
+        z_vmax: float | None = None,
+    ) -> None:
+        if allow_xy is not None:
+            self.mocap_correction_allow_xy = allow_xy
+        if allow_z is not None:
+            self.mocap_correction_allow_z = allow_z
+        if update_enabled is not None:
+            self.mocap_correction_update_enabled = update_enabled
+        self.mocap_correction_xy_vmax_override = xy_vmax
+        self.mocap_correction_z_vmax_override = z_vmax
+
+    def reset_mocap_correction_mode(self) -> None:
+        self.set_mocap_correction_mode(
+            allow_xy=True,
+            allow_z=True,
+            update_enabled=True,
+            xy_vmax=None,
+            z_vmax=None,
+        )
+
+    def freeze_mocap_correction_z(self) -> None:
+        self.set_mocap_correction_mode(allow_z=False)
+
+    def freeze_mocap_correction_all(self) -> None:
+        self.set_mocap_correction_mode(update_enabled=False)
+
+    def update_mocap_correction(self, nominal: PoseSample) -> tuple[float, float, float]:
+        arrival = self.poses.get("drone_arrival")
+        now_s = time.monotonic()
+        dt = max(1e-3, now_s - self.last_mocap_correction_update_s)
+        self.last_mocap_correction_update_s = now_s
+
+        if (
+            not self.config.mocap_correction_enable
+            or not self.mocap_correction_update_enabled
+            or arrival is None
+            or not self.pose_fresh("drone_arrival")
+        ):
+            return 0.0, 0.0, 0.0
+
+        err_x = nominal.x - arrival.x
+        err_y = nominal.y - arrival.y
+        err_z = nominal.z - arrival.z
+
+        if self.mocap_correction_allow_xy:
+            xy_vmax = (
+                self.mocap_correction_xy_vmax_override
+                if self.mocap_correction_xy_vmax_override is not None
+                else self.config.mocap_correction_vxy_mps
+            )
+            max_step = max(0.0, xy_vmax) * dt
+            self.mocap_correction_x += clamp(err_x, -max_step, max_step)
+            self.mocap_correction_y += clamp(err_y, -max_step, max_step)
+            xy_mag = math.hypot(self.mocap_correction_x, self.mocap_correction_y)
+            if xy_mag > self.config.mocap_correction_max_xy_m > 0.0:
+                scale = self.config.mocap_correction_max_xy_m / xy_mag
+                self.mocap_correction_x *= scale
+                self.mocap_correction_y *= scale
+
+        if self.mocap_correction_allow_z:
+            z_vmax = (
+                self.mocap_correction_z_vmax_override
+                if self.mocap_correction_z_vmax_override is not None
+                else self.config.mocap_correction_vz_mps
+            )
+            max_step = max(0.0, z_vmax) * dt
+            self.mocap_correction_z += clamp(err_z, -max_step, max_step)
+            self.mocap_correction_z = clamp(
+                self.mocap_correction_z,
+                -self.config.mocap_correction_max_z_m,
+                self.config.mocap_correction_max_z_m,
+            )
+
+        return err_x, err_y, err_z
+
+    def corrected_cmd_pose(self, nominal: PoseSample) -> tuple[PoseSample, tuple[float, float, float]]:
+        err = self.update_mocap_correction(nominal)
+        if not self.config.mocap_correction_enable:
+            return nominal, err
+        corrected = self.checked_pose(
+            nominal.x + self.mocap_correction_x,
+            nominal.y + self.mocap_correction_y,
+            nominal.z + self.mocap_correction_z,
+            nominal.yaw,
+        )
+        return corrected, err
+
+    def publish_hls_body_y_offset_diag(self, offset_m: float) -> None:
+        msg = Float64()
+        msg.data = float(offset_m)
+        self.hls_body_y_offset_pub.publish(msg)
+
+    def publish_grasp_attempt_diag(self, attempt: int) -> None:
+        msg = Int32()
+        msg.data = int(attempt)
+        self.grasp_attempt_pub.publish(msg)
+
+    def publish_cmd(self, pose: PoseSample) -> None:
+        corrected, err = self.corrected_cmd_pose(pose)
+        self.nominal_cmd_pub.publish(self.pose_to_msg(pose))
+        corrected_msg = self.pose_to_msg(corrected)
+        self.corrected_cmd_pub.publish(corrected_msg)
+        self.publish_vector_diag(self.arrival_error_pub, *err)
+        self.publish_vector_diag(
+            self.mocap_correction_pub,
+            self.mocap_correction_x,
+            self.mocap_correction_y,
+            self.mocap_correction_z,
+        )
+        self.cmd_pub.publish(corrected_msg)
 
     def publish_gripper(self, target: float, repeats: int = 1, interval_s: float = 0.05) -> None:
         msg = Float64()
@@ -636,9 +791,9 @@ class AutoGraspPlaceDataset(Node):
 
     def target_grasp_drone_z(self, target: PoseSample) -> float:
         if self.config.target_grasp_z_offset is not None:
-            return target.z + self.config.target_grasp_z_offset
+            return target.z + self.config.target_grasp_z_offset + self.config.target_grasp_z_bias_m
         gripper_z = self.target_base_z(target) + self.config.target_grasp_height_m
-        return gripper_z + self.config.gripper_z_offset_m
+        return gripper_z + self.config.gripper_z_offset_m + self.config.target_grasp_z_bias_m
 
     def target_hover_drone_z(self, target: PoseSample) -> float:
         if self.config.target_hover_z_offset is not None:
@@ -815,6 +970,8 @@ class AutoGraspPlaceDataset(Node):
         pose: PoseSample,
         label: str,
         keep_gripper_open: bool = False,
+        xy_tolerance_m: float | None = None,
+        z_tolerance_m: float | None = None,
     ) -> PoseSample:
         period = 1.0 / self.config.rate_hz
         deadline = time.monotonic() + self.config.waypoint_arrival_timeout_s
@@ -822,6 +979,16 @@ class AutoGraspPlaceDataset(Node):
         last_log_s = 0.0
         latest_arrival = self.poses.get("drone_arrival")
         latest_control = self.poses.get("drone")
+        xy_tolerance = (
+            self.config.waypoint_arrival_xy_tolerance_m
+            if xy_tolerance_m is None
+            else xy_tolerance_m
+        )
+        z_tolerance = (
+            self.config.waypoint_arrival_z_tolerance_m
+            if z_tolerance_m is None
+            else z_tolerance_m
+        )
 
         while rclpy.ok() and time.monotonic() < deadline:
             self.publish_cmd(pose)
@@ -834,8 +1001,9 @@ class AutoGraspPlaceDataset(Node):
             arrival_drone = self.poses.get("drone_arrival")
             if arrival_drone is not None and self.pose_fresh("drone_arrival"):
                 latest_arrival = arrival_drone
-                err = math.dist((arrival_drone.x, arrival_drone.y, arrival_drone.z), (pose.x, pose.y, pose.z))
-                if err <= self.config.waypoint_arrival_tolerance_m:
+                xy_err = math.hypot(arrival_drone.x - pose.x, arrival_drone.y - pose.y)
+                z_err = abs(arrival_drone.z - pose.z)
+                if xy_err <= xy_tolerance and z_err <= z_tolerance:
                     if settled_since is None:
                         settled_since = time.monotonic()
                     elif time.monotonic() - settled_since >= self.config.waypoint_arrival_settle_s:
@@ -847,9 +1015,10 @@ class AutoGraspPlaceDataset(Node):
                             time.sleep(period)
                             continue
                         self.get_logger().info(
-                            f"{label}: actual drone arrived by arrival pose, err={err:.3f}m."
+                            f"{label}: actual drone arrived by arrival pose, "
+                            f"xy_err={xy_err:.3f}m z_err={z_err:.3f}m."
                         )
-                        return self.checked_pose(latest_control.x, latest_control.y, latest_control.z, pose.yaw)
+                        return self.checked_pose(pose.x, pose.y, pose.z, pose.yaw)
                 else:
                     settled_since = None
 
@@ -857,7 +1026,9 @@ class AutoGraspPlaceDataset(Node):
                 if now_s - last_log_s >= 1.0:
                     last_log_s = now_s
                     self.get_logger().info(
-                        f"{label}: waiting actual drone by arrival pose, err={err:.3f}m "
+                        f"{label}: waiting actual drone by arrival pose, "
+                        f"xy_err={xy_err:.3f}/{xy_tolerance:.3f}m "
+                        f"z_err={z_err:.3f}/{z_tolerance:.3f}m "
                         f"target=({pose.x:.3f},{pose.y:.3f},{pose.z:.3f}) "
                         f"arrival=({arrival_drone.x:.3f},{arrival_drone.y:.3f},{arrival_drone.z:.3f})."
                     )
@@ -879,7 +1050,8 @@ class AutoGraspPlaceDataset(Node):
 
         if latest_arrival is not None:
             age = time.monotonic() - latest_arrival.received_s
-            err = math.dist((latest_arrival.x, latest_arrival.y, latest_arrival.z), (pose.x, pose.y, pose.z))
+            xy_err = math.hypot(latest_arrival.x - pose.x, latest_arrival.y - pose.y)
+            z_err = abs(latest_arrival.z - pose.z)
             if age > self.config.pose_timeout_s:
                 raise RuntimeError(
                     f"{label}: arrival pose stale/no fresh before timeout; "
@@ -887,7 +1059,7 @@ class AutoGraspPlaceDataset(Node):
                 )
             raise RuntimeError(
                 f"{label}: actual drone did not arrive before timeout by arrival pose; "
-                f"final err={err:.3f}m, arrival_age={age:.2f}s."
+                f"final xy_err={xy_err:.3f}m, z_err={z_err:.3f}m, arrival_age={age:.2f}s."
             )
         raise RuntimeError(f"{label}: no fresh arrival pose while waiting for actual arrival.")
 
@@ -1138,8 +1310,14 @@ class AutoGraspPlaceDataset(Node):
             f"target_hover_z={target_above.z:.3f}, target_grasp_z={target_grasp.z:.3f}."
         )
 
-        current = self.fly_segment(current, target_grasp, self.config.approach_speed, "Descend to grasp")
-        current = self.wait_for_drone_near(current, "Pre-grasp actual settle", keep_gripper_open=True)
+        current = self.fly_segment(current, target_grasp, self.config.pregrasp_z_speed_mps, "Descend to grasp")
+        current = self.wait_for_drone_near(
+            current,
+            "Pre-grasp actual settle",
+            keep_gripper_open=True,
+            xy_tolerance_m=self.config.pregrasp_arrival_xy_tolerance_m,
+            z_tolerance_m=self.config.pregrasp_arrival_z_tolerance_m,
+        )
         current = self.soft_grasp(current)
         if self.config.post_grasp_settle_s > 0.0:
             self.get_logger().info(f"Holding after grasp for {self.config.post_grasp_settle_s:.2f}s to let payload settle.")
@@ -1311,6 +1489,7 @@ def parse_args() -> AutoConfig:
     parser.add_argument("--target-offset-x", type=float, default=0.0)
     parser.add_argument("--target-offset-y", type=float, default=0.0)
     parser.add_argument("--target-offset-z", type=float, default=0.0)
+    parser.add_argument("--target-grasp-z-bias-m", type=float, default=0.0)
     parser.add_argument("--box-offset-x", type=float, default=0.0)
     parser.add_argument("--box-offset-y", type=float, default=0.0)
     parser.add_argument("--box-offset-z", type=float, default=0.0)
@@ -1344,8 +1523,20 @@ def parse_args() -> AutoConfig:
     parser.add_argument("--cmd-ctrl-timeout-s", type=float, default=10.0)
     parser.add_argument("--record-ready-timeout-s", type=float, default=60.0)
     parser.add_argument("--waypoint-arrival-tolerance-m", type=float, default=0.08)
+    parser.add_argument("--waypoint-arrival-xy-tolerance-m", type=float, default=None)
+    parser.add_argument("--waypoint-arrival-z-tolerance-m", type=float, default=None)
+    parser.add_argument("--pregrasp-arrival-xy-tolerance-m", type=float, default=0.08)
+    parser.add_argument("--pregrasp-arrival-z-tolerance-m", type=float, default=0.035)
+    parser.add_argument("--pregrasp-z-speed-mps", type=float, default=0.10)
     parser.add_argument("--waypoint-arrival-settle-s", type=float, default=0.4)
     parser.add_argument("--waypoint-arrival-timeout-s", type=float, default=15.0)
+    parser.add_argument("--mocap-correction-enable", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--mocap-correction-max-xy-m", type=float, default=0.25)
+    parser.add_argument("--mocap-correction-max-z-m", type=float, default=0.15)
+    parser.add_argument("--mocap-correction-vxy-mps", type=float, default=0.08)
+    parser.add_argument("--mocap-correction-vz-mps", type=float, default=0.04)
+    parser.add_argument("--mocap-correction-hls-xy-vmax-mps", type=float, default=0.02)
+    parser.add_argument("--mocap-correction-freeze-z-on-contact", action=argparse.BooleanOptionalAction, default=True)
     confirm_group = parser.add_mutually_exclusive_group()
     confirm_group.add_argument(
         "--confirm-before-takeoff",
@@ -1437,15 +1628,32 @@ def parse_args() -> AutoConfig:
         raise ValueError("--record-duration-s must be positive.")
     if args.gripper_z_offset_m < 0.0:
         raise ValueError("--gripper-z-offset-m must be non-negative.")
+    if args.waypoint_arrival_xy_tolerance_m is None:
+        args.waypoint_arrival_xy_tolerance_m = args.waypoint_arrival_tolerance_m
+    if args.waypoint_arrival_z_tolerance_m is None:
+        args.waypoint_arrival_z_tolerance_m = args.waypoint_arrival_tolerance_m
     if (
         args.waypoint_arrival_tolerance_m <= 0.0
+        or args.waypoint_arrival_xy_tolerance_m <= 0.0
+        or args.waypoint_arrival_z_tolerance_m <= 0.0
+        or args.pregrasp_arrival_xy_tolerance_m <= 0.0
+        or args.pregrasp_arrival_z_tolerance_m <= 0.0
+        or args.pregrasp_z_speed_mps <= 0.0
         or args.waypoint_arrival_settle_s < 0.0
         or args.waypoint_arrival_timeout_s <= 0.0
     ):
         raise ValueError(
-            "--waypoint-arrival-tolerance-m and --waypoint-arrival-timeout-s must be positive; "
+            "Arrival tolerances, --pregrasp-z-speed-mps, and --waypoint-arrival-timeout-s must be positive; "
             "--waypoint-arrival-settle-s must be non-negative."
         )
+    if (
+        args.mocap_correction_max_xy_m < 0.0
+        or args.mocap_correction_max_z_m < 0.0
+        or args.mocap_correction_vxy_mps < 0.0
+        or args.mocap_correction_vz_mps < 0.0
+        or args.mocap_correction_hls_xy_vmax_mps < 0.0
+    ):
+        raise ValueError("Mocap correction limits and speeds must be non-negative.")
     if args.target_height_m <= 0.0:
         raise ValueError("--target-height-m must be positive.")
     if not 0.0 < args.target_grasp_height_m <= args.target_height_m:

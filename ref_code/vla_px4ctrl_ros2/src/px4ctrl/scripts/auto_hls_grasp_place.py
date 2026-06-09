@@ -58,6 +58,7 @@ class HlsTaskConfig:
     single_contact_body_y_sign: float
     abort_rise_m: float
     abort_rise_speed: float
+    hls_grasp_max_retries: int
 
 
 @dataclass
@@ -79,6 +80,19 @@ class StandardHlsStatus:
 
 class AutoHlsSafetyAbort(RuntimeError):
     pass
+
+
+class RecoverableHlsGraspFailure(RuntimeError):
+    def __init__(
+        self,
+        reason: str,
+        recovery_pose: PoseSample,
+        retry_reference: PoseSample | None = None,
+    ) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.recovery_pose = recovery_pose
+        self.retry_reference = retry_reference
 
 
 def status_prefix_from_topic(topic: str) -> str:
@@ -371,6 +385,51 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
         return "hold", False, 0.0, 0.0, cfg.center_offset_max_m, cfg.center_vmax_mps
 
     def soft_grasp(self, reference: PoseSample) -> PoseSample:
+        max_retries = max(0, self.hls_config.hls_grasp_max_retries)
+        current = reference
+        attempt_reference = reference
+        self.publish_hls_body_y_offset_diag(0.0)
+        for attempt_idx in range(max_retries + 1):
+            attempt_number = attempt_idx + 1
+            self.publish_grasp_attempt_diag(attempt_number)
+            self.reset_mocap_correction_mode()
+            if attempt_idx > 0:
+                self.get_logger().warn(
+                    f"Retrying HLS grasp attempt {attempt_number}/{max_retries + 1}; "
+                    "returning to strict pre-grasp waypoint with gripper open."
+                )
+                current = self.fly_segment(
+                    current,
+                    attempt_reference,
+                    self.config.pregrasp_z_speed_mps,
+                    f"HLS retry {attempt_number} return to pre-grasp",
+                    keep_gripper_open=True,
+                )
+                current = self.wait_for_drone_near(
+                    current,
+                    f"HLS retry {attempt_number} pre-grasp settle",
+                    keep_gripper_open=True,
+                    xy_tolerance_m=self.config.pregrasp_arrival_xy_tolerance_m,
+                    z_tolerance_m=self.config.pregrasp_arrival_z_tolerance_m,
+                )
+            try:
+                return self._run_hls_grasp_attempt(attempt_reference, attempt_number)
+            except RecoverableHlsGraspFailure as exc:
+                current = exc.recovery_pose
+                if exc.retry_reference is not None:
+                    attempt_reference = exc.retry_reference
+                if attempt_idx >= max_retries:
+                    raise RuntimeError(
+                        f"HLS grasp failed after {max_retries + 1} attempt(s): {exc.reason}"
+                    ) from exc
+                self.get_logger().warn(
+                    f"HLS grasp attempt {attempt_number} failed recoverably: {exc.reason}. "
+                    f"Remaining retries: {max_retries - attempt_idx}."
+                )
+                continue
+        raise RuntimeError("HLS grasp retry loop exited unexpectedly.")
+
+    def _run_hls_grasp_attempt(self, reference: PoseSample, attempt_number: int) -> PoseSample:
         self.wait_for_hls_status()
         self.hold_cmd(reference, 0.3)
         self.raise_if_safety_abort("pre-HLS grasp")
@@ -385,10 +444,12 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
         last_t = time.monotonic()
         last_log_s = 0.0
         offset_limit_hit_since_s: float | None = None
+        contact_seen = False
 
         self.get_logger().info(
-            "HLS force grasp requested. Holding during search, using staged body-y assist for single-contact "
-            "motion requests and slower centering corrections while continuously commanding close."
+            f"HLS force grasp requested, attempt {attempt_number}. Holding during search, using staged body-y "
+            "assist for single-contact motion requests and slower centering corrections while continuously "
+            "commanding close."
         )
 
         while rclpy.ok() and time.monotonic() < deadline:
@@ -418,7 +479,23 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
             if status.safe_to_lift or status.state == "LIFT_READY":
                 self.get_logger().info("HLS reports safe_to_lift; automatic lift may start.")
                 self.hls_payload_attached = True
+                self.freeze_mocap_correction_all()
                 return latest
+
+            if status.left_contact or status.right_contact:
+                if not contact_seen:
+                    contact_seen = True
+                    if self.config.mocap_correction_freeze_z_on_contact:
+                        self.get_logger().info(
+                            "HLS contact detected; freezing mocap Z correction and lowering XY correction speed."
+                        )
+                    else:
+                        self.get_logger().info("HLS contact detected; lowering mocap XY correction speed.")
+                self.set_mocap_correction_mode(
+                    allow_xy=True,
+                    allow_z=not self.config.mocap_correction_freeze_z_on_contact,
+                    xy_vmax=self.config.mocap_correction_hls_xy_vmax_mps,
+                )
 
             phase, assist_active, raw_target_offset_m, target_offset_m, offset_limit_m, vmax_mps = (
                 self.body_y_assist_command(status)
@@ -453,13 +530,19 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
                 elif now - offset_limit_hit_since_s >= HLS_OFFSET_LIMIT_GRACE_S:
                     latest = self.pose_with_body_y_offset(reference, body_y_offset_m)
                     latest = self.abort_before_lift(latest, reference, "HLS body-y assist offset limit")
-                    raise RuntimeError("HLS body-y assist stayed at offset limit before safe_to_lift.")
+                    retry_reference = self.pose_with_body_y_offset(reference, body_y_offset_m)
+                    raise RecoverableHlsGraspFailure(
+                        "HLS body-y assist stayed at offset limit before safe_to_lift.",
+                        latest,
+                        retry_reference,
+                    )
             elif assist_active:
                 offset_limit_hit_since_s = None
 
             latest = self.pose_with_body_y_offset(reference, body_y_offset_m)
 
             self.publish_cmd(latest)
+            self.publish_hls_body_y_offset_diag(body_y_offset_m)
             self.publish_gripper(self.hls_config.close_command, repeats=1, interval_s=0.0)
 
             if now - last_log_s >= 0.5:
@@ -474,13 +557,23 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
                 )
             time.sleep(period)
 
+        retry_reference = (
+            self.pose_with_body_y_offset(reference, body_y_offset_m)
+            if abs(body_y_offset_m) > self.hls_config.center_deadband_m
+            else reference
+        )
         latest = self.abort_before_lift(latest, reference, "HLS grasp timeout")
-        raise RuntimeError("HLS grasp timed out before safe_to_lift.")
+        raise RecoverableHlsGraspFailure(
+            "HLS grasp timed out before safe_to_lift.",
+            latest,
+            retry_reference,
+        )
 
     def emergency_open_and_land(self) -> None:
         self.safety_abort_active = True
         self.hls_close_allowed = False
         self.hls_payload_attached = False
+        self.freeze_mocap_correction_all()
         self.get_logger().warn("Emergency cleanup: opening HLS gripper.")
         self.publish_gripper(self.hls_config.open_command, repeats=5)
         if self.config.no_land:
@@ -521,6 +614,7 @@ def parse_configs() -> tuple[AutoConfig, HlsTaskConfig]:
     hls_parser.add_argument("--hls-status-topic", default="/hls_gripper/status")
     hls_parser.add_argument("--hls-status-timeout-s", type=float, default=0.8)
     hls_parser.add_argument("--hls-grasp-timeout-s", type=float, default=12.0)
+    hls_parser.add_argument("--hls-grasp-max-retries", type=int, default=2)
     hls_parser.add_argument("--rc-topic", default="/mavros/rc/in")
     hls_parser.add_argument("--rc-timeout-s", type=float, default=0.5)
     hls_parser.add_argument("--rc-stale-action", choices=("warn", "abort"), default="warn")
@@ -561,6 +655,8 @@ def parse_configs() -> tuple[AutoConfig, HlsTaskConfig]:
         raise ValueError("--hls-status-timeout-s must be positive.")
     if hls_config.hls_grasp_timeout_s <= 0.0:
         raise ValueError("--hls-grasp-timeout-s must be positive.")
+    if hls_config.hls_grasp_max_retries < 0:
+        raise ValueError("--hls-grasp-max-retries must be non-negative.")
     if hls_config.rc_timeout_s <= 0.0:
         raise ValueError("--rc-timeout-s must be positive.")
     if hls_config.ch10_index < 0:
@@ -584,19 +680,28 @@ def main() -> None:
     auto_config, hls_config = parse_configs()
     rclpy.init()
     node = AutoHlsGraspPlace(auto_config, hls_config)
+    exit_code = 0
     try:
         node.run_sequence()
     except KeyboardInterrupt:
-        node.emergency_open_and_land()
-        raise
+        try:
+            node.emergency_open_and_land()
+        except Exception as cleanup_exc:
+            node.get_logger().error(f"Emergency cleanup failed after interrupt: {cleanup_exc}")
+        exit_code = 130
     except Exception as exc:
         node.get_logger().error(f"Automatic HLS sequence failed: {exc}")
-        node.emergency_open_and_land()
-        raise
+        try:
+            node.emergency_open_and_land()
+        except Exception as cleanup_exc:
+            node.get_logger().error(f"Emergency cleanup failed after automatic sequence error: {cleanup_exc}")
+        exit_code = 1
     finally:
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
+    if exit_code:
+        raise SystemExit(exit_code)
 
 
 if __name__ == "__main__":

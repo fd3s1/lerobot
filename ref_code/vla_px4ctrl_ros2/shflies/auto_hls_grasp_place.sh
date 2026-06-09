@@ -110,6 +110,7 @@ BOX_OFFSET_Y="${BOX_OFFSET_Y:-0.0}"
 BOX_OFFSET_Z="${BOX_OFFSET_Z:-0.0}"
 TARGET_HOVER_Z_OFFSET="${TARGET_HOVER_Z_OFFSET:-}"
 TARGET_GRASP_Z_OFFSET="${TARGET_GRASP_Z_OFFSET:-}"
+TARGET_GRASP_Z_BIAS_M="${TARGET_GRASP_Z_BIAS_M:-0.0}"
 BOX_HOVER_Z_OFFSET="${BOX_HOVER_Z_OFFSET:-}"
 BOX_PLACE_Z_OFFSET="${BOX_PLACE_Z_OFFSET:-}"
 RELEASE_RETREAT_UP_M="${RELEASE_RETREAT_UP_M:-0.3}"
@@ -122,6 +123,7 @@ CMD_LAND_Z_OFFSET_M="${CMD_LAND_Z_OFFSET_M:-0.0}"
 NO_LAND="${NO_LAND:-false}"
 
 HLS_GRASP_TIMEOUT_S="${HLS_GRASP_TIMEOUT_S:-12.0}"
+HLS_GRASP_MAX_RETRIES="${HLS_GRASP_MAX_RETRIES:-2}"
 HLS_STATUS_TIMEOUT_S="${HLS_STATUS_TIMEOUT_S:-0.8}"
 CENTER_DEADBAND_M="${CENTER_DEADBAND_M:-0.005}"
 CENTER_KP="${CENTER_KP:-0.8}"
@@ -137,8 +139,20 @@ OPEN_COMMAND="${OPEN_COMMAND:-100.0}"
 CLOSE_COMMAND="${CLOSE_COMMAND:-0.0}"
 
 WAYPOINT_ARRIVAL_TOLERANCE_M="${WAYPOINT_ARRIVAL_TOLERANCE_M:-0.12}"
+WAYPOINT_ARRIVAL_XY_TOLERANCE_M="${WAYPOINT_ARRIVAL_XY_TOLERANCE_M:-${WAYPOINT_ARRIVAL_TOLERANCE_M}}"
+WAYPOINT_ARRIVAL_Z_TOLERANCE_M="${WAYPOINT_ARRIVAL_Z_TOLERANCE_M:-${WAYPOINT_ARRIVAL_TOLERANCE_M}}"
+PREGRASP_ARRIVAL_XY_TOLERANCE_M="${PREGRASP_ARRIVAL_XY_TOLERANCE_M:-0.08}"
+PREGRASP_ARRIVAL_Z_TOLERANCE_M="${PREGRASP_ARRIVAL_Z_TOLERANCE_M:-0.035}"
+PREGRASP_Z_SPEED_MPS="${PREGRASP_Z_SPEED_MPS:-0.10}"
 WAYPOINT_ARRIVAL_SETTLE_S="${WAYPOINT_ARRIVAL_SETTLE_S:-0.4}"
 WAYPOINT_ARRIVAL_TIMEOUT_S="${WAYPOINT_ARRIVAL_TIMEOUT_S:-30.0}"
+MOCAP_CORRECTION_ENABLE="${MOCAP_CORRECTION_ENABLE:-true}"
+MOCAP_CORRECTION_MAX_XY_M="${MOCAP_CORRECTION_MAX_XY_M:-0.25}"
+MOCAP_CORRECTION_MAX_Z_M="${MOCAP_CORRECTION_MAX_Z_M:-0.15}"
+MOCAP_CORRECTION_VXY_MPS="${MOCAP_CORRECTION_VXY_MPS:-0.08}"
+MOCAP_CORRECTION_VZ_MPS="${MOCAP_CORRECTION_VZ_MPS:-0.04}"
+MOCAP_CORRECTION_HLS_XY_VMAX_MPS="${MOCAP_CORRECTION_HLS_XY_VMAX_MPS:-0.02}"
+MOCAP_CORRECTION_FREEZE_Z_ON_CONTACT="${MOCAP_CORRECTION_FREEZE_Z_ON_CONTACT:-true}"
 POST_TAKEOFF_SETTLE_S="${POST_TAKEOFF_SETTLE_S:-2.0}"
 CONFIRM_BEFORE_TAKEOFF="${CONFIRM_BEFORE_TAKEOFF:-false}"
 POSE_PREFLIGHT_TIMEOUT_S="${POSE_PREFLIGHT_TIMEOUT_S:-6}"
@@ -219,8 +233,10 @@ echo "[auto-hls-grasp-place] hls search override: speed=${HLS_SEARCH_SPEED:-<pro
 echo "[auto-hls-grasp-place] centering: kp=${CENTER_KP} vmax=${CENTER_VMAX_MPS} deadband=${CENTER_DEADBAND_M} offset_max=${CENTER_OFFSET_MAX_M} sign=${CENTER_COMMAND_SIGN} hls_error_gain=${HLS_CENTER_ERROR_GAIN}"
 echo "[auto-hls-grasp-place] single-contact: vmax=${SINGLE_CONTACT_VMAX_MPS} offset_max=${SINGLE_CONTACT_OFFSET_MAX_M} sign=${SINGLE_CONTACT_BODY_Y_SIGN} timeout=${HLS_SINGLE_CONTACT_TIMEOUT_S} limit_ratio=${HLS_SINGLE_CONTACT_LIMIT_RATIO} hls_offset_limit=${HLS_SINGLE_CONTACT_OFFSET_LIMIT_M}"
 echo "[auto-hls-grasp-place] planning offsets: target=(${TARGET_OFFSET_X}, ${TARGET_OFFSET_Y}, ${TARGET_OFFSET_Z})m box=(${BOX_OFFSET_X}, ${BOX_OFFSET_Y}, ${BOX_OFFSET_Z})m"
-echo "[auto-hls-grasp-place] optional z offsets: target_hover=${TARGET_HOVER_Z_OFFSET:-<auto>} target_grasp=${TARGET_GRASP_Z_OFFSET:-<auto>} box_hover=${BOX_HOVER_Z_OFFSET:-<auto>} box_place=${BOX_PLACE_Z_OFFSET:-<auto>}"
-echo "[auto-hls-grasp-place] actual arrival gate: tol=${WAYPOINT_ARRIVAL_TOLERANCE_M}m settle=${WAYPOINT_ARRIVAL_SETTLE_S}s timeout=${WAYPOINT_ARRIVAL_TIMEOUT_S}s"
+echo "[auto-hls-grasp-place] optional z offsets: target_hover=${TARGET_HOVER_Z_OFFSET:-<auto>} target_grasp=${TARGET_GRASP_Z_OFFSET:-<auto>} target_grasp_bias=${TARGET_GRASP_Z_BIAS_M} box_hover=${BOX_HOVER_Z_OFFSET:-<auto>} box_place=${BOX_PLACE_Z_OFFSET:-<auto>}"
+echo "[auto-hls-grasp-place] actual arrival gate: waypoint_xy=${WAYPOINT_ARRIVAL_XY_TOLERANCE_M}m waypoint_z=${WAYPOINT_ARRIVAL_Z_TOLERANCE_M}m pregrasp_xy=${PREGRASP_ARRIVAL_XY_TOLERANCE_M}m pregrasp_z=${PREGRASP_ARRIVAL_Z_TOLERANCE_M}m settle=${WAYPOINT_ARRIVAL_SETTLE_S}s timeout=${WAYPOINT_ARRIVAL_TIMEOUT_S}s pregrasp_z_speed=${PREGRASP_Z_SPEED_MPS}m/s"
+echo "[auto-hls-grasp-place] mocap correction: enable=${MOCAP_CORRECTION_ENABLE} max_xy=${MOCAP_CORRECTION_MAX_XY_M}m max_z=${MOCAP_CORRECTION_MAX_Z_M}m vxy=${MOCAP_CORRECTION_VXY_MPS}m/s vz=${MOCAP_CORRECTION_VZ_MPS}m/s hls_xy_vmax=${MOCAP_CORRECTION_HLS_XY_VMAX_MPS}m/s freeze_z_on_contact=${MOCAP_CORRECTION_FREEZE_Z_ON_CONTACT}"
+echo "[auto-hls-grasp-place] hls retry: max_retries=${HLS_GRASP_MAX_RETRIES}"
 echo "[auto-hls-grasp-place] takeoff mode: ${TAKEOFF_MODE}"
 echo "[auto-hls-grasp-place] takeoff confirmation: ${CONFIRM_BEFORE_TAKEOFF}"
 echo "[auto-hls-grasp-place] no LeRobot record process will be started."
@@ -378,6 +394,7 @@ auto_args=(
   --target-offset-x "${TARGET_OFFSET_X}"
   --target-offset-y "${TARGET_OFFSET_Y}"
   --target-offset-z "${TARGET_OFFSET_Z}"
+  --target-grasp-z-bias-m "${TARGET_GRASP_Z_BIAS_M}"
   --box-offset-x "${BOX_OFFSET_X}"
   --box-offset-y "${BOX_OFFSET_Y}"
   --box-offset-z "${BOX_OFFSET_Z}"
@@ -389,11 +406,22 @@ auto_args=(
   --cmd-land-z-offset-m "${CMD_LAND_Z_OFFSET_M}"
   --post-takeoff-settle-s "${POST_TAKEOFF_SETTLE_S}"
   --waypoint-arrival-tolerance-m "${WAYPOINT_ARRIVAL_TOLERANCE_M}"
+  --waypoint-arrival-xy-tolerance-m "${WAYPOINT_ARRIVAL_XY_TOLERANCE_M}"
+  --waypoint-arrival-z-tolerance-m "${WAYPOINT_ARRIVAL_Z_TOLERANCE_M}"
+  --pregrasp-arrival-xy-tolerance-m "${PREGRASP_ARRIVAL_XY_TOLERANCE_M}"
+  --pregrasp-arrival-z-tolerance-m "${PREGRASP_ARRIVAL_Z_TOLERANCE_M}"
+  --pregrasp-z-speed-mps "${PREGRASP_Z_SPEED_MPS}"
   --waypoint-arrival-settle-s "${WAYPOINT_ARRIVAL_SETTLE_S}"
   --waypoint-arrival-timeout-s "${WAYPOINT_ARRIVAL_TIMEOUT_S}"
+  --mocap-correction-max-xy-m "${MOCAP_CORRECTION_MAX_XY_M}"
+  --mocap-correction-max-z-m "${MOCAP_CORRECTION_MAX_Z_M}"
+  --mocap-correction-vxy-mps "${MOCAP_CORRECTION_VXY_MPS}"
+  --mocap-correction-vz-mps "${MOCAP_CORRECTION_VZ_MPS}"
+  --mocap-correction-hls-xy-vmax-mps "${MOCAP_CORRECTION_HLS_XY_VMAX_MPS}"
   --hls-status-topic "${HLS_STATUS_TOPIC}"
   --hls-status-timeout-s "${HLS_STATUS_TIMEOUT_S}"
   --hls-grasp-timeout-s "${HLS_GRASP_TIMEOUT_S}"
+  --hls-grasp-max-retries "${HLS_GRASP_MAX_RETRIES}"
   --rc-topic "${RC_TOPIC}"
   --rc-timeout-s "${RC_TIMEOUT_S}"
   --rc-stale-action "${RC_STALE_ACTION}"
@@ -434,6 +462,16 @@ if bool_is_true "${SMOOTH_TRAJECTORY}"; then
   auto_args+=(--smooth-trajectory)
 else
   auto_args+=(--no-smooth-trajectory)
+fi
+if bool_is_true "${MOCAP_CORRECTION_ENABLE}"; then
+  auto_args+=(--mocap-correction-enable)
+else
+  auto_args+=(--no-mocap-correction-enable)
+fi
+if bool_is_true "${MOCAP_CORRECTION_FREEZE_Z_ON_CONTACT}"; then
+  auto_args+=(--mocap-correction-freeze-z-on-contact)
+else
+  auto_args+=(--no-mocap-correction-freeze-z-on-contact)
 fi
 if bool_is_true "${CONFIRM_BEFORE_TAKEOFF}"; then
   auto_args+=(--confirm-before-takeoff)
