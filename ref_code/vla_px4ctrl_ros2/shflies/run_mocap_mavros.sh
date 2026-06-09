@@ -106,7 +106,7 @@ start_process ros2 launch mavros node.launch \
 
 sleep 2
 
-start_process ros2 run px4ctrl vrpn_to_mavros_vision_bridge.py --ros-args \
+start_process python3 "${WORKSPACE_DIR}/src/px4ctrl/scripts/vrpn_to_mavros_vision_bridge.py" --ros-args \
   -p source_topic:="${VRPN_SOURCE_TOPIC}" \
   -p target_topic:="${MAVROS_VISION_TOPIC}" \
   -p restamp:="${BRIDGE_RESTAMP}" \

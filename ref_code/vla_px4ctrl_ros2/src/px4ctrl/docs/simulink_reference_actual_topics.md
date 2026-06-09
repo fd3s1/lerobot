@@ -14,7 +14,7 @@ is required.
 | Actual UAV state used by controller | `/px4ctrl/simulink/actual_state` | `nav_msgs/msg/Odometry` | `px4ctrl_node` |
 | Reference minus actual error | `/px4ctrl/simulink/tracking_error` | `nav_msgs/msg/Odometry` | `px4ctrl_node` |
 | Controller output setpoint | `/px4ctrl/simulink/attitude_target` | `nav_msgs/msg/Odometry` | `px4ctrl_node` |
-| UDE internal debug vector | `/px4ctrl/simulink/ude_debug` | `std_msgs/msg/Float64MultiArray` | `px4ctrl_node` |
+| UDE internal debug scalars | `/px4ctrl/simulink/ude_debug/*` | `std_msgs/msg/Float64` | `px4ctrl_node` |
 | Online UDE Kp/Kd/T command | `/px4ctrl/ude_tune` | `std_msgs/msg/Float64MultiArray` | Simulink or ROS2 CLI |
 | Online UDE Kp/Kd/T status | `/px4ctrl/ude_tune_status` | `std_msgs/msg/Float64MultiArray` | `px4ctrl_node` |
 | Online UDE Kp/Kd/T status text | `/px4ctrl/ude_tune_status_text` | `std_msgs/msg/String` | `px4ctrl_node` |
@@ -126,35 +126,49 @@ child_frame_id               = bodyrate_setpoint or attitude_setpoint
 This topic is for controller output inspection. It is not the position tracking
 reference.
 
-## `/px4ctrl/simulink/ude_debug`
+## `/px4ctrl/simulink/ude_debug/*`
 
-Type: `std_msgs/msg/Float64MultiArray`
+Type: `std_msgs/msg/Float64`
 
-The layout label is `ude_debug_v1`. The vector is:
+Each UDE debug value is published as its own scalar topic so Simulink can
+subscribe with ordinary float/double blocks. The topic prefix is
+`/px4ctrl/simulink/ude_debug`.
 
 ```text
-0      stamp seconds
-1      px4ctrl FSM state enum
-2:4    desired position des.p
-5:7    odom position odom.p
-8:10   position error e = des.p - odom.p
-11:13  desired velocity des.v
-14:16  odom velocity odom.v
-17:19  velocity error e_dot
-20:22  u0 = Kp*e + Kd*e_dot
-23:25  integral_u0
-26:28  f_hat
-29:31  u_acc = u0 - f_hat
-32:34  tilt-limited thrust acceleration
-35:37  feedforward bodyrates
-38:40  attitude feedback bodyrates
-41:43  final bodyrate command
-44     normalized thrust command
-45     desired yaw
-46     odom yaw
-47     yaw error
-48     controller dt
+/px4ctrl/simulink/ude_debug/stamp_s
+/px4ctrl/simulink/ude_debug/fsm_state
+/px4ctrl/simulink/ude_debug/e_x
+/px4ctrl/simulink/ude_debug/e_y
+/px4ctrl/simulink/ude_debug/e_z
+/px4ctrl/simulink/ude_debug/e_dot_x
+/px4ctrl/simulink/ude_debug/e_dot_y
+/px4ctrl/simulink/ude_debug/e_dot_z
+/px4ctrl/simulink/ude_debug/u0_x
+/px4ctrl/simulink/ude_debug/u0_y
+/px4ctrl/simulink/ude_debug/u0_z
+/px4ctrl/simulink/ude_debug/integral_u0_x
+/px4ctrl/simulink/ude_debug/integral_u0_y
+/px4ctrl/simulink/ude_debug/integral_u0_z
+/px4ctrl/simulink/ude_debug/f_hat_x
+/px4ctrl/simulink/ude_debug/f_hat_y
+/px4ctrl/simulink/ude_debug/f_hat_z
+/px4ctrl/simulink/ude_debug/u_acc_x
+/px4ctrl/simulink/ude_debug/u_acc_y
+/px4ctrl/simulink/ude_debug/u_acc_z
+/px4ctrl/simulink/ude_debug/thrust_acc_x
+/px4ctrl/simulink/ude_debug/thrust_acc_y
+/px4ctrl/simulink/ude_debug/thrust_acc_z
+/px4ctrl/simulink/ude_debug/bodyrates_cmd_x
+/px4ctrl/simulink/ude_debug/bodyrates_cmd_y
+/px4ctrl/simulink/ude_debug/bodyrates_cmd_z
+/px4ctrl/simulink/ude_debug/thrust
+/px4ctrl/simulink/ude_debug/yaw_error
+/px4ctrl/simulink/ude_debug/dt
 ```
+
+Additional scalar topics are also available for `des_p_*`, `odom_p_*`,
+`des_v_*`, `odom_v_*`, `bodyrates_ff_*`, `bodyrates_fb_*`, `yaw_des`, and
+`yaw_odom`.
 
 ## Online UDE Tuning
 
@@ -200,7 +214,7 @@ After starting px4ctrl:
 ros2 topic info /px4ctrl/simulink/reference_state
 ros2 topic info /px4ctrl/simulink/actual_state
 ros2 topic info /px4ctrl/simulink/tracking_error
-ros2 topic info /px4ctrl/simulink/ude_debug
+ros2 topic info /px4ctrl/simulink/ude_debug/e_x
 ros2 topic echo --once /px4ctrl/simulink/tracking_error
 ```
 
@@ -223,7 +237,11 @@ Topic names:
   /px4ctrl/simulink/actual_state
   /px4ctrl/simulink/tracking_error
   /px4ctrl/simulink/attitude_target
-  /px4ctrl/simulink/ude_debug
+  /px4ctrl/simulink/ude_debug/e_x
+  /px4ctrl/simulink/ude_debug/u0_x
+  /px4ctrl/simulink/ude_debug/f_hat_x
+  /px4ctrl/simulink/ude_debug/u_acc_x
+  /px4ctrl/simulink/ude_debug/thrust
   /px4ctrl/ude_tune_status
 ```
 

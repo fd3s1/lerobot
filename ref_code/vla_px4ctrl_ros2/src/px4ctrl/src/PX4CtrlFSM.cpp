@@ -102,6 +102,92 @@ void add_array_param_from_tune(
     std::vector<double>{data[offset], data[offset + 1], data[offset + 2]});
 }
 
+const std::vector<std::string> &ude_debug_scalar_names()
+{
+  static const std::vector<std::string> names = {
+    "stamp_s",
+    "fsm_state",
+    "des_p_x",
+    "des_p_y",
+    "des_p_z",
+    "odom_p_x",
+    "odom_p_y",
+    "odom_p_z",
+    "e_x",
+    "e_y",
+    "e_z",
+    "des_v_x",
+    "des_v_y",
+    "des_v_z",
+    "odom_v_x",
+    "odom_v_y",
+    "odom_v_z",
+    "e_dot_x",
+    "e_dot_y",
+    "e_dot_z",
+    "u0_x",
+    "u0_y",
+    "u0_z",
+    "integral_u0_x",
+    "integral_u0_y",
+    "integral_u0_z",
+    "f_hat_x",
+    "f_hat_y",
+    "f_hat_z",
+    "u_acc_x",
+    "u_acc_y",
+    "u_acc_z",
+    "thrust_acc_x",
+    "thrust_acc_y",
+    "thrust_acc_z",
+    "bodyrates_ff_x",
+    "bodyrates_ff_y",
+    "bodyrates_ff_z",
+    "bodyrates_fb_x",
+    "bodyrates_fb_y",
+    "bodyrates_fb_z",
+    "bodyrates_cmd_x",
+    "bodyrates_cmd_y",
+    "bodyrates_cmd_z",
+    "thrust",
+    "yaw_des",
+    "yaw_odom",
+    "yaw_error",
+    "dt",
+  };
+  return names;
+}
+
+void append_ude_debug_values(
+  std::vector<double> &data,
+  const Controller_Debug_t &debug,
+  const rclcpp::Time &stamp,
+  PX4CtrlFSM::State_t state)
+{
+  data.reserve(ude_debug_scalar_names().size());
+  data.push_back(stamp.seconds());
+  data.push_back(static_cast<double>(state));
+  append_vector(data, debug.des_p);
+  append_vector(data, debug.odom_p);
+  append_vector(data, debug.e);
+  append_vector(data, debug.des_v);
+  append_vector(data, debug.odom_v);
+  append_vector(data, debug.e_dot);
+  append_vector(data, debug.u0);
+  append_vector(data, debug.integral_u0);
+  append_vector(data, debug.f_hat);
+  append_vector(data, debug.u_acc);
+  append_vector(data, debug.thrust_acc_limited);
+  append_vector(data, debug.bodyrates_ff);
+  append_vector(data, debug.bodyrates_fb);
+  append_vector(data, debug.bodyrates_cmd);
+  data.push_back(debug.thrust);
+  data.push_back(debug.yaw_des);
+  data.push_back(debug.yaw_odom);
+  data.push_back(debug.yaw_error);
+  data.push_back(debug.dt);
+}
+
 }  // namespace
 
 PX4CtrlFSM::PX4CtrlFSM(Parameter_t &param_, LinearControl &controller_, rclcpp::Node *node)
@@ -514,6 +600,16 @@ void PX4CtrlFSM::manual_flag_cb(const std_msgs::msg::UInt8::SharedPtr msg)
   traj_start_trigger_pub->publish(now_pose);
 }
 
+void PX4CtrlFSM::create_simulink_ude_debug_publishers(const std::string &prefix)
+{
+  simulink_ude_debug_scalar_pubs.clear();
+  const std::string clean_prefix = prefix.empty() ? "/px4ctrl/simulink/ude_debug" : prefix;
+  for (const auto &name : ude_debug_scalar_names()) {
+    simulink_ude_debug_scalar_pubs.push_back(
+      node_->create_publisher<std_msgs::msg::Float64>(clean_prefix + "/" + name, 10));
+  }
+}
+
 void PX4CtrlFSM::set_start_pose_for_takeoff_land(const Odom_Data_t &odom)
 {
   takeoff_land.start_pose.head<3>() = odom.p;
@@ -720,41 +816,24 @@ void PX4CtrlFSM::publish_simulink_ude_debug(
   const Controller_Debug_t &debug,
   const rclcpp::Time &stamp)
 {
-  if (!simulink_ude_debug_pub) {
+  if (simulink_ude_debug_scalar_pubs.empty()) {
     return;
   }
 
-  std_msgs::msg::Float64MultiArray msg;
-  msg.layout.dim.resize(1);
-  msg.layout.dim[0].label = "ude_debug_v1";
-  msg.layout.dim[0].size = 49;
-  msg.layout.dim[0].stride = 49;
-  msg.layout.data_offset = 0;
-  msg.data.reserve(49);
+  std::vector<double> values;
+  append_ude_debug_values(values, debug, stamp, state);
+  if (values.size() != simulink_ude_debug_scalar_pubs.size()) {
+    return;
+  }
 
-  msg.data.push_back(stamp.seconds());
-  msg.data.push_back(static_cast<double>(state));
-  append_vector(msg.data, debug.des_p);
-  append_vector(msg.data, debug.odom_p);
-  append_vector(msg.data, debug.e);
-  append_vector(msg.data, debug.des_v);
-  append_vector(msg.data, debug.odom_v);
-  append_vector(msg.data, debug.e_dot);
-  append_vector(msg.data, debug.u0);
-  append_vector(msg.data, debug.integral_u0);
-  append_vector(msg.data, debug.f_hat);
-  append_vector(msg.data, debug.u_acc);
-  append_vector(msg.data, debug.thrust_acc_limited);
-  append_vector(msg.data, debug.bodyrates_ff);
-  append_vector(msg.data, debug.bodyrates_fb);
-  append_vector(msg.data, debug.bodyrates_cmd);
-  msg.data.push_back(debug.thrust);
-  msg.data.push_back(debug.yaw_des);
-  msg.data.push_back(debug.yaw_odom);
-  msg.data.push_back(debug.yaw_error);
-  msg.data.push_back(debug.dt);
-
-  simulink_ude_debug_pub->publish(msg);
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    if (!simulink_ude_debug_scalar_pubs[i]) {
+      continue;
+    }
+    std_msgs::msg::Float64 msg;
+    msg.data = values[i];
+    simulink_ude_debug_scalar_pubs[i]->publish(msg);
+  }
 }
 
 void PX4CtrlFSM::publish_ude_tune_status(

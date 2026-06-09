@@ -122,8 +122,7 @@ int main(int argc, char *argv[])
     node->create_publisher<nav_msgs::msg::Odometry>(param.topics.simulink_actual, 10);
   fsm.simulink_tracking_error_pub =
     node->create_publisher<nav_msgs::msg::Odometry>(param.topics.simulink_tracking_error, 10);
-  fsm.simulink_ude_debug_pub =
-    node->create_publisher<std_msgs::msg::Float64MultiArray>(param.topics.simulink_ude_debug, 10);
+  fsm.create_simulink_ude_debug_publishers(param.topics.simulink_ude_debug);
   fsm.ude_tune_status_pub =
     node->create_publisher<std_msgs::msg::Float64MultiArray>(param.topics.ude_tune_status, 10);
   fsm.ude_tune_status_text_pub =

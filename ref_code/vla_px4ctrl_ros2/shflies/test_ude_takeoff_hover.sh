@@ -139,7 +139,7 @@ if [[ "${TEST_AUTO_CONFIRM}" == "true" ]]; then
 fi
 
 set +e
-ros2 run px4ctrl ude_takeoff_hover_test.py "${HELPER_ARGS[@]}"
+python3 "${WORKSPACE_DIR}/src/px4ctrl/scripts/ude_takeoff_hover_test.py" "${HELPER_ARGS[@]}"
 HELPER_STATUS="$?"
 set -e
 
