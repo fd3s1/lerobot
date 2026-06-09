@@ -1,10 +1,13 @@
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <iostream>
 #include <sstream>
 #include <string>
+#include <thread>
 
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
@@ -13,6 +16,7 @@
 #include <mavros_msgs/msg/attitude_target.hpp>
 #include <mavros_msgs/msg/rc_in.hpp>
 #include <mavros_msgs/msg/state.hpp>
+#include <mavros_msgs/srv/command_bool.hpp>
 #include <mavros_msgs/srv/set_mode.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -191,6 +195,7 @@ public:
     setpoint_topic_ =
       declare_parameter<std::string>("setpoint_topic", "/mavros/setpoint_raw/attitude");
     set_mode_service_ = declare_parameter<std::string>("set_mode_service", "/mavros/set_mode");
+    arming_service_ = declare_parameter<std::string>("arming_service", "/mavros/cmd/arming");
 
     reference_rpy_topic_ =
       declare_parameter<std::string>("reference_rpy_topic", "/test_att/reference_rpy");
@@ -212,8 +217,14 @@ public:
     imu_timeout_s_ = declare_parameter<double>("imu_timeout_s", 0.3);
     odom_timeout_s_ = declare_parameter<double>("odom_timeout_s", 0.3);
     state_timeout_s_ = declare_parameter<double>("state_timeout_s", 1.0);
+    auto_arm_enable_ = declare_parameter<bool>("auto_arm_enable", true);
     auto_offboard_enable_ = declare_parameter<bool>("auto_offboard_enable", true);
+    require_offboard_for_auto_arm_ = declare_parameter<bool>("require_offboard_for_auto_arm", true);
     restore_mode_on_inactive_ = declare_parameter<bool>("restore_mode_on_inactive", true);
+    disarm_on_inactive_ = declare_parameter<bool>("disarm_on_inactive", false);
+    enter_confirm_enable_ = declare_parameter<bool>("enter_confirm_enable", true);
+    arm_request_delay_s_ = declare_parameter<double>("arm_request_delay_s", 0.2);
+    arm_request_period_s_ = declare_parameter<double>("arm_request_period_s", 1.0);
     offboard_request_delay_s_ = declare_parameter<double>("offboard_request_delay_s", 0.5);
     offboard_request_period_s_ = declare_parameter<double>("offboard_request_period_s", 1.0);
 
@@ -233,7 +244,11 @@ public:
     thrust_base_ = declare_parameter<double>("thrust_base", 0.35);
     thrust_min_ = declare_parameter<double>("thrust_min", 0.20);
     thrust_max_ = declare_parameter<double>("thrust_max", 0.45);
+    thrust_ramp_per_s_ = declare_parameter<double>("thrust_ramp_per_s", 0.05);
     thrust_slew_per_s_ = declare_parameter<double>("thrust_slew_per_s", 0.20);
+    require_armed_for_thrust_ramp_ = declare_parameter<bool>("require_armed_for_thrust_ramp", true);
+    require_offboard_for_thrust_ramp_ =
+      declare_parameter<bool>("require_offboard_for_thrust_ramp", true);
     frame_id_ = declare_parameter<std::string>("frame_id", "map");
 
     sanitize_parameters();
@@ -276,6 +291,7 @@ public:
 
     setpoint_pub_ = create_publisher<mavros_msgs::msg::AttitudeTarget>(setpoint_topic_, 10);
     set_mode_client_ = create_client<mavros_msgs::srv::SetMode>(set_mode_service_);
+    arming_client_ = create_client<mavros_msgs::srv::CommandBool>(arming_service_);
     reference_rpy_pub_ =
       create_publisher<geometry_msgs::msg::Vector3Stamped>(reference_rpy_topic_, 10);
     actual_rpy_pub_ =
@@ -291,7 +307,13 @@ public:
     thrust_pub_ = create_publisher<std_msgs::msg::Float64>(thrust_topic_, 10);
     status_pub_ = create_publisher<std_msgs::msg::String>(status_topic_, 10);
 
-    current_thrust_ = thrust_base_;
+    current_thrust_ = thrust_min_;
+    nominal_thrust_ = thrust_min_;
+    if (enter_confirm_enable_) {
+      start_enter_confirm_thread();
+    } else {
+      enter_confirmed_.store(true);
+    }
     const double period_s = 1.0 / std::max(1.0, rate_hz_);
     timer_ = create_wall_timer(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -300,17 +322,40 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "test_attitude_mode_node started. CH%d high enables setpoint and OFFBOARD. rc=%s imu=%s odom=%s state=%s setpoint=%s set_mode=%s",
+      "test_attitude_mode_node started. CH%d high + Enter enables setpoint/OFFBOARD/arm. rc=%s imu=%s odom=%s state=%s setpoint=%s set_mode=%s arming=%s",
       test_att_channel_,
       rc_topic_.c_str(),
       imu_topic_.c_str(),
       odom_topic_.c_str(),
       state_topic_.c_str(),
       setpoint_topic_.c_str(),
-      set_mode_service_.c_str());
+      set_mode_service_.c_str(),
+      arming_service_.c_str());
   }
 
 private:
+  void start_enter_confirm_thread()
+  {
+    std::thread([this]() {
+      while (rclcpp::ok()) {
+        RCLCPP_WARN(
+          get_logger(),
+          "CH%d high is armed by terminal confirmation. Press Enter to allow test_att automation.",
+          test_att_channel_);
+        std::string line;
+        if (!std::getline(std::cin, line)) {
+          RCLCPP_WARN(get_logger(), "stdin closed; Enter confirmation disabled for this run.");
+          return;
+        }
+        enter_confirmed_.store(true);
+        RCLCPP_WARN(get_logger(), "Enter confirmed. Raise CH%d to start test_att.", test_att_channel_);
+        while (rclcpp::ok() && enter_confirmed_.load()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+      }
+    }).detach();
+  }
+
   void sanitize_parameters()
   {
     if (thrust_min_ < 0.0) {
@@ -340,8 +385,11 @@ private:
     imu_timeout_s_ = std::max(0.05, imu_timeout_s_);
     odom_timeout_s_ = std::max(0.05, odom_timeout_s_);
     state_timeout_s_ = std::max(0.05, state_timeout_s_);
+    arm_request_delay_s_ = std::max(0.0, arm_request_delay_s_);
+    arm_request_period_s_ = std::max(0.1, arm_request_period_s_);
     offboard_request_delay_s_ = std::max(0.0, offboard_request_delay_s_);
     offboard_request_period_s_ = std::max(0.1, offboard_request_period_s_);
+    thrust_ramp_per_s_ = std::max(0.0, thrust_ramp_per_s_);
     thrust_slew_per_s_ = std::max(0.0, thrust_slew_per_s_);
   }
 
@@ -413,6 +461,29 @@ private:
       reason.c_str());
   }
 
+  void request_arm(bool arm, const std::string &reason)
+  {
+    if (!arming_client_ || !arming_client_->service_is_ready()) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(),
+        *get_clock(),
+        2000,
+        "arming service is not ready; cannot request armed=%s (%s)",
+        arm ? "true" : "false",
+        reason.c_str());
+      return;
+    }
+
+    auto request = std::make_shared<mavros_msgs::srv::CommandBool::Request>();
+    request->value = arm;
+    arming_client_->async_send_request(request);
+    RCLCPP_WARN(
+      get_logger(),
+      "requested FCU armed=%s (%s)",
+      arm ? "true" : "false",
+      reason.c_str());
+  }
+
   void maybe_request_offboard(const rclcpp::Time &stamp, bool active, bool state_ok)
   {
     if (!auto_offboard_enable_ || !active || !state_ok || is_offboard()) {
@@ -441,6 +512,33 @@ private:
     have_last_offboard_request_ = true;
   }
 
+  void maybe_request_arm(const rclcpp::Time &stamp, bool active, bool state_ok)
+  {
+    if (!auto_arm_enable_ || !active || !state_ok || state_msg_.armed) {
+      return;
+    }
+    if (require_offboard_for_auto_arm_ && !is_offboard()) {
+      return;
+    }
+
+    if (!have_active_start_) {
+      active_start_stamp_ = stamp;
+      have_active_start_ = true;
+    }
+
+    if ((stamp - active_start_stamp_).seconds() < arm_request_delay_s_) {
+      return;
+    }
+    if (have_last_arm_request_ &&
+        (stamp - last_arm_request_stamp_).seconds() < arm_request_period_s_) {
+      return;
+    }
+
+    request_arm(true, "test_att confirmed");
+    last_arm_request_stamp_ = stamp;
+    have_last_arm_request_ = true;
+  }
+
   void maybe_restore_mode(const rclcpp::Time &stamp)
   {
     if (!restore_mode_on_inactive_ || !state_fresh(stamp) || !is_offboard()) {
@@ -450,6 +548,14 @@ private:
       mode_before_offboard_ :
       std::string("MANUAL");
     request_mode(restore_mode, "CH11 low");
+  }
+
+  void maybe_disarm_on_inactive(const rclcpp::Time &stamp)
+  {
+    if (!disarm_on_inactive_ || !state_fresh(stamp) || !state_msg_.armed) {
+      return;
+    }
+    request_arm(false, "test_att inactive");
   }
 
   bool test_att_switch_high() const
@@ -468,9 +574,32 @@ private:
   {
     const double throttle = shaped_channel(3, throttle_reverse_);
     if (throttle >= 0.0) {
-      return thrust_base_ + throttle * (thrust_max_ - thrust_base_);
+      return nominal_thrust_ + throttle * (thrust_max_ - nominal_thrust_);
     }
-    return thrust_base_ + throttle * (thrust_base_ - thrust_min_);
+    return nominal_thrust_ + throttle * (nominal_thrust_ - thrust_min_);
+  }
+
+  bool thrust_ramp_allowed() const
+  {
+    if (require_armed_for_thrust_ramp_ && (!have_state_ || !state_msg_.armed)) {
+      return false;
+    }
+    if (require_offboard_for_thrust_ramp_ && !is_offboard()) {
+      return false;
+    }
+    return true;
+  }
+
+  void reset_automation_requests()
+  {
+    have_last_arm_request_ = false;
+    have_last_offboard_request_ = false;
+  }
+
+  void reset_thrust_ramp()
+  {
+    nominal_thrust_ = thrust_min_;
+    current_thrust_ = thrust_min_;
   }
 
   Eigen::Vector3d actual_bodyrate_from_imu() const
@@ -542,7 +671,19 @@ private:
 
   void update_thrust(double dt, bool active)
   {
-    const double target = active ? target_thrust_from_rc() : thrust_base_;
+    if (active && thrust_ramp_allowed()) {
+      nominal_thrust_ = slew_toward(
+        nominal_thrust_,
+        thrust_base_,
+        thrust_ramp_per_s_ * std::max(0.0, dt));
+    } else if (!active) {
+      nominal_thrust_ = slew_toward(
+        nominal_thrust_,
+        thrust_min_,
+        thrust_ramp_per_s_ * std::max(0.0, dt));
+    }
+
+    const double target = active ? target_thrust_from_rc() : thrust_min_;
     const double max_delta = thrust_slew_per_s_ * std::max(0.0, dt);
     current_thrust_ = slew_toward(current_thrust_, target, max_delta);
     current_thrust_ = std::clamp(current_thrust_, thrust_min_, thrust_max_);
@@ -608,11 +749,15 @@ private:
     ss.setf(std::ios::fixed);
     ss.precision(3);
     ss << "active=" << (active ? "true" : "false")
+       << " ch" << test_att_channel_ << "_high=" << (test_att_switch_high() ? "true" : "false")
+       << " enter_confirmed=" << (enter_confirmed_.load() ? "true" : "false")
        << " rc_ok=" << (rc_ok ? "true" : "false")
        << " imu_ok=" << (imu_ok ? "true" : "false")
        << " odom_ok=" << (odom_ok ? "true" : "false")
        << " state_ok=" << (state_ok ? "true" : "false")
        << " fcu_mode=" << (have_state_ ? state_msg_.mode : std::string("<none>"))
+       << " armed=" << (have_state_ && state_msg_.armed ? "true" : "false")
+       << " auto_arm=" << (auto_arm_enable_ ? "true" : "false")
        << " auto_offboard=" << (auto_offboard_enable_ ? "true" : "false")
        << " ch" << test_att_channel_ << "_pwm=" << channel_pwm(rc_msg_, test_att_channel_, 1000.0)
        << " rc_age_s=" << rc_age(stamp)
@@ -620,6 +765,7 @@ private:
        << " odom_age_s=" << odom_age(stamp)
        << " state_age_s=" << state_age(stamp)
        << " setpoint_alignment=imu_q*odom_q_inv*ref_q"
+       << " nominal_thrust=" << nominal_thrust_
        << " thrust=" << current_thrust_;
     msg.data = ss.str();
     status_pub_->publish(msg);
@@ -643,11 +789,14 @@ private:
     const bool odom_ok = odom_fresh(stamp);
     const bool state_ok = state_fresh(stamp);
     const bool feedback_ok = imu_ok && odom_ok;
-    const bool active = rc_ok && feedback_ok && test_att_switch_high();
+    const bool ch11_high = test_att_switch_high();
+    const bool enter_ok = !enter_confirm_enable_ || enter_confirmed_.load();
+    const bool active = rc_ok && feedback_ok && ch11_high && enter_ok;
 
     if (!feedback_ok) {
       if (active_) {
         maybe_restore_mode(stamp);
+        maybe_disarm_on_inactive(stamp);
       }
       active_ = false;
       have_active_start_ = false;
@@ -664,16 +813,22 @@ private:
       initialize_reference_from_attitude(actual_q);
       active_start_stamp_ = stamp;
       have_active_start_ = true;
+      reset_automation_requests();
+      reset_thrust_ramp();
       if (!is_offboard() && state_ok && !state_msg_.mode.empty()) {
         mode_before_offboard_ = state_msg_.mode;
         have_mode_before_offboard_ = true;
       }
-      RCLCPP_INFO(get_logger(), "CH%d high: entering test_att mode.", test_att_channel_);
+      RCLCPP_INFO(get_logger(), "CH%d high and Enter confirmed: entering test_att mode.", test_att_channel_);
     } else if (!active && active_) {
       stop_reference_motion();
       maybe_restore_mode(stamp);
+      maybe_disarm_on_inactive(stamp);
       have_active_start_ = false;
-      have_last_offboard_request_ = false;
+      reset_automation_requests();
+      if (enter_confirm_enable_) {
+        enter_confirmed_.store(false);
+      }
       RCLCPP_WARN(get_logger(), "Leaving test_att mode; setpoint publication stopped.");
     }
 
@@ -690,6 +845,7 @@ private:
     if (active) {
       publish_setpoint(stamp);
       maybe_request_offboard(stamp, active, state_ok);
+      maybe_request_arm(stamp, active, state_ok);
     }
     publish_vectors(stamp, actual_q, actual_rpy, actual_bodyrate);
     publish_status(stamp, active, rc_ok, imu_ok, odom_ok, state_ok);
@@ -702,6 +858,7 @@ private:
   std::string state_topic_;
   std::string setpoint_topic_;
   std::string set_mode_service_;
+  std::string arming_service_;
   std::string reference_rpy_topic_;
   std::string actual_rpy_topic_;
   std::string error_rpy_topic_;
@@ -719,8 +876,14 @@ private:
   double imu_timeout_s_{0.3};
   double odom_timeout_s_{0.3};
   double state_timeout_s_{1.0};
+  bool auto_arm_enable_{true};
   bool auto_offboard_enable_{true};
+  bool require_offboard_for_auto_arm_{true};
   bool restore_mode_on_inactive_{true};
+  bool disarm_on_inactive_{false};
+  bool enter_confirm_enable_{true};
+  double arm_request_delay_s_{0.2};
+  double arm_request_period_s_{1.0};
   double offboard_request_delay_s_{0.5};
   double offboard_request_period_s_{1.0};
   double stick_deadzone_{0.08};
@@ -737,7 +900,10 @@ private:
   double thrust_base_{0.35};
   double thrust_min_{0.20};
   double thrust_max_{0.45};
+  double thrust_ramp_per_s_{0.05};
   double thrust_slew_per_s_{0.20};
+  bool require_armed_for_thrust_ramp_{true};
+  bool require_offboard_for_thrust_ramp_{true};
 
   mavros_msgs::msg::RCIn rc_msg_;
   sensor_msgs::msg::Imu imu_msg_;
@@ -749,6 +915,7 @@ private:
   rclcpp::Time state_stamp_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_loop_stamp_{0, 0, RCL_ROS_TIME};
   rclcpp::Time active_start_stamp_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_arm_request_stamp_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_offboard_request_stamp_{0, 0, RCL_ROS_TIME};
   bool have_rc_{false};
   bool have_imu_{false};
@@ -756,6 +923,7 @@ private:
   bool have_state_{false};
   bool have_last_loop_{false};
   bool have_active_start_{false};
+  bool have_last_arm_request_{false};
   bool have_last_offboard_request_{false};
   bool have_mode_before_offboard_{false};
   bool active_{false};
@@ -765,7 +933,9 @@ private:
   Eigen::Quaterniond reference_q_{Eigen::Quaterniond::Identity()};
   Eigen::Vector3d reference_rpy_{Eigen::Vector3d::Zero()};
   Eigen::Vector3d reference_bodyrate_{Eigen::Vector3d::Zero()};
-  double current_thrust_{0.35};
+  double nominal_thrust_{0.20};
+  double current_thrust_{0.20};
+  std::atomic<bool> enter_confirmed_{false};
 
   rclcpp::Subscription<mavros_msgs::msg::RCIn>::SharedPtr rc_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
@@ -781,6 +951,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr thrust_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
   rclcpp::Client<mavros_msgs::srv::SetMode>::SharedPtr set_mode_client_;
+  rclcpp::Client<mavros_msgs::srv::CommandBool>::SharedPtr arming_client_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
 
