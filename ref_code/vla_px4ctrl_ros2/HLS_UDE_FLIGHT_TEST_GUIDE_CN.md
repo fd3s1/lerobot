@@ -6,7 +6,7 @@
 
 - `shflies/auto_hls_ude_grasp_place_test.sh`：一键飞行测试入口。
 - `shflies/auto_hls_grasp_place.sh`：自动 HLS 抓取放置入口，负责启动 HLS 节点并运行自动抓放节点。
-- `src/px4ctrl/scripts/auto_hls_grasp_place.py`：自动抓放节点，负责自动起飞、等待 `AUTO_HOVER`、到点、HLS close、body-Y 居中、起吊、放置和命令降落。
+- `src/px4ctrl/scripts/auto_hls_grasp_place.py`：自动抓放节点，负责自动起飞、等待 `AUTO_HOVER`、到点、HLS close、body-frame 协同居中、起吊、放置和命令降落。
 - `src/hls_gripper/scripts/hls_gripper_node.py`：HLS 力控夹爪状态机。
 
 ## 重要安全原则
@@ -16,8 +16,8 @@
 - 接管前、飞向目标、下降和实际到位 settle 前，夹爪会持续保持 open。
 - 只有 `Pre-grasp actual settle` 完成后，脚本才允许 HLS close。
 - 飞机控制位姿仍使用 `DRONE_POSE_TOPIC=/mavros/local_position/odom`；`ARRIVAL_POSE_TOPIC=/mavros/vision_pose/pose` 只用于到位判定和慢速 mocap 修正，不直接替换控制输入。
-- 抓取前 mocap 修正同时修 XY 和 Z；HLS 任意一侧接触后，Z 修正会冻结，避免接触后上下扰动目标。
-- CH10 低位、离开 `CMD_CTRL`、HLS 状态失效或 HLS fault 都会停止 close 并发布 open。`/mavros/rc/in` 超时默认只告警，避免把 ROS 话题回调间隔误判为遥控器丢失。
+- 抓取前 mocap 修正同时修 body-X/body-Y 和 Z；HLS 任意一侧接触后，Z 修正会冻结，mocap 修正只保留低速 body-X，body-Y 主要交给 HLS `center_error_m`。
+- CH10 低位、离开 `CMD_CTRL`、FCU disarm/MAVROS disconnected、HLS 状态失效或 HLS fault 都会停止 close 并发布 open。`/mavros/rc/in` 超时默认只告警，避免把 ROS 话题回调间隔误判为遥控器丢失。
 - 释放到 box 后，撤离和命令降落阶段会持续保持 open。
 - 默认降落是 `CMD_CTRL` 位置命令下降到 `CMD_LAND_Z=-0.3`，不是 PX4 autoland；结束后仍需人工确认安全和必要时 disarm。
 
@@ -134,6 +134,7 @@ ros2 topic echo /hls_gripper/safe_to_lift
 ros2 topic echo /hls_gripper/fault
 ros2 topic echo /hls_gripper/centering_offset_m
 ros2 topic echo /hls_gripper/single_contact_need_motion
+ros2 topic echo /hls_gripper/status_snapshot
 ```
 
 ### 7. 上桨低风险飞行测试
@@ -198,7 +199,7 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 | 进入 `CMD_CTRL` | 发布当前位置 `/position_cmd` | 保持 open | 进入失败则退出 |
 | 飞到目标上方 | 跟随目标 live waypoint | 保持 open | 未到位不夹 |
 | 下降到抓取点 | 到目标抓取高度 | 保持 open | 到位误差和 settle 检查 |
-| HLS 抓取 | body-Y 小幅辅助居中 | 持续 close/追夹 | CH10、CMD_CTRL、HLS 状态持续检查；RC topic stale 默认只告警 |
+| HLS 抓取 | body-X 低速修 odom/arrival 误差；body-Y 只做 HLS 小幅辅助居中 | 持续 close/追夹 | CH10、CMD_CTRL、MAVROS armed/connected、HLS snapshot 持续检查；RC topic stale 默认只告警 |
 | `LIFT_READY` | 提起到目标上方 | 保持 close/追夹 | HLS safe 后才起吊 |
 | 转运到 box | 飞向 box 上方 | 保持 close/追夹 | 避免中途松开 |
 | 下降到 box | 到放置高度 | 保持 close/追夹 | 到位后才释放 |
@@ -249,7 +250,7 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 | `POSE_PREFLIGHT_REQUIRED` | `true` | preflight 失败是否直接退出。 | 真机建议保持 `true`。 |
 | `SKIP_POSE_PREFLIGHT` | `false` | 是否完全跳过一键脚本的 topic 检查。 | 只在明确知道 topic 正常时使用。 |
 | `PX4CTRL_STATE_TOPIC` | `/px4ctrl/state` | px4ctrl 状态话题。 | 自动流程需要看到 `AUTO_HOVER` 和 `CMD_CTRL`。 |
-| `MAVROS_STATE_TOPIC` | `/mavros/state` | MAVROS 状态话题。 | 用于启动前确认 MAVROS 在线。 |
+| `MAVROS_STATE_TOPIC` | `/mavros/state` | MAVROS 状态话题。 | 用于启动前确认 MAVROS 在线；抓取/携带阶段若 disconnected 或 disarmed，会立即 open 并中止 close。 |
 
 ### CH10 和任务安全参数
 
@@ -350,10 +351,10 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 自动节点发布 `/position_cmd` 时，名义目标仍由 odom 控制链生成；如果启用 mocap 修正，则根据 `ARRIVAL_POSE_TOPIC` 看到的实际误差，限速、限幅叠加一个慢速修正量：
 
 ```text
-corrected_cmd = nominal_odom_cmd + mocap_correction_map + hls_body_y_offset_map
+corrected_cmd = nominal_odom_cmd + mocap_correction + hls_body_y_offset_map
 ```
 
-其中 `mocap_correction_map` 是全局慢速落点修正，`hls_body_y_offset_map` 是夹持期 HLS 局部 body-Y 居中辅助。两者独立限幅，接触后 Z 修正冻结。
+其中 `mocap_correction` 默认在 body-frame 中积分，再按 yaw 转回 map-frame 叠加到命令上。接触前它可以修 body-X/body-Y/Z；HLS 任意接触后，Z 冻结，body-Y 不再由 mocap correction 更新，主要由 HLS `center_error_m` 负责。`hls_body_y_offset_map` 是夹持期 HLS 局部 body-Y 居中辅助，和 mocap correction 独立限幅。
 
 | 参数 | 默认值 | 作用 | 调参建议 |
 | --- | --- | --- | --- |
@@ -364,13 +365,17 @@ corrected_cmd = nominal_odom_cmd + mocap_correction_map + hls_body_y_offset_map
 | `MOCAP_CORRECTION_VZ_MPS` | `0.04` | 接触前 Z 修正限速。 | 高度修正应慢于水平，避免上下抖。 |
 | `MOCAP_CORRECTION_HLS_XY_VMAX_MPS` | `0.02` | HLS 接触后的 XY mocap 修正限速。 | 接触后降低，避免和夹爪 body-Y 居中抢控制。 |
 | `MOCAP_CORRECTION_FREEZE_Z_ON_CONTACT` | `true` | HLS 任意接触后是否冻结 Z 修正。 | 真机抓取建议保持 `true`。你已明确要求接触后 Z 不再修正。 |
+| `MOCAP_CORRECTION_BODY_FRAME` | `true` | 是否在机体系下积分 mocap 修正。 | HLS-UDE 抓取建议保持 `true`：body-X 由 odom/arrival 误差修正，body-Y 让 HLS center error 主导。 |
+| `BODY_FRAME_YAW_SOURCE` | `drone_control` | body-frame 到 map-frame 转换使用的 yaw 来源。 | 可选 `drone_control`、`drone_arrival`、`reference`；默认跟随 `/mavros/local_position/odom`。 |
+| `BODY_FRAME_YAW_OFFSET_RAD` | `0.0` | body-frame yaw 额外偏置，单位 rad。 | 如果 mocap 刚体 yaw 和飞机真实机体系不重合，用这个补偿。 |
 
 诊断话题：
 
 - `/auto_hls_grasp_place/nominal_position_cmd`：未叠加修正的名义命令。
 - `/auto_hls_grasp_place/corrected_position_cmd`：实际发到 `/position_cmd` 的修正命令。
 - `/auto_hls_grasp_place/arrival_error`：arrival pose 相对名义命令的误差。
-- `/auto_hls_grasp_place/mocap_correction`：当前叠加的 mocap 修正量。
+- `/auto_hls_grasp_place/mocap_correction`：当前叠加到 map-frame 的 mocap 修正量。
+- `/auto_hls_grasp_place/body_correction`：当前 body-frame mocap 修正量，x 是机体系前后，y 是机体系左右。
 - `/auto_hls_grasp_place/hls_body_y_offset`：当前 HLS body-Y 辅助偏移。
 - `/auto_hls_grasp_place/grasp_attempt`：当前抓取尝试编号，从 1 开始。
 
@@ -487,12 +492,13 @@ corrected_cmd = nominal_odom_cmd + mocap_correction_map + hls_body_y_offset_map
 | --- | --- | --- | --- |
 | `HLS_GRASP_TIMEOUT_S` | `12.0` | HLS 抓取从 close 到 `safe_to_lift` 的最长时间。 | 目标难抓时可增大。 |
 | `HLS_GRASP_MAX_RETRIES` | `2` | 首次抓取失败后最多再尝试的次数。 | 调试高度和落点时可设 `0`，确认首夹行为；正式测试可用默认 `2`。 |
-| `HLS_STATUS_TIMEOUT_S` | `0.8` | HLS 状态话题新鲜度阈值。 | 太小可能误报 stale，太大安全响应变慢。 |
+| `HLS_STATUS_TIMEOUT_S` | `0.8` | HLS 状态 snapshot 新鲜度阈值。 | 自动节点优先使用 `/hls_gripper/status_snapshot`，避免多个分散 topic 混用不同周期的数据。 |
 | `CENTER_DEADBAND_M` | `0.005` | body-Y 居中死区。 | 小误差不移动，避免抖动。 |
 | `CENTER_KP` | `0.8` | body-Y 偏移伺服比例增益。 | 越大越快，太大可能来回抢控制。 |
-| `CENTER_VMAX_MPS` | `0.03` | 双侧接触后居中的最大 body-Y 速度。 | 应低于夹爪追夹响应。 |
-| `CENTER_OFFSET_MAX_M` | `0.08` | 双侧居中最大 body-Y 偏移。 | 防止大幅横移。 |
+| `CENTER_VMAX_MPS` | `0.015` | 双侧接触后居中的最大 body-Y 速度。 | 应低于夹爪追夹响应；现在默认更慢，避免无人机硬推固定目标。 |
+| `CENTER_OFFSET_MAX_M` | `0.025` | 双侧居中最大 body-Y 偏移。 | 防止大幅横移；固定目标测试建议保持小幅。 |
 | `CENTER_COMMAND_SIGN` | `1.0` | 双侧居中方向符号。 | 方向反了才改成 `-1.0`。 |
+| `HLS_STATUS_CENTER_MISMATCH_TOL_M` | `0.015` | 双侧接触时 `center_error_m` 与 `centering_offset_m` 的一致性容差。 | 如果 snapshot 中两者不同号或差值过大，本周期 body-Y 居中会被拒绝并报警。 |
 | `SINGLE_CONTACT_VMAX_MPS` | `0.015` | 单侧接触让位最大 body-Y 速度。 | 比双侧居中更慢，避免硬压物体。 |
 | `SINGLE_CONTACT_OFFSET_MAX_M` | `0.10` | 单侧让位最大 body-Y 偏移。 | 防止持续侧推。 |
 | `SINGLE_CONTACT_BODY_Y_SIGN` | `1.0` | 单侧让位方向符号。 | 单侧接触时飞机移动方向反了才改。 |
@@ -505,7 +511,7 @@ corrected_cmd = nominal_odom_cmd + mocap_correction_map + hls_body_y_offset_map
 | --- | --- | --- |
 | `SEARCH_OBJECT` | 不移动，保持抓取点 | 双指搜索闭合 |
 | `LEFT_CONTACT` / `RIGHT_CONTACT` | 只有 `single_contact_need_motion=true` 才按 `single_contact_direction` 低速移动 | 已接触侧追夹，未接触侧继续搜索 |
-| `BOTH_CONTACT` / `CENTERING` / `CENTERED` / `FINAL_GRIP` | 按 `centering_offset_m` 小幅居中 | 持续 close、追夹、最终夹持 |
+| `BOTH_CONTACT` / `CENTERING` / `CENTERED` / `FINAL_GRIP` | 以 snapshot 中的 `center_error_m` 为主做小幅 body-Y 居中；mocap correction 只继续低速 body-X | 持续 close、差动电流居中、追夹、最终夹持 |
 | `LIFT_READY` | 停止抓取循环，冻结最后偏移并进入起吊 | 进入可起吊保持 |
 
 ### 抓取失败和重试逻辑

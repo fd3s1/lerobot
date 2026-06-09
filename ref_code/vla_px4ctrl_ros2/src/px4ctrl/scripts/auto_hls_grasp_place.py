@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import sys
 import time
 from dataclasses import dataclass, replace
 
-from mavros_msgs.msg import RCIn
+from mavros_msgs.msg import RCIn, State
 import rclpy
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.utilities import remove_ros_args
@@ -39,6 +40,7 @@ class HlsTaskConfig:
     hls_status_topic: str
     hls_status_timeout_s: float
     hls_grasp_timeout_s: float
+    mavros_state_topic: str
     rc_topic: str
     rc_timeout_s: float
     rc_stale_action: str
@@ -53,6 +55,7 @@ class HlsTaskConfig:
     center_vmax_mps: float
     center_offset_max_m: float
     center_command_sign: float
+    hls_status_center_mismatch_tol_m: float
     single_contact_vmax_mps: float
     single_contact_offset_max_m: float
     single_contact_body_y_sign: float
@@ -63,6 +66,8 @@ class HlsTaskConfig:
 
 @dataclass
 class StandardHlsStatus:
+    seq: int = 0
+    stamp_ns: int = 0
     state: str = "UNKNOWN"
     center_error_m: float = 0.0
     centering_offset_m: float = 0.0
@@ -109,8 +114,11 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
         self.status_prefix = status_prefix_from_topic(hls_config.hls_status_topic)
         self.hls_status = StandardHlsStatus()
         self.hls_status_stamps: dict[str, float] = {}
+        self.hls_snapshot_seen = False
         self.rc: RCIn | None = None
         self.rc_received_s: float | None = None
+        self.mavros_state: State | None = None
+        self.mavros_state_received_s: float | None = None
         self.last_ch10_pwm: int | None = None
         self.mission_safety_armed = False
         self.safety_abort_active = False
@@ -119,6 +127,9 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
         self.last_pregrasp_open_s = 0.0
         self.last_safety_open_s = 0.0
         self.last_rc_stale_warn_s = 0.0
+        self.last_hls_snapshot_warn_s = 0.0
+        self.last_hls_center_mismatch_warn_s = 0.0
+        self.create_subscription(String, f"{self.status_prefix}/status_snapshot", self._hls_snapshot_cb, 10)
         self.create_subscription(String, f"{self.status_prefix}/state", self._string_cb("state"), 10)
         self.create_subscription(String, f"{self.status_prefix}/fault_reason", self._string_cb("fault_reason"), 10)
         self.create_subscription(Float64, f"{self.status_prefix}/center_error_m", self._float_cb("center_error_m"), 10)
@@ -152,14 +163,17 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
             depth=10,
         )
         self.create_subscription(RCIn, hls_config.rc_topic, self._rc_cb, rc_qos)
+        self.create_subscription(State, hls_config.mavros_state_topic, self._mavros_state_cb, 10)
         self.get_logger().info(
             "Auto HLS grasp/place started without dataset recording. "
             f"status_prefix={self.status_prefix} rc_topic={hls_config.rc_topic} "
-            f"ch10_index={hls_config.ch10_index}"
+            f"mavros_state_topic={hls_config.mavros_state_topic} ch10_index={hls_config.ch10_index}"
         )
 
     def _string_cb(self, name: str):
         def callback(msg: String) -> None:
+            if self.hls_snapshot_seen:
+                return
             setattr(self.hls_status, name, str(msg.data))
             self.hls_status_stamps[name] = time.monotonic()
 
@@ -167,6 +181,8 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
 
     def _float_cb(self, name: str):
         def callback(msg: Float64) -> None:
+            if self.hls_snapshot_seen:
+                return
             setattr(self.hls_status, name, float(msg.data))
             self.hls_status_stamps[name] = time.monotonic()
 
@@ -174,10 +190,67 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
 
     def _bool_cb(self, name: str):
         def callback(msg: Bool) -> None:
+            if self.hls_snapshot_seen:
+                return
             setattr(self.hls_status, name, bool(msg.data))
             self.hls_status_stamps[name] = time.monotonic()
 
         return callback
+
+    def _hls_snapshot_cb(self, msg: String) -> None:
+        try:
+            data = json.loads(msg.data)
+        except json.JSONDecodeError as exc:
+            now = time.monotonic()
+            if now - self.last_hls_snapshot_warn_s >= 1.0:
+                self.get_logger().warn(f"Ignoring invalid HLS status snapshot JSON: {exc}")
+                self.last_hls_snapshot_warn_s = now
+            return
+
+        def get_float(name: str, default: float = 0.0) -> float:
+            try:
+                return float(data.get(name, default))
+            except (TypeError, ValueError):
+                return default
+
+        def get_bool(name: str, default: bool = False) -> bool:
+            value = data.get(name, default)
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)):
+                return bool(value)
+            if isinstance(value, str):
+                return value.strip().lower() in ("1", "true", "yes", "on")
+            return default
+
+        try:
+            seq = int(data.get("seq", 0))
+        except (TypeError, ValueError):
+            seq = 0
+        try:
+            stamp_ns = int(data.get("stamp_ns", 0))
+        except (TypeError, ValueError):
+            stamp_ns = 0
+
+        self.hls_status = StandardHlsStatus(
+            seq=seq,
+            stamp_ns=stamp_ns,
+            state=str(data.get("state", "UNKNOWN")),
+            center_error_m=get_float("center_error_m"),
+            centering_offset_m=get_float("centering_offset_m"),
+            single_contact_offset_m=get_float("single_contact_offset_m"),
+            safe_to_lift=get_bool("safe_to_lift"),
+            fault=get_bool("fault"),
+            fault_reason=str(data.get("fault_reason", "")),
+            left_contact=get_bool("left_contact"),
+            right_contact=get_bool("right_contact"),
+            single_contact_need_motion=get_bool("single_contact_need_motion"),
+            single_contact_direction=get_float("single_contact_direction"),
+            left_at_close_limit=get_bool("left_at_close_limit"),
+            right_at_close_limit=get_bool("right_at_close_limit"),
+        )
+        self.hls_snapshot_seen = True
+        self.hls_status_stamps["snapshot"] = time.monotonic()
 
     def _rc_cb(self, msg: RCIn) -> None:
         self.rc = msg
@@ -187,6 +260,10 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
         else:
             self.last_ch10_pwm = None
 
+    def _mavros_state_cb(self, msg: State) -> None:
+        self.mavros_state = msg
+        self.mavros_state_received_s = time.monotonic()
+
     def wait_for_record_ready(self) -> None:
         return
 
@@ -195,8 +272,12 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
 
     def hls_status_fresh(self) -> bool:
         now = time.monotonic()
+        if self.hls_snapshot_seen:
+            stamp = self.hls_status_stamps.get("snapshot")
+            return stamp is not None and now - stamp <= self.hls_config.hls_status_timeout_s
         for name in (
             "state",
+            "center_error_m",
             "centering_offset_m",
             "single_contact_offset_m",
             "safe_to_lift",
@@ -283,6 +364,15 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
                 reason = f"px4ctrl left CMD_CTRL during {phase}; latest={self.px4ctrl_state!r}"
                 self.force_open_for_safety(reason)
                 raise AutoHlsSafetyAbort(reason)
+            if self.mavros_state is not None:
+                if not bool(self.mavros_state.connected):
+                    reason = f"MAVROS disconnected during {phase}"
+                    self.force_open_for_safety(reason)
+                    raise AutoHlsSafetyAbort(reason)
+                if not bool(self.mavros_state.armed):
+                    reason = f"FCU disarmed during {phase}; mode={self.mavros_state.mode!r}"
+                    self.force_open_for_safety(reason)
+                    raise AutoHlsSafetyAbort(reason)
             drone = self.poses.get("drone")
             if (
                 drone is not None
@@ -337,9 +427,11 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
             self.hls_payload_attached = False
 
     def pose_with_body_y_offset(self, reference: PoseSample, body_y_offset_m: float) -> PoseSample:
+        yaw = self.body_frame_yaw(reference)
+        dx, dy = self.body_vector_to_map(0.0, body_y_offset_m, yaw)
         return self.checked_pose(
-            x=reference.x - math.sin(reference.yaw) * body_y_offset_m,
-            y=reference.y + math.cos(reference.yaw) * body_y_offset_m,
+            x=reference.x + dx,
+            y=reference.y + dy,
             z=reference.z,
             yaw=reference.yaw,
         )
@@ -378,7 +470,28 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
 
         if status.state in HLS_BODY_Y_CENTERING_STATES:
             offset_limit_m = cfg.center_offset_max_m
-            raw_target_m = cfg.center_command_sign * float(status.centering_offset_m)
+            mismatch_m = abs(float(status.centering_offset_m) - float(status.center_error_m))
+            sign_conflict = (
+                abs(status.centering_offset_m) > cfg.center_deadband_m
+                and abs(status.center_error_m) > cfg.center_deadband_m
+                and sign_nonzero(status.centering_offset_m) != sign_nonzero(status.center_error_m)
+            )
+            if (
+                status.left_contact
+                and status.right_contact
+                and (mismatch_m > cfg.hls_status_center_mismatch_tol_m or sign_conflict)
+            ):
+                now = time.monotonic()
+                if now - self.last_hls_center_mismatch_warn_s >= 0.5:
+                    self.get_logger().warn(
+                        "Rejecting HLS body-y centering for this cycle because snapshot fields disagree: "
+                        f"center_error={status.center_error_m:+.4f}m "
+                        f"centering_offset={status.centering_offset_m:+.4f}m "
+                        f"mismatch={mismatch_m:.4f}m seq={status.seq}."
+                    )
+                    self.last_hls_center_mismatch_warn_s = now
+                return "center_reject", False, 0.0, 0.0, offset_limit_m, cfg.center_vmax_mps
+            raw_target_m = cfg.center_command_sign * float(status.center_error_m)
             target_m = clamp(raw_target_m, -offset_limit_m, offset_limit_m)
             return "center", True, raw_target_m, target_m, offset_limit_m, cfg.center_vmax_mps
 
@@ -459,7 +572,9 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
             rclpy.spin_once(self, timeout_sec=0.0)
 
             if self.px4ctrl_state != "CMD_CTRL":
-                raise RuntimeError(f"px4ctrl left CMD_CTRL during HLS grasp; latest={self.px4ctrl_state!r}.")
+                reason = f"px4ctrl left CMD_CTRL during HLS grasp; latest={self.px4ctrl_state!r}"
+                self.force_open_for_safety(reason)
+                raise AutoHlsSafetyAbort(reason)
             try:
                 self.raise_if_safety_abort("HLS grasp")
             except AutoHlsSafetyAbort as exc:
@@ -493,6 +608,8 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
                         self.get_logger().info("HLS contact detected; lowering mocap XY correction speed.")
                 self.set_mocap_correction_mode(
                     allow_xy=True,
+                    allow_body_x=True,
+                    allow_body_y=False,
                     allow_z=not self.config.mocap_correction_freeze_z_on_contact,
                     xy_vmax=self.config.mocap_correction_hls_xy_vmax_mps,
                 )
@@ -549,6 +666,7 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
                 last_log_s = now
                 self.get_logger().info(
                     f"HLS state={status.state} phase={phase} center={status.center_error_m:+.4f}m "
+                    f"centering={status.centering_offset_m:+.4f}m seq={status.seq} "
                     f"target_offset={target_offset_m:+.4f}m raw={raw_target_offset_m:+.4f}m "
                     f"body_y_offset={body_y_offset_m:+.4f}m vmax={vmax_mps:.3f} "
                     f"single_est={status.single_contact_offset_m:+.4f}m "
@@ -615,6 +733,7 @@ def parse_configs() -> tuple[AutoConfig, HlsTaskConfig]:
     hls_parser.add_argument("--hls-status-timeout-s", type=float, default=0.8)
     hls_parser.add_argument("--hls-grasp-timeout-s", type=float, default=12.0)
     hls_parser.add_argument("--hls-grasp-max-retries", type=int, default=2)
+    hls_parser.add_argument("--mavros-state-topic", default="/mavros/state")
     hls_parser.add_argument("--rc-topic", default="/mavros/rc/in")
     hls_parser.add_argument("--rc-timeout-s", type=float, default=0.5)
     hls_parser.add_argument("--rc-stale-action", choices=("warn", "abort"), default="warn")
@@ -629,6 +748,7 @@ def parse_configs() -> tuple[AutoConfig, HlsTaskConfig]:
     hls_parser.add_argument("--center-vmax-mps", type=float, default=0.03)
     hls_parser.add_argument("--center-offset-max-m", type=float, default=0.08)
     hls_parser.add_argument("--center-command-sign", type=float, default=1.0)
+    hls_parser.add_argument("--hls-status-center-mismatch-tol-m", type=float, default=0.015)
     hls_parser.add_argument("--single-contact-vmax-mps", type=float, default=0.015)
     hls_parser.add_argument("--single-contact-offset-max-m", type=float, default=0.10)
     hls_parser.add_argument("--single-contact-body-y-sign", type=float, default=1.0)
@@ -667,6 +787,8 @@ def parse_configs() -> tuple[AutoConfig, HlsTaskConfig]:
         raise ValueError("--force-open-below-z must be inside configured flight z limits.")
     if hls_config.center_kp < 0.0 or hls_config.center_vmax_mps <= 0.0 or hls_config.center_offset_max_m <= 0.0:
         raise ValueError("--center-kp must be non-negative; center speed/offset limits must be positive.")
+    if hls_config.hls_status_center_mismatch_tol_m < 0.0:
+        raise ValueError("--hls-status-center-mismatch-tol-m must be non-negative.")
     if hls_config.single_contact_vmax_mps <= 0.0 or hls_config.single_contact_offset_max_m <= 0.0:
         raise ValueError("--single-contact-vmax-mps and --single-contact-offset-max-m must be positive.")
     if hls_config.single_contact_body_y_sign == 0.0:

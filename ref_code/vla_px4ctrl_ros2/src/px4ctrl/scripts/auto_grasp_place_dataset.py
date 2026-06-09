@@ -165,6 +165,9 @@ class AutoConfig:
     mocap_correction_vz_mps: float
     mocap_correction_hls_xy_vmax_mps: float
     mocap_correction_freeze_z_on_contact: bool
+    mocap_correction_body_frame: bool
+    body_frame_yaw_source: Literal["drone_control", "drone_arrival", "reference"]
+    body_frame_yaw_offset_rad: float
     confirm_before_takeoff: bool
     record_duration_s: float
     record_start_hold_s: float
@@ -218,7 +221,11 @@ class AutoGraspPlaceDataset(Node):
         self.mocap_correction_x = 0.0
         self.mocap_correction_y = 0.0
         self.mocap_correction_z = 0.0
+        self.mocap_correction_body_x = 0.0
+        self.mocap_correction_body_y = 0.0
         self.mocap_correction_allow_xy = True
+        self.mocap_correction_allow_body_x = True
+        self.mocap_correction_allow_body_y = True
         self.mocap_correction_allow_z = True
         self.mocap_correction_xy_vmax_override: float | None = None
         self.mocap_correction_z_vmax_override: float | None = None
@@ -252,6 +259,7 @@ class AutoGraspPlaceDataset(Node):
         self.corrected_cmd_pub = self.create_publisher(PoseStamped, "/auto_hls_grasp_place/corrected_position_cmd", 10)
         self.arrival_error_pub = self.create_publisher(Vector3Stamped, "/auto_hls_grasp_place/arrival_error", 10)
         self.mocap_correction_pub = self.create_publisher(Vector3Stamped, "/auto_hls_grasp_place/mocap_correction", 10)
+        self.body_correction_pub = self.create_publisher(Vector3Stamped, "/auto_hls_grasp_place/body_correction", 10)
         self.hls_body_y_offset_pub = self.create_publisher(Float64, "/auto_hls_grasp_place/hls_body_y_offset", 10)
         self.grasp_attempt_pub = self.create_publisher(Int32, "/auto_hls_grasp_place/grasp_attempt", 10)
         self.gripper_pub = self.create_publisher(Float64, config.gripper_topic, 10)
@@ -452,6 +460,8 @@ class AutoGraspPlaceDataset(Node):
         self,
         *,
         allow_xy: bool | None = None,
+        allow_body_x: bool | None = None,
+        allow_body_y: bool | None = None,
         allow_z: bool | None = None,
         update_enabled: bool | None = None,
         xy_vmax: float | None = None,
@@ -459,6 +469,10 @@ class AutoGraspPlaceDataset(Node):
     ) -> None:
         if allow_xy is not None:
             self.mocap_correction_allow_xy = allow_xy
+        if allow_body_x is not None:
+            self.mocap_correction_allow_body_x = allow_body_x
+        if allow_body_y is not None:
+            self.mocap_correction_allow_body_y = allow_body_y
         if allow_z is not None:
             self.mocap_correction_allow_z = allow_z
         if update_enabled is not None:
@@ -469,6 +483,8 @@ class AutoGraspPlaceDataset(Node):
     def reset_mocap_correction_mode(self) -> None:
         self.set_mocap_correction_mode(
             allow_xy=True,
+            allow_body_x=True,
+            allow_body_y=True,
             allow_z=True,
             update_enabled=True,
             xy_vmax=None,
@@ -480,6 +496,42 @@ class AutoGraspPlaceDataset(Node):
 
     def freeze_mocap_correction_all(self) -> None:
         self.set_mocap_correction_mode(update_enabled=False)
+
+    def body_frame_yaw(self, reference: PoseSample) -> float:
+        source = self.config.body_frame_yaw_source
+        pose: PoseSample | None = None
+        if source == "drone_control":
+            pose = self.poses.get("drone")
+            if pose is not None and not self.pose_fresh("drone"):
+                pose = None
+        elif source == "drone_arrival":
+            pose = self.poses.get("drone_arrival")
+            if pose is not None and not self.pose_fresh("drone_arrival"):
+                pose = None
+        yaw = reference.yaw if pose is None else pose.yaw
+        return normalize_angle(yaw + self.config.body_frame_yaw_offset_rad)
+
+    @staticmethod
+    def body_vector_to_map(body_x: float, body_y: float, yaw: float) -> tuple[float, float]:
+        c = math.cos(yaw)
+        s = math.sin(yaw)
+        return c * body_x - s * body_y, s * body_x + c * body_y
+
+    @staticmethod
+    def map_vector_to_body(map_x: float, map_y: float, yaw: float) -> tuple[float, float]:
+        c = math.cos(yaw)
+        s = math.sin(yaw)
+        return c * map_x + s * map_y, -s * map_x + c * map_y
+
+    def refresh_body_frame_mocap_correction(self, nominal: PoseSample) -> None:
+        if not self.config.mocap_correction_body_frame:
+            return
+        yaw = self.body_frame_yaw(nominal)
+        self.mocap_correction_x, self.mocap_correction_y = self.body_vector_to_map(
+            self.mocap_correction_body_x,
+            self.mocap_correction_body_y,
+            yaw,
+        )
 
     def update_mocap_correction(self, nominal: PoseSample) -> tuple[float, float, float]:
         arrival = self.poses.get("drone_arrival")
@@ -506,13 +558,33 @@ class AutoGraspPlaceDataset(Node):
                 else self.config.mocap_correction_vxy_mps
             )
             max_step = max(0.0, xy_vmax) * dt
-            self.mocap_correction_x += clamp(err_x, -max_step, max_step)
-            self.mocap_correction_y += clamp(err_y, -max_step, max_step)
-            xy_mag = math.hypot(self.mocap_correction_x, self.mocap_correction_y)
-            if xy_mag > self.config.mocap_correction_max_xy_m > 0.0:
-                scale = self.config.mocap_correction_max_xy_m / xy_mag
-                self.mocap_correction_x *= scale
-                self.mocap_correction_y *= scale
+            if self.config.mocap_correction_body_frame:
+                yaw = self.body_frame_yaw(nominal)
+                body_err_x, body_err_y = self.map_vector_to_body(err_x, err_y, yaw)
+                if self.mocap_correction_allow_body_x:
+                    self.mocap_correction_body_x += clamp(body_err_x, -max_step, max_step)
+                if self.mocap_correction_allow_body_y:
+                    self.mocap_correction_body_y += clamp(body_err_y, -max_step, max_step)
+                body_mag = math.hypot(self.mocap_correction_body_x, self.mocap_correction_body_y)
+                if body_mag > self.config.mocap_correction_max_xy_m > 0.0:
+                    scale = self.config.mocap_correction_max_xy_m / body_mag
+                    self.mocap_correction_body_x *= scale
+                    self.mocap_correction_body_y *= scale
+                self.mocap_correction_x, self.mocap_correction_y = self.body_vector_to_map(
+                    self.mocap_correction_body_x,
+                    self.mocap_correction_body_y,
+                    yaw,
+                )
+            else:
+                self.mocap_correction_x += clamp(err_x, -max_step, max_step)
+                self.mocap_correction_y += clamp(err_y, -max_step, max_step)
+                xy_mag = math.hypot(self.mocap_correction_x, self.mocap_correction_y)
+                if xy_mag > self.config.mocap_correction_max_xy_m > 0.0:
+                    scale = self.config.mocap_correction_max_xy_m / xy_mag
+                    self.mocap_correction_x *= scale
+                    self.mocap_correction_y *= scale
+        else:
+            self.refresh_body_frame_mocap_correction(nominal)
 
         if self.mocap_correction_allow_z:
             z_vmax = (
@@ -534,6 +606,7 @@ class AutoGraspPlaceDataset(Node):
         err = self.update_mocap_correction(nominal)
         if not self.config.mocap_correction_enable:
             return nominal, err
+        self.refresh_body_frame_mocap_correction(nominal)
         corrected = self.checked_pose(
             nominal.x + self.mocap_correction_x,
             nominal.y + self.mocap_correction_y,
@@ -562,6 +635,12 @@ class AutoGraspPlaceDataset(Node):
             self.mocap_correction_pub,
             self.mocap_correction_x,
             self.mocap_correction_y,
+            self.mocap_correction_z,
+        )
+        self.publish_vector_diag(
+            self.body_correction_pub,
+            self.mocap_correction_body_x,
+            self.mocap_correction_body_y,
             self.mocap_correction_z,
         )
         self.cmd_pub.publish(corrected_msg)
@@ -1537,6 +1616,13 @@ def parse_args() -> AutoConfig:
     parser.add_argument("--mocap-correction-vz-mps", type=float, default=0.04)
     parser.add_argument("--mocap-correction-hls-xy-vmax-mps", type=float, default=0.02)
     parser.add_argument("--mocap-correction-freeze-z-on-contact", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--mocap-correction-body-frame", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument(
+        "--body-frame-yaw-source",
+        choices=("drone_control", "drone_arrival", "reference"),
+        default="drone_control",
+    )
+    parser.add_argument("--body-frame-yaw-offset-rad", type=float, default=0.0)
     confirm_group = parser.add_mutually_exclusive_group()
     confirm_group.add_argument(
         "--confirm-before-takeoff",
@@ -1654,6 +1740,8 @@ def parse_args() -> AutoConfig:
         or args.mocap_correction_hls_xy_vmax_mps < 0.0
     ):
         raise ValueError("Mocap correction limits and speeds must be non-negative.")
+    if not math.isfinite(args.body_frame_yaw_offset_rad):
+        raise ValueError("--body-frame-yaw-offset-rad must be finite.")
     if args.target_height_m <= 0.0:
         raise ValueError("--target-height-m must be positive.")
     if not 0.0 < args.target_grasp_height_m <= args.target_height_m:

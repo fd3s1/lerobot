@@ -670,6 +670,8 @@ class HlsGripperNode(Node):
         self.state_pub = self.create_publisher(String, f"{self.status_prefix}/state", 10)
         self.fault_reason_pub = self.create_publisher(String, f"{self.status_prefix}/fault_reason", 10)
         self.motion_profile_pub = self.create_publisher(String, f"{self.status_prefix}/motion_profile", 10)
+        self.status_snapshot_pub = self.create_publisher(String, f"{self.status_prefix}/status_snapshot", 10)
+        self.status_snapshot_seq = 0
         self.float_status_pubs = {
             name: self.create_publisher(Float64, f"{self.status_prefix}/{name}", 10)
             for name in (
@@ -1606,6 +1608,20 @@ class HlsGripperNode(Node):
             msg = Bool()
             msg.data = bool(value)
             self.bool_status_pubs[name].publish(msg)
+
+        self.status_snapshot_seq += 1
+        snapshot = {
+            "seq": self.status_snapshot_seq,
+            "stamp_ns": int(self.get_clock().now().nanoseconds),
+            "state": self.state,
+            "fault_reason": self.fault_reason if self.state == STATE_FAULT else "",
+            "motion_profile": self.motion_profile.profile_name,
+            **values,
+            **flags,
+        }
+        msg = String()
+        msg.data = json.dumps(snapshot, separators=(",", ":"), sort_keys=True)
+        self.status_snapshot_pub.publish(msg)
 
     def destroy_node(self) -> bool:
         try:
