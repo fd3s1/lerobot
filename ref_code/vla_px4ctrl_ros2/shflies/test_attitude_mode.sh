@@ -7,7 +7,9 @@ WORKSPACE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 RC_TOPIC="${RC_TOPIC:-/mavros/rc/in}"
 IMU_TOPIC="${IMU_TOPIC:-/mavros/imu/data}"
 ODOM_TOPIC="${ODOM_TOPIC:-/mavros/local_position/odom}"
+STATE_TOPIC="${STATE_TOPIC:-/mavros/state}"
 SETPOINT_TOPIC="${SETPOINT_TOPIC:-/mavros/setpoint_raw/attitude}"
+SET_MODE_SERVICE="${SET_MODE_SERVICE:-/mavros/set_mode}"
 RATE_HZ="${RATE_HZ:-100.0}"
 
 TEST_ATT_CHANNEL="${TEST_ATT_CHANNEL:-11}"
@@ -15,6 +17,11 @@ ACTIVE_THRESHOLD="${ACTIVE_THRESHOLD:-0.75}"
 RC_TIMEOUT_S="${RC_TIMEOUT_S:-0.3}"
 IMU_TIMEOUT_S="${IMU_TIMEOUT_S:-0.3}"
 ODOM_TIMEOUT_S="${ODOM_TIMEOUT_S:-0.3}"
+STATE_TIMEOUT_S="${STATE_TIMEOUT_S:-1.0}"
+AUTO_OFFBOARD_ENABLE="${AUTO_OFFBOARD_ENABLE:-true}"
+RESTORE_MODE_ON_INACTIVE="${RESTORE_MODE_ON_INACTIVE:-true}"
+OFFBOARD_REQUEST_DELAY_S="${OFFBOARD_REQUEST_DELAY_S:-0.5}"
+OFFBOARD_REQUEST_PERIOD_S="${OFFBOARD_REQUEST_PERIOD_S:-1.0}"
 
 STICK_DEADZONE="${STICK_DEADZONE:-0.08}"
 STICK_EXPO="${STICK_EXPO:-1.7}"
@@ -44,6 +51,9 @@ ACTIVE_THRESHOLD_P="$(as_float "${ACTIVE_THRESHOLD}")"
 RC_TIMEOUT_S_P="$(as_float "${RC_TIMEOUT_S}")"
 IMU_TIMEOUT_S_P="$(as_float "${IMU_TIMEOUT_S}")"
 ODOM_TIMEOUT_S_P="$(as_float "${ODOM_TIMEOUT_S}")"
+STATE_TIMEOUT_S_P="$(as_float "${STATE_TIMEOUT_S}")"
+OFFBOARD_REQUEST_DELAY_S_P="$(as_float "${OFFBOARD_REQUEST_DELAY_S}")"
+OFFBOARD_REQUEST_PERIOD_S_P="$(as_float "${OFFBOARD_REQUEST_PERIOD_S}")"
 STICK_DEADZONE_P="$(as_float "${STICK_DEADZONE}")"
 STICK_EXPO_P="$(as_float "${STICK_EXPO}")"
 MAX_ROLL_RATE_DPS_P="$(as_float "${MAX_ROLL_RATE_DPS}")"
@@ -72,7 +82,9 @@ else
 fi
 set -u
 
-echo "[test-att] rc=${RC_TOPIC} imu=${IMU_TOPIC} odom=${ODOM_TOPIC} setpoint=${SETPOINT_TOPIC}"
+echo "[test-att] rc=${RC_TOPIC} imu=${IMU_TOPIC} odom=${ODOM_TOPIC} state=${STATE_TOPIC}"
+echo "[test-att] setpoint=${SETPOINT_TOPIC} set_mode=${SET_MODE_SERVICE}"
+echo "[test-att] auto_offboard=${AUTO_OFFBOARD_ENABLE} restore_mode_on_inactive=${RESTORE_MODE_ON_INACTIVE} delay=${OFFBOARD_REQUEST_DELAY_S}s period=${OFFBOARD_REQUEST_PERIOD_S}s"
 echo "[test-att] CH${TEST_ATT_CHANNEL} active_threshold=${ACTIVE_THRESHOLD} rate=${RATE_HZ}Hz"
 echo "[test-att] stick deadzone=${STICK_DEADZONE} expo=${STICK_EXPO} reverse roll=${ROLL_REVERSE} pitch=${PITCH_REVERSE} yaw=${YAW_REVERSE} throttle=${THROTTLE_REVERSE}"
 echo "[test-att] rate limits dps: roll=${MAX_ROLL_RATE_DPS} pitch=${MAX_PITCH_RATE_DPS} yaw=${MAX_YAW_RATE_DPS}; angle limits deg: roll=${MAX_ROLL_DEG} pitch=${MAX_PITCH_DEG}"
@@ -83,13 +95,20 @@ exec ros2 run px4ctrl test_attitude_mode_node --ros-args \
   -p rc_topic:="${RC_TOPIC}" \
   -p imu_topic:="${IMU_TOPIC}" \
   -p odom_topic:="${ODOM_TOPIC}" \
+  -p state_topic:="${STATE_TOPIC}" \
   -p setpoint_topic:="${SETPOINT_TOPIC}" \
+  -p set_mode_service:="${SET_MODE_SERVICE}" \
   -p rate_hz:="${RATE_HZ_P}" \
   -p test_att_channel:="${TEST_ATT_CHANNEL}" \
   -p active_threshold:="${ACTIVE_THRESHOLD_P}" \
   -p rc_timeout_s:="${RC_TIMEOUT_S_P}" \
   -p imu_timeout_s:="${IMU_TIMEOUT_S_P}" \
   -p odom_timeout_s:="${ODOM_TIMEOUT_S_P}" \
+  -p state_timeout_s:="${STATE_TIMEOUT_S_P}" \
+  -p auto_offboard_enable:="${AUTO_OFFBOARD_ENABLE}" \
+  -p restore_mode_on_inactive:="${RESTORE_MODE_ON_INACTIVE}" \
+  -p offboard_request_delay_s:="${OFFBOARD_REQUEST_DELAY_S_P}" \
+  -p offboard_request_period_s:="${OFFBOARD_REQUEST_PERIOD_S_P}" \
   -p stick_deadzone:="${STICK_DEADZONE_P}" \
   -p stick_expo:="${STICK_EXPO_P}" \
   -p roll_reverse:="${ROLL_REVERSE}" \

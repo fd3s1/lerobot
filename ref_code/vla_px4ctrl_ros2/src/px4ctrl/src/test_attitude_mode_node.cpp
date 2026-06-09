@@ -12,6 +12,8 @@
 #include <geometry_msgs/msg/vector3_stamped.hpp>
 #include <mavros_msgs/msg/attitude_target.hpp>
 #include <mavros_msgs/msg/rc_in.hpp>
+#include <mavros_msgs/msg/state.hpp>
+#include <mavros_msgs/srv/set_mode.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
@@ -185,8 +187,10 @@ public:
     rc_topic_ = declare_parameter<std::string>("rc_topic", "/mavros/rc/in");
     imu_topic_ = declare_parameter<std::string>("imu_topic", "/mavros/imu/data");
     odom_topic_ = declare_parameter<std::string>("odom_topic", "/mavros/local_position/odom");
+    state_topic_ = declare_parameter<std::string>("state_topic", "/mavros/state");
     setpoint_topic_ =
       declare_parameter<std::string>("setpoint_topic", "/mavros/setpoint_raw/attitude");
+    set_mode_service_ = declare_parameter<std::string>("set_mode_service", "/mavros/set_mode");
 
     reference_rpy_topic_ =
       declare_parameter<std::string>("reference_rpy_topic", "/test_att/reference_rpy");
@@ -207,6 +211,11 @@ public:
     rc_timeout_s_ = declare_parameter<double>("rc_timeout_s", 0.3);
     imu_timeout_s_ = declare_parameter<double>("imu_timeout_s", 0.3);
     odom_timeout_s_ = declare_parameter<double>("odom_timeout_s", 0.3);
+    state_timeout_s_ = declare_parameter<double>("state_timeout_s", 1.0);
+    auto_offboard_enable_ = declare_parameter<bool>("auto_offboard_enable", true);
+    restore_mode_on_inactive_ = declare_parameter<bool>("restore_mode_on_inactive", true);
+    offboard_request_delay_s_ = declare_parameter<double>("offboard_request_delay_s", 0.5);
+    offboard_request_period_s_ = declare_parameter<double>("offboard_request_period_s", 1.0);
 
     stick_deadzone_ = declare_parameter<double>("stick_deadzone", 0.08);
     stick_expo_ = declare_parameter<double>("stick_expo", 1.7);
@@ -256,7 +265,17 @@ public:
         have_odom_ = true;
       });
 
+    state_sub_ = create_subscription<mavros_msgs::msg::State>(
+      state_topic_,
+      rclcpp::SensorDataQoS(),
+      [this](const mavros_msgs::msg::State::SharedPtr msg) {
+        state_msg_ = *msg;
+        state_stamp_ = now();
+        have_state_ = true;
+      });
+
     setpoint_pub_ = create_publisher<mavros_msgs::msg::AttitudeTarget>(setpoint_topic_, 10);
+    set_mode_client_ = create_client<mavros_msgs::srv::SetMode>(set_mode_service_);
     reference_rpy_pub_ =
       create_publisher<geometry_msgs::msg::Vector3Stamped>(reference_rpy_topic_, 10);
     actual_rpy_pub_ =
@@ -281,12 +300,14 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "test_attitude_mode_node started. CH%d high enables setpoint. rc=%s imu=%s odom=%s setpoint=%s",
+      "test_attitude_mode_node started. CH%d high enables setpoint and OFFBOARD. rc=%s imu=%s odom=%s state=%s setpoint=%s set_mode=%s",
       test_att_channel_,
       rc_topic_.c_str(),
       imu_topic_.c_str(),
       odom_topic_.c_str(),
-      setpoint_topic_.c_str());
+      state_topic_.c_str(),
+      setpoint_topic_.c_str(),
+      set_mode_service_.c_str());
   }
 
 private:
@@ -318,6 +339,9 @@ private:
     rc_timeout_s_ = std::max(0.05, rc_timeout_s_);
     imu_timeout_s_ = std::max(0.05, imu_timeout_s_);
     odom_timeout_s_ = std::max(0.05, odom_timeout_s_);
+    state_timeout_s_ = std::max(0.05, state_timeout_s_);
+    offboard_request_delay_s_ = std::max(0.0, offboard_request_delay_s_);
+    offboard_request_period_s_ = std::max(0.1, offboard_request_period_s_);
     thrust_slew_per_s_ = std::max(0.0, thrust_slew_per_s_);
   }
 
@@ -336,6 +360,11 @@ private:
     return have_odom_ && (stamp - odom_stamp_).seconds() <= odom_timeout_s_;
   }
 
+  bool state_fresh(const rclcpp::Time &stamp) const
+  {
+    return have_state_ && (stamp - state_stamp_).seconds() <= state_timeout_s_;
+  }
+
   double rc_age(const rclcpp::Time &stamp) const
   {
     return have_rc_ ? (stamp - rc_stamp_).seconds() : -1.0;
@@ -349,6 +378,78 @@ private:
   double odom_age(const rclcpp::Time &stamp) const
   {
     return have_odom_ ? (stamp - odom_stamp_).seconds() : -1.0;
+  }
+
+  double state_age(const rclcpp::Time &stamp) const
+  {
+    return have_state_ ? (stamp - state_stamp_).seconds() : -1.0;
+  }
+
+  bool is_offboard() const
+  {
+    return have_state_ && state_msg_.mode == "OFFBOARD";
+  }
+
+  void request_mode(const std::string &mode, const std::string &reason)
+  {
+    if (!set_mode_client_ || !set_mode_client_->service_is_ready()) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(),
+        *get_clock(),
+        2000,
+        "set_mode service is not ready; cannot request %s (%s)",
+        mode.c_str(),
+        reason.c_str());
+      return;
+    }
+
+    auto request = std::make_shared<mavros_msgs::srv::SetMode::Request>();
+    request->custom_mode = mode;
+    set_mode_client_->async_send_request(request);
+    RCLCPP_WARN(
+      get_logger(),
+      "requested FCU mode %s (%s)",
+      mode.c_str(),
+      reason.c_str());
+  }
+
+  void maybe_request_offboard(const rclcpp::Time &stamp, bool active, bool state_ok)
+  {
+    if (!auto_offboard_enable_ || !active || !state_ok || is_offboard()) {
+      return;
+    }
+
+    if (!have_active_start_) {
+      active_start_stamp_ = stamp;
+      have_active_start_ = true;
+    }
+
+    if ((stamp - active_start_stamp_).seconds() < offboard_request_delay_s_) {
+      return;
+    }
+    if (have_last_offboard_request_ &&
+        (stamp - last_offboard_request_stamp_).seconds() < offboard_request_period_s_) {
+      return;
+    }
+
+    if (!have_mode_before_offboard_ && !state_msg_.mode.empty() && state_msg_.mode != "OFFBOARD") {
+      mode_before_offboard_ = state_msg_.mode;
+      have_mode_before_offboard_ = true;
+    }
+    request_mode("OFFBOARD", "CH11 high");
+    last_offboard_request_stamp_ = stamp;
+    have_last_offboard_request_ = true;
+  }
+
+  void maybe_restore_mode(const rclcpp::Time &stamp)
+  {
+    if (!restore_mode_on_inactive_ || !state_fresh(stamp) || !is_offboard()) {
+      return;
+    }
+    const std::string restore_mode = have_mode_before_offboard_ && !mode_before_offboard_.empty() ?
+      mode_before_offboard_ :
+      std::string("MANUAL");
+    request_mode(restore_mode, "CH11 low");
   }
 
   bool test_att_switch_high() const
@@ -494,17 +595,13 @@ private:
     thrust_pub_->publish(thrust_msg);
   }
 
-  void publish_status(const rclcpp::Time &stamp, bool active, bool rc_ok, bool imu_ok) const
-  {
-    publish_status(stamp, active, rc_ok, imu_ok, odom_fresh(stamp));
-  }
-
   void publish_status(
     const rclcpp::Time &stamp,
     bool active,
     bool rc_ok,
     bool imu_ok,
-    bool odom_ok) const
+    bool odom_ok,
+    bool state_ok) const
   {
     std_msgs::msg::String msg;
     std::ostringstream ss;
@@ -514,10 +611,14 @@ private:
        << " rc_ok=" << (rc_ok ? "true" : "false")
        << " imu_ok=" << (imu_ok ? "true" : "false")
        << " odom_ok=" << (odom_ok ? "true" : "false")
+       << " state_ok=" << (state_ok ? "true" : "false")
+       << " fcu_mode=" << (have_state_ ? state_msg_.mode : std::string("<none>"))
+       << " auto_offboard=" << (auto_offboard_enable_ ? "true" : "false")
        << " ch" << test_att_channel_ << "_pwm=" << channel_pwm(rc_msg_, test_att_channel_, 1000.0)
        << " rc_age_s=" << rc_age(stamp)
        << " imu_age_s=" << imu_age(stamp)
        << " odom_age_s=" << odom_age(stamp)
+       << " state_age_s=" << state_age(stamp)
        << " setpoint_alignment=imu_q*odom_q_inv*ref_q"
        << " thrust=" << current_thrust_;
     msg.data = ss.str();
@@ -540,13 +641,18 @@ private:
     const bool rc_ok = rc_fresh(stamp);
     const bool imu_ok = imu_fresh(stamp);
     const bool odom_ok = odom_fresh(stamp);
+    const bool state_ok = state_fresh(stamp);
     const bool feedback_ok = imu_ok && odom_ok;
     const bool active = rc_ok && feedback_ok && test_att_switch_high();
 
     if (!feedback_ok) {
+      if (active_) {
+        maybe_restore_mode(stamp);
+      }
       active_ = false;
+      have_active_start_ = false;
       update_thrust(dt, false);
-      publish_status(stamp, false, rc_ok, imu_ok, odom_ok);
+      publish_status(stamp, false, rc_ok, imu_ok, odom_ok, state_ok);
       return;
     }
 
@@ -556,9 +662,18 @@ private:
 
     if (active && !active_) {
       initialize_reference_from_attitude(actual_q);
+      active_start_stamp_ = stamp;
+      have_active_start_ = true;
+      if (!is_offboard() && state_ok && !state_msg_.mode.empty()) {
+        mode_before_offboard_ = state_msg_.mode;
+        have_mode_before_offboard_ = true;
+      }
       RCLCPP_INFO(get_logger(), "CH%d high: entering test_att mode.", test_att_channel_);
     } else if (!active && active_) {
       stop_reference_motion();
+      maybe_restore_mode(stamp);
+      have_active_start_ = false;
+      have_last_offboard_request_ = false;
       RCLCPP_WARN(get_logger(), "Leaving test_att mode; setpoint publication stopped.");
     }
 
@@ -574,16 +689,19 @@ private:
     update_thrust(dt, active);
     if (active) {
       publish_setpoint(stamp);
+      maybe_request_offboard(stamp, active, state_ok);
     }
     publish_vectors(stamp, actual_q, actual_rpy, actual_bodyrate);
-    publish_status(stamp, active, rc_ok, imu_ok, odom_ok);
+    publish_status(stamp, active, rc_ok, imu_ok, odom_ok, state_ok);
     active_ = active;
   }
 
   std::string rc_topic_;
   std::string imu_topic_;
   std::string odom_topic_;
+  std::string state_topic_;
   std::string setpoint_topic_;
+  std::string set_mode_service_;
   std::string reference_rpy_topic_;
   std::string actual_rpy_topic_;
   std::string error_rpy_topic_;
@@ -600,6 +718,11 @@ private:
   double rc_timeout_s_{0.3};
   double imu_timeout_s_{0.3};
   double odom_timeout_s_{0.3};
+  double state_timeout_s_{1.0};
+  bool auto_offboard_enable_{true};
+  bool restore_mode_on_inactive_{true};
+  double offboard_request_delay_s_{0.5};
+  double offboard_request_period_s_{1.0};
   double stick_deadzone_{0.08};
   double stick_expo_{1.7};
   bool roll_reverse_{false};
@@ -619,16 +742,25 @@ private:
   mavros_msgs::msg::RCIn rc_msg_;
   sensor_msgs::msg::Imu imu_msg_;
   nav_msgs::msg::Odometry odom_msg_;
+  mavros_msgs::msg::State state_msg_;
   rclcpp::Time rc_stamp_{0, 0, RCL_ROS_TIME};
   rclcpp::Time imu_stamp_{0, 0, RCL_ROS_TIME};
   rclcpp::Time odom_stamp_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time state_stamp_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_loop_stamp_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time active_start_stamp_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_offboard_request_stamp_{0, 0, RCL_ROS_TIME};
   bool have_rc_{false};
   bool have_imu_{false};
   bool have_odom_{false};
+  bool have_state_{false};
   bool have_last_loop_{false};
+  bool have_active_start_{false};
+  bool have_last_offboard_request_{false};
+  bool have_mode_before_offboard_{false};
   bool active_{false};
   bool reference_initialized_{false};
+  std::string mode_before_offboard_{"MANUAL"};
 
   Eigen::Quaterniond reference_q_{Eigen::Quaterniond::Identity()};
   Eigen::Vector3d reference_rpy_{Eigen::Vector3d::Zero()};
@@ -638,6 +770,7 @@ private:
   rclcpp::Subscription<mavros_msgs::msg::RCIn>::SharedPtr rc_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+  rclcpp::Subscription<mavros_msgs::msg::State>::SharedPtr state_sub_;
   rclcpp::Publisher<mavros_msgs::msg::AttitudeTarget>::SharedPtr setpoint_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr reference_rpy_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr actual_rpy_pub_;
@@ -647,6 +780,7 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr error_bodyrate_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr thrust_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
+  rclcpp::Client<mavros_msgs::srv::SetMode>::SharedPtr set_mode_client_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
 
