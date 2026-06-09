@@ -207,7 +207,13 @@ class AutoGraspPlaceDataset(Node):
         self._create_pose_subscription("drone_arrival", config.arrival_pose_topic)
         self._create_pose_subscription("target", config.target_pose_topic)
         self._create_pose_subscription("box", config.box_pose_topic)
-        self.create_subscription(String, config.px4ctrl_state_topic, self._state_cb, 10)
+        state_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        self.create_subscription(String, config.px4ctrl_state_topic, self._state_cb, state_qos)
         self.create_subscription(GripperFeedback, config.gripper_feedback_topic, self._gripper_feedback_cb, 10)
 
         status_qos = QoSProfile(

@@ -21,6 +21,7 @@ MAVROS_LIGHT_PLUGINLISTS_FILE="${MAVROS_LIGHT_PLUGINLISTS_FILE:-${WORKSPACE_DIR}
 MAVROS_FULL_PLUGINLISTS_FILE="${MAVROS_FULL_PLUGINLISTS_FILE:-/opt/ros/humble/share/mavros/launch/px4_pluginlists.yaml}"
 START_PX4CTRL="${START_PX4CTRL:-true}"
 PX4CTRL_GRIPPER_RC_CHANNEL="${PX4CTRL_GRIPPER_RC_CHANNEL:-}"
+PX4CTRL_TAKEOFF_LAND_SPEED="${PX4CTRL_TAKEOFF_LAND_SPEED:-}"
 
 PIDS=()
 CLEANED_UP=false
@@ -74,6 +75,9 @@ echo "[run-mocap-mavros] px4ctrl params: ${PX4CTRL_PARAMS_FILE}"
 if [[ -n "${PX4CTRL_GRIPPER_RC_CHANNEL}" ]]; then
   echo "[run-mocap-mavros] px4ctrl gripper.rc_channel override: ${PX4CTRL_GRIPPER_RC_CHANNEL}"
 fi
+if [[ -n "${PX4CTRL_TAKEOFF_LAND_SPEED}" ]]; then
+  echo "[run-mocap-mavros] px4ctrl auto_takeoff_land.takeoff_land_speed override: ${PX4CTRL_TAKEOFF_LAND_SPEED}"
+fi
 
 if [[ "${MAVROS_LIGHT}" == "true" ]]; then
   MAVROS_PLUGINLISTS_FILE="${MAVROS_LIGHT_PLUGINLISTS_FILE}"
@@ -111,6 +115,9 @@ if [[ "${START_PX4CTRL}" == "true" ]]; then
   px4ctrl_args=(ros2 run px4ctrl px4ctrl_node --ros-args --params-file "${PX4CTRL_PARAMS_FILE}")
   if [[ -n "${PX4CTRL_GRIPPER_RC_CHANNEL}" ]]; then
     px4ctrl_args+=(-p "gripper.rc_channel:=${PX4CTRL_GRIPPER_RC_CHANNEL}")
+  fi
+  if [[ -n "${PX4CTRL_TAKEOFF_LAND_SPEED}" ]]; then
+    px4ctrl_args+=(-p "auto_takeoff_land.takeoff_land_speed:=${PX4CTRL_TAKEOFF_LAND_SPEED}")
   fi
   start_process "${px4ctrl_args[@]}"
 else

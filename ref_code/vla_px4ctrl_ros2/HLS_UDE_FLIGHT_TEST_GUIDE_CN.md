@@ -86,7 +86,7 @@ bash shflies/test_ude_takeoff_hover.sh
 
 ### 5. 无桨自动流程检查
 
-一键 HLS-UDE 脚本默认发布 `TAKEOFF` 自动起飞。自动节点会先完成 topic 检查、目标/box/无人机 pose 稳定检查并打印锁定快照，然后暂停 ROS 回调刷新；按一次 Enter 后发布 `TAKEOFF`。px4ctrl 在电机加速阶段锁定起飞 x/y/yaw 参考，并使用 UDE 姿态闭环稳住横向，推力仍按斜坡从最小值缓慢增加到 hover thrust；正式爬升段继续由 UDE 正常计算推力和姿态。
+一键 HLS-UDE 脚本默认发布 `TAKEOFF` 自动起飞。自动节点会先完成 topic 检查、目标/box/无人机 pose 稳定检查并打印锁定快照，然后暂停 ROS 回调刷新；按一次 Enter 后发布 `TAKEOFF`。px4ctrl 在电机加速阶段锁定起飞 x/y/yaw 参考，并使用 UDE 姿态闭环稳住横向，推力仍按斜坡从最小值缓慢增加到 hover thrust；正式爬升段继续由 UDE 正常计算推力和姿态。HLS-UDE 一键脚本默认把 px4ctrl 起飞爬升速度覆盖为 `PX4CTRL_TAKEOFF_LAND_SPEED=0.35`，减少低速爬升时横向漂移累积。
 
 如果需要临时回到手动起飞接管流程，可显式设置 `TAKEOFF_MODE=manual`。该模式不发布 `TAKEOFF`，只等待你手动起飞后进入 `AUTO_HOVER`。
 
@@ -211,6 +211,7 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 | `START_STACK` | `true` | 是否由一键脚本启动 mocap、MAVROS、vision bridge、px4ctrl。 | 已手动启动这些节点时设为 `false`。 |
 | `START_PX4CTRL` | `true` | 传给 `run_mocap_mavros.sh`，决定是否启动 `px4ctrl_node`。 | 只想用已有 px4ctrl 时设为 `false`。 |
 | `PX4CTRL_GRIPPER_RC_CHANNEL` | `0` | HLS-UDE 一键脚本启动 px4ctrl 时覆盖 `gripper.rc_channel`。 | 默认禁用 px4ctrl 的 CH10 直接 open/close，CH10 安全释放由自动 HLS 节点处理；若设回 `10`，px4ctrl 会把 CH10 高位直接发 close 到 `/gripper/command`。 |
+| `PX4CTRL_TAKEOFF_LAND_SPEED` | `0.35` | HLS-UDE 一键脚本启动 px4ctrl 时覆盖 `auto_takeoff_land.takeoff_land_speed`。 | 只影响自动起飞/命令降落的高度爬升/下降速度；默认比 YAML 的 `0.2` 快，减少起飞爬升阶段横向漂移累积。 |
 | `STACK_STARTUP_WAIT_S` | `8` | 启动底层 stack 后等待的秒数。 | 电脑慢或 MAVROS 启动慢时增大。 |
 | `WAIT_FOR_ENTER` | `false` | 一键 shell 外层是否额外等待 Enter。 | 默认 `false`，避免两次 Enter；通常不改。 |
 | `TAKEOFF_MODE` | `auto` | 一键 HLS-UDE 脚本的起飞方式。 | 默认 `auto`：发布 `TAKEOFF` 自动起飞；设 `manual` 时不发布 `TAKEOFF`，只等待手动起飞到 `AUTO_HOVER`。 |
@@ -252,7 +253,7 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 | 参数 | 默认值 | 作用 | 调参建议 |
 | --- | --- | --- | --- |
 | `RC_TOPIC` | `/mavros/rc/in` | RC 输入话题。 | 通常不改。 |
-| `RC_TIMEOUT_S` | `0.5` | 自动节点判定 `/mavros/rc/in` 是否新鲜的阈值。 | 起飞前必须 fresh；飞行中默认 stale 只告警。 |
+| `RC_TIMEOUT_S` | `2.0` | 自动节点判定 `/mavros/rc/in` 是否新鲜的阈值。 | 起飞前必须 fresh；飞行中默认 stale 只告警。这个超时只影响自动节点的 CH10 监控，不代表飞控真实遥控器丢失。 |
 | `RC_STALE_ACTION` | `warn` | 飞行中 RC topic 超时后的动作。 | `warn` 表示继续任务，只在日志警告；`abort` 表示 open 并中止。注意这不是飞控真实遥控器 failsafe。 |
 | `CH10_INDEX` | `9` | CH10 在 MAVROS `channels[]` 中的 0-based 索引。 | CH10 是第 10 通道，所以默认 9。 |
 | `CH10_OPEN_PWM` | `1300` | CH10 小于等于该 PWM 时认为低位/安全释放。 | 按遥控器实际 PWM 调整。 |

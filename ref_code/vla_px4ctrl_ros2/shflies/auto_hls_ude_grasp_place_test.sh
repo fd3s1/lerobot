@@ -7,6 +7,7 @@ WORKSPACE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 START_STACK="${START_STACK:-true}"
 START_PX4CTRL="${START_PX4CTRL:-true}"
 PX4CTRL_GRIPPER_RC_CHANNEL="${PX4CTRL_GRIPPER_RC_CHANNEL:-0}"
+PX4CTRL_TAKEOFF_LAND_SPEED="${PX4CTRL_TAKEOFF_LAND_SPEED:-0.35}"
 STACK_STARTUP_WAIT_S="${STACK_STARTUP_WAIT_S:-8}"
 WAIT_FOR_ENTER="${WAIT_FOR_ENTER:-false}"
 CONFIRM_BEFORE_TAKEOFF="${CONFIRM_BEFORE_TAKEOFF:-true}"
@@ -51,7 +52,7 @@ HLS_CENTER_TIMEOUT_ACTION="${HLS_CENTER_TIMEOUT_ACTION:-final_grip}"
 HLS_CENTER_ERROR_GAIN="${HLS_CENTER_ERROR_GAIN:-2.0}"
 HLS_SINGLE_CONTACT_OFFSET_LIMIT_M="${HLS_SINGLE_CONTACT_OFFSET_LIMIT_M:-0.12}"
 
-RC_TIMEOUT_S="${RC_TIMEOUT_S:-0.5}"
+RC_TIMEOUT_S="${RC_TIMEOUT_S:-2.0}"
 RC_STALE_ACTION="${RC_STALE_ACTION:-warn}"
 CH10_INDEX="${CH10_INDEX:-9}"
 CH10_OPEN_PWM="${CH10_OPEN_PWM:-1300}"
@@ -160,11 +161,13 @@ echo "[auto-hls-ude-test] CH10 safety: topic=${RC_TOPIC} timeout=${RC_TIMEOUT_S}
 echo "[auto-hls-ude-test] offsets: target=(${TARGET_OFFSET_X}, ${TARGET_OFFSET_Y}, ${TARGET_OFFSET_Z}) box=(${BOX_OFFSET_X}, ${BOX_OFFSET_Y}, ${BOX_OFFSET_Z})"
 echo "[auto-hls-ude-test] takeoff: mode=${TAKEOFF_MODE} inner_confirm=${CONFIRM_BEFORE_TAKEOFF} outer_wait=${WAIT_FOR_ENTER}"
 echo "[auto-hls-ude-test] px4ctrl gripper rc channel override: ${PX4CTRL_GRIPPER_RC_CHANNEL}"
+echo "[auto-hls-ude-test] px4ctrl takeoff speed override: ${PX4CTRL_TAKEOFF_LAND_SPEED} m/s"
 
 if bool_is_true "${START_STACK}"; then
   echo "[auto-hls-ude-test] starting mocap/MAVROS/bridge/px4ctrl stack"
   export START_PX4CTRL
   export PX4CTRL_GRIPPER_RC_CHANNEL
+  export PX4CTRL_TAKEOFF_LAND_SPEED
   export VRPN_SOURCE_TOPIC
   export MAVROS_VISION_TOPIC
   setsid bash "${SCRIPT_DIR}/run_mocap_mavros.sh" &

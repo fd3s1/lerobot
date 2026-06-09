@@ -48,7 +48,7 @@ PX4CtrlFSM::PX4CtrlFSM(Parameter_t &param_, LinearControl &controller_, rclcpp::
 {
   state = MANUAL_CTRL;
   hover_pose.setZero();
-  fsm_state_pub = node_->create_publisher<std_msgs::msg::String>("/px4ctrl/state", 10);
+  fsm_state_pub = node_->create_publisher<std_msgs::msg::String>("/px4ctrl/state", 1);
 }
 
 void PX4CtrlFSM::process()
