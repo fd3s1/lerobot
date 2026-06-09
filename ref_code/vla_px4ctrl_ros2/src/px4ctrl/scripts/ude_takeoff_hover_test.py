@@ -580,15 +580,12 @@ def main(argv: list[str] | None = None) -> int:
 
             print(
                 "\nBefore takeoff: keep RC in hover+command mode, sticks centered, "
-                "and verify the flight area is clear."
+                "and verify the flight area is clear. Stack output is quiet here."
             )
             if args.auto_confirm:
                 print("--auto-confirm is set; publishing TAKEOFF.")
             else:
-                confirm = input("Type TAKEOFF to publish /px4ctrl/takeoff_land: ").strip()
-                if confirm != "TAKEOFF":
-                    node.get_logger().warn("Takeoff confirmation not received. Exiting.")
-                    return 0
+                input("Press Enter once to publish /px4ctrl/takeoff_land TAKEOFF: ")
 
             node.publish_takeoff()
         else:

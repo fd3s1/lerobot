@@ -28,7 +28,7 @@ Parameters:
   frame_id_override  default ""  (preserve input frame_id)
   restamp            default false  (preserve input header.stamp)
   stamp_age_warn_s   default 0.2
-  status_period_s    default 2.0
+  status_period_s    default 10.0
 """
 
 
@@ -50,7 +50,7 @@ class VrpnToMavrosVisionBridge(Node):
         self.declare_parameter("frame_id_override", "")
         self.declare_parameter("restamp", False)
         self.declare_parameter("stamp_age_warn_s", 0.2)
-        self.declare_parameter("status_period_s", 2.0)
+        self.declare_parameter("status_period_s", 10.0)
 
         self.source_topic = self.get_parameter("source_topic").value
         self.target_topic = self.get_parameter("target_topic").value

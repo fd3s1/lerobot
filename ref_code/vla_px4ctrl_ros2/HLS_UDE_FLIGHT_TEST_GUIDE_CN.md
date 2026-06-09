@@ -77,12 +77,13 @@ bash shflies/test_ude_takeoff_hover.sh
 
 默认行为：
 
-- 自动发布 `/px4ctrl/takeoff_land` 的 `TAKEOFF`，但默认仍需要输入 `TAKEOFF` 确认；设置 `TEST_AUTO_CONFIRM=true` 可取消确认。
+- 自动发布 `/px4ctrl/takeoff_land` 的 `TAKEOFF`，但默认会先停止底层 stack 刷屏并等待按一次 Enter 确认；设置 `TEST_AUTO_CONFIRM=true` 可取消确认。
 - RC 门控只看 px4ctrl 的 CH5/CH6 hover/command，不看 CH10。
 - `TEST_AXIS=x|y|z` 决定本次只测试哪个轴；非测试轴和 yaw 保持 origin，不随飞机当前位置漂移。
 - 相邻 waypoint 在所选轴上的差值随机落在 `TEST_WP_STEP_MIN_M=0.05` 到 `TEST_WP_STEP_MAX_M=1.00`。
 - waypoint 相对 origin 不超过 `TEST_WP_AXIS_LIMIT_M=1.00`，且不超过 px4ctrl 全局场地限制 `x=[-7,14] y=[-2.5,2.5] z=[-0.3,2.5]`。
 - 一旦 px4ctrl 离开 `CMD_CTRL`，脚本立即停止发布随机 waypoint；如果回到 `AUTO_HOVER`，进入 `STATUS/LAND/EXIT` 菜单。
+- 底层 stack 输出默认重定向到 `log/ude_takeoff_hover_stack_*.log`；设置 `QUIET_STACK_OUTPUT=false` 可恢复直接打印。VRPN bridge 状态打印默认 `BRIDGE_STATUS_PERIOD_S=10.0` 秒。
 
 常用示例：
 

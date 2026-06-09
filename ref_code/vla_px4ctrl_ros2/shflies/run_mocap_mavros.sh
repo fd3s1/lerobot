@@ -14,6 +14,7 @@ MAVROS_TGT_SYSTEM="${MAVROS_TGT_SYSTEM:-1}"
 MAVROS_TGT_COMPONENT="${MAVROS_TGT_COMPONENT:-1}"
 MAVROS_FCU_PROTOCOL="${MAVROS_FCU_PROTOCOL:-v2.0}"
 BRIDGE_RESTAMP="${BRIDGE_RESTAMP:-false}"
+BRIDGE_STATUS_PERIOD_S="${BRIDGE_STATUS_PERIOD_S:-10.0}"
 PX4CTRL_PARAMS_FILE="${PX4CTRL_PARAMS_FILE:-${WORKSPACE_DIR}/install/px4ctrl/share/px4ctrl/config/ctrl_param_fpv.yaml}"
 MAVROS_CONFIG_FILE="${MAVROS_CONFIG_FILE:-/opt/ros/humble/share/mavros/launch/px4_config.yaml}"
 MAVROS_LIGHT="${MAVROS_LIGHT:-true}"
@@ -69,6 +70,7 @@ echo "[run-mocap-mavros] fcu_url: ${FCU_URL}"
 echo "[run-mocap-mavros] gcs_url: ${GCS_URL}"
 echo "[run-mocap-mavros] target system/component: ${MAVROS_TGT_SYSTEM}/${MAVROS_TGT_COMPONENT}"
 echo "[run-mocap-mavros] bridge restamp: ${BRIDGE_RESTAMP}"
+echo "[run-mocap-mavros] bridge status period: ${BRIDGE_STATUS_PERIOD_S}s"
 echo "[run-mocap-mavros] mavros light mode: ${MAVROS_LIGHT}"
 echo "[run-mocap-mavros] start px4ctrl: ${START_PX4CTRL}"
 echo "[run-mocap-mavros] px4ctrl params: ${PX4CTRL_PARAMS_FILE}"
@@ -107,7 +109,8 @@ sleep 2
 start_process ros2 run px4ctrl vrpn_to_mavros_vision_bridge.py --ros-args \
   -p source_topic:="${VRPN_SOURCE_TOPIC}" \
   -p target_topic:="${MAVROS_VISION_TOPIC}" \
-  -p restamp:="${BRIDGE_RESTAMP}"
+  -p restamp:="${BRIDGE_RESTAMP}" \
+  -p status_period_s:="${BRIDGE_STATUS_PERIOD_S}"
 
 sleep 1
 

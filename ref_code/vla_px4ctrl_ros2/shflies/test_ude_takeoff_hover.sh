@@ -7,6 +7,8 @@ WORKSPACE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 START_STACK="${START_STACK:-true}"
 START_PX4CTRL="${START_PX4CTRL:-true}"
 STACK_STARTUP_WAIT_S="${STACK_STARTUP_WAIT_S:-8}"
+QUIET_STACK_OUTPUT="${QUIET_STACK_OUTPUT:-true}"
+STACK_LOG_DIR="${STACK_LOG_DIR:-${WORKSPACE_DIR}/log}"
 CLEANUP_STACK_ON_EXIT="${CLEANUP_STACK_ON_EXIT:-auto}"
 KEEP_STACK_ON_INTERRUPT="${KEEP_STACK_ON_INTERRUPT:-false}"
 TEST_ENTER_CMD="${TEST_ENTER_CMD:-true}"
@@ -83,7 +85,14 @@ set -u
 if [[ "${START_STACK}" == "true" ]]; then
   echo "[ude-test] starting mocap/MAVROS/bridge/px4ctrl stack"
   export START_PX4CTRL
-  setsid bash "${SCRIPT_DIR}/run_mocap_mavros.sh" &
+  if [[ "${QUIET_STACK_OUTPUT}" == "true" ]]; then
+    mkdir -p "${STACK_LOG_DIR}"
+    STACK_LOG_FILE="${STACK_LOG_DIR}/ude_takeoff_hover_stack_$(date +%Y%m%d_%H%M%S).log"
+    echo "[ude-test] stack output is redirected to: ${STACK_LOG_FILE}"
+    setsid bash "${SCRIPT_DIR}/run_mocap_mavros.sh" >"${STACK_LOG_FILE}" 2>&1 &
+  else
+    setsid bash "${SCRIPT_DIR}/run_mocap_mavros.sh" &
+  fi
   STACK_PID="$!"
   echo "[ude-test] stack process group: ${STACK_PID}"
   sleep "${STACK_STARTUP_WAIT_S}"
