@@ -9,9 +9,24 @@ START_PX4CTRL="${START_PX4CTRL:-true}"
 STACK_STARTUP_WAIT_S="${STACK_STARTUP_WAIT_S:-8}"
 CLEANUP_STACK_ON_EXIT="${CLEANUP_STACK_ON_EXIT:-auto}"
 KEEP_STACK_ON_INTERRUPT="${KEEP_STACK_ON_INTERRUPT:-false}"
-TEST_ENTER_CMD="${TEST_ENTER_CMD:-false}"
-TEST_PUBLISH_TAKEOFF="${TEST_PUBLISH_TAKEOFF:-false}"
+TEST_ENTER_CMD="${TEST_ENTER_CMD:-true}"
+TEST_PUBLISH_TAKEOFF="${TEST_PUBLISH_TAKEOFF:-true}"
 TEST_AUTO_CONFIRM="${TEST_AUTO_CONFIRM:-false}"
+TEST_RUN_WAYPOINTS="${TEST_RUN_WAYPOINTS:-true}"
+TEST_AXIS="${TEST_AXIS:-x}"
+TEST_WP_STEP_MIN_M="${TEST_WP_STEP_MIN_M:-0.05}"
+TEST_WP_STEP_MAX_M="${TEST_WP_STEP_MAX_M:-1.00}"
+TEST_WP_AXIS_LIMIT_M="${TEST_WP_AXIS_LIMIT_M:-1.00}"
+TEST_WP_HOLD_S="${TEST_WP_HOLD_S:-4.0}"
+TEST_WP_RATE_HZ="${TEST_WP_RATE_HZ:-20.0}"
+TEST_WP_RESAMPLE_ATTEMPTS="${TEST_WP_RESAMPLE_ATTEMPTS:-50}"
+TEST_WP_RANDOM_SEED="${TEST_WP_RANDOM_SEED:-}"
+TEST_WP_X_MIN="${TEST_WP_X_MIN:--7.0}"
+TEST_WP_X_MAX="${TEST_WP_X_MAX:-14.0}"
+TEST_WP_Y_MIN="${TEST_WP_Y_MIN:--2.5}"
+TEST_WP_Y_MAX="${TEST_WP_Y_MAX:-2.5}"
+TEST_WP_Z_MIN="${TEST_WP_Z_MIN:--0.3}"
+TEST_WP_Z_MAX="${TEST_WP_Z_MAX:-2.5}"
 
 STACK_PID=""
 HELPER_STATUS=0
@@ -79,6 +94,30 @@ fi
 HELPER_ARGS=("$@")
 if [[ "${TEST_ENTER_CMD}" == "true" ]]; then
   HELPER_ARGS+=("--enter-cmd")
+fi
+if [[ "${TEST_RUN_WAYPOINTS}" == "true" ]]; then
+  HELPER_ARGS+=(
+    "--run-waypoints"
+    "--test-axis" "${TEST_AXIS}"
+    "--wp-step-min-m" "${TEST_WP_STEP_MIN_M}"
+    "--wp-step-max-m" "${TEST_WP_STEP_MAX_M}"
+    "--wp-axis-limit-m" "${TEST_WP_AXIS_LIMIT_M}"
+    "--wp-hold-s" "${TEST_WP_HOLD_S}"
+    "--wp-rate-hz" "${TEST_WP_RATE_HZ}"
+    "--wp-resample-attempts" "${TEST_WP_RESAMPLE_ATTEMPTS}"
+    "--limit-x-min" "${TEST_WP_X_MIN}"
+    "--limit-x-max" "${TEST_WP_X_MAX}"
+    "--limit-y-min" "${TEST_WP_Y_MIN}"
+    "--limit-y-max" "${TEST_WP_Y_MAX}"
+    "--limit-z-min" "${TEST_WP_Z_MIN}"
+    "--limit-z-max" "${TEST_WP_Z_MAX}"
+  )
+  if [[ -n "${TEST_WP_RANDOM_SEED}" ]]; then
+    HELPER_ARGS+=("--wp-random-seed" "${TEST_WP_RANDOM_SEED}")
+  fi
+  echo "[ude-test] waypoint mode: axis=${TEST_AXIS} step=[${TEST_WP_STEP_MIN_M},${TEST_WP_STEP_MAX_M}]m origin_limit=${TEST_WP_AXIS_LIMIT_M}m"
+else
+  echo "[ude-test] waypoint mode: disabled"
 fi
 if [[ "${TEST_PUBLISH_TAKEOFF}" == "true" ]]; then
   HELPER_ARGS+=("--publish-takeoff")

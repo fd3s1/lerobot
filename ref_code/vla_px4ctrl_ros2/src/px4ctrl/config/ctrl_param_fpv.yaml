@@ -14,7 +14,12 @@ px4ctrl:
       setpoint: /mavros/setpoint_raw/attitude
       simulink_setpoint: /px4ctrl/simulink/attitude_target
       simulink_reference: /px4ctrl/simulink/reference_state
+      simulink_actual: /px4ctrl/simulink/actual_state
       simulink_tracking_error: /px4ctrl/simulink/tracking_error
+      simulink_ude_debug: /px4ctrl/simulink/ude_debug
+      ude_tune: /px4ctrl/ude_tune
+      ude_tune_status: /px4ctrl/ude_tune_status
+      ude_tune_status_text: /px4ctrl/ude_tune_status_text
       expert_pose: /px4ctrl/expert_pose
       gripper_command: /gripper/command
       traj_start_trigger: /traj_start_trigger
@@ -47,10 +52,10 @@ px4ctrl:
       takeoff_land_speed: 0.2
 
     limits:
-      x_min: -11.0
-      x_max: 11.0
-      y_min: -4.1
-      y_max: 4.1
+      x_min: -7.0
+      x_max: 14.0
+      y_min: -2.5
+      y_max: 2.5
       z_min: -0.3
       z_max: 2.5
 

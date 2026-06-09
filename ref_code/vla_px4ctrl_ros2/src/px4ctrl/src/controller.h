@@ -44,6 +44,31 @@ struct Controller_Output_t
   double thrust{0.0};
 };
 
+struct Controller_Debug_t
+{
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+  Eigen::Vector3d des_p{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d odom_p{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d e{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d des_v{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d odom_v{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d e_dot{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d u0{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d integral_u0{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d f_hat{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d u_acc{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d thrust_acc_limited{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d bodyrates_ff{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d bodyrates_fb{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d bodyrates_cmd{Eigen::Vector3d::Zero()};
+  double thrust{0.0};
+  double yaw_des{0.0};
+  double yaw_odom{0.0};
+  double yaw_error{0.0};
+  double dt{0.0};
+};
+
 class LinearControl
 {
 public:
@@ -55,7 +80,8 @@ public:
     const Desired_State_t &des,
     const Odom_Data_t &odom,
     const Imu_Data_t &imu,
-    const rclcpp::Time &now);
+    const rclcpp::Time &now,
+    Controller_Debug_t *debug = nullptr);
 
 private:
   Parameter_t &param_;

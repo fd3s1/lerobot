@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import math
+import random
 import sys
 import threading
 import time
@@ -57,6 +59,7 @@ class TakeoffHoverTest(Node):
         self.vision_pose: PoseStamped | None = None
         self.attitude_sp: AttitudeTarget | None = None
         self.takeoff_sent = False
+        self.rng = random.Random(args.wp_random_seed)
 
         self.takeoff_pub = self.create_publisher(TakeoffLand, args.takeoff_land_topic, 10)
         self.cmd_pub = self.create_publisher(PoseStamped, args.cmd_topic, 10)
@@ -116,8 +119,9 @@ class TakeoffHoverTest(Node):
             "mavros_state",
             "odom",
             "imu",
-            "vision_pose",
         ]
+        if self.args.require_vision_pose:
+            required.append("vision_pose")
         if not self.args.skip_setpoint_check:
             required.append("attitude_setpoint")
 
@@ -205,6 +209,18 @@ class TakeoffHoverTest(Node):
             time.sleep(0.05)
         return False
 
+    def pose_cmd_from_pose(self, pose) -> PoseStamped:
+        msg = PoseStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = self.odom.header.frame_id if self.odom is not None and self.odom.header.frame_id else self.args.frame_id
+        msg.pose = copy.deepcopy(pose)
+        return msg
+
+    def current_odom_pose_cmd(self) -> PoseStamped:
+        if self.odom is None:
+            raise RuntimeError("No odom message available for command.")
+        return self.pose_cmd_from_pose(self.odom.pose.pose)
+
     def publish_current_pose_cmd(self, duration_s: float) -> None:
         if self.odom is None:
             raise RuntimeError("No odom message available for hold command.")
@@ -218,6 +234,170 @@ class TakeoffHoverTest(Node):
             msg.pose = self.odom.pose.pose
             self.cmd_pub.publish(msg)
             time.sleep(1.0 / rate)
+
+    def cmd_inputs_ready(self) -> tuple[bool, list[str]]:
+        required = [
+            "px4ctrl_state",
+            "mavros_state",
+            "odom",
+            "imu",
+        ]
+        missing = [
+            name
+            for name in required
+            if not self.is_fresh(name, self.args.fresh_timeout)
+        ]
+        if (
+            not self.args.skip_mavros_connected_check
+            and self.mavros_state is not None
+            and not self.mavros_state.connected
+        ):
+            missing.append("mavros_connected")
+        return len(missing) == 0, missing
+
+    def global_axis_bounds(self) -> list[tuple[float, float]]:
+        return [
+            (self.args.limit_x_min, self.args.limit_x_max),
+            (self.args.limit_y_min, self.args.limit_y_max),
+            (self.args.limit_z_min, self.args.limit_z_max),
+        ]
+
+    def offset_in_limits(self, origin_axis_value: float, axis_index: int, offset: float) -> bool:
+        if abs(offset) > self.args.wp_axis_limit_m + 1e-9:
+            return False
+        low, high = self.global_axis_bounds()[axis_index]
+        value = origin_axis_value + offset
+        return low <= value <= high
+
+    def sample_next_axis_offset(
+        self,
+        origin_axis_value: float,
+        axis_index: int,
+        current_offset: float,
+    ) -> float:
+        step_min = min(self.args.wp_step_min_m, self.args.wp_step_max_m)
+        step_max = max(self.args.wp_step_min_m, self.args.wp_step_max_m)
+        for _ in range(max(1, self.args.wp_resample_attempts)):
+            step = self.rng.uniform(step_min, step_max)
+            direction = -1.0 if self.rng.random() < 0.5 else 1.0
+            candidate = current_offset + direction * step
+            if self.offset_in_limits(origin_axis_value, axis_index, candidate):
+                return candidate
+
+        low, high = self.global_axis_bounds()[axis_index]
+        safe_low = max(-self.args.wp_axis_limit_m, low - origin_axis_value)
+        safe_high = min(self.args.wp_axis_limit_m, high - origin_axis_value)
+        if safe_low <= 0.0 <= safe_high:
+            return 0.0
+        return min(max(current_offset, safe_low), safe_high)
+
+    def publish_until_cmd_ctrl(self) -> bool:
+        self.get_logger().info(
+            "Publishing current odom pose until CMD_CTRL. RC gate uses CH5/CH6 only; CH10 is ignored here."
+        )
+        rate = max(1.0, self.args.wp_rate_hz)
+        deadline = time.monotonic() + self.args.cmd_state_timeout
+        while rclpy.ok() and time.monotonic() < deadline:
+            ready, missing = self.cmd_inputs_ready()
+            if not ready:
+                self.get_logger().warn("CMD entry inputs stale: " + ", ".join(missing))
+                return False
+            if self.fsm_state == "CMD_CTRL":
+                return True
+            if self.fsm_state not in ("AUTO_HOVER", "CMD_CTRL"):
+                self.get_logger().warn(f"Cannot enter CMD_CTRL from px4ctrl state {self.fsm_state}.")
+                return False
+            self.cmd_pub.publish(self.current_odom_pose_cmd())
+            time.sleep(1.0 / rate)
+        return self.fsm_state == "CMD_CTRL"
+
+    def run_random_axis_waypoints(self) -> None:
+        axis_map = {"x": 0, "y": 1, "z": 2}
+        axis_index = axis_map[self.args.test_axis]
+        axis_name = self.args.test_axis
+
+        if not self.publish_until_cmd_ctrl():
+            self.get_logger().warn(
+                "CMD_CTRL was not reached. Check CH5/CH6 command gate and px4ctrl logs."
+            )
+            return
+
+        if self.odom is None:
+            self.get_logger().warn("No odom available when CMD_CTRL was reached.")
+            return
+
+        origin_pose = copy.deepcopy(self.odom.pose.pose)
+        origin = [
+            origin_pose.position.x,
+            origin_pose.position.y,
+            origin_pose.position.z,
+        ]
+        bounds = self.global_axis_bounds()
+        for i, value in enumerate(origin):
+            low, high = bounds[i]
+            if not (low <= value <= high):
+                self.get_logger().warn(
+                    f"Waypoint origin axis {i}={value:.3f} is outside limits [{low:.3f},{high:.3f}]."
+                )
+                return
+
+        self.get_logger().info(
+            f"CMD_CTRL reached. Waypoint origin locked at "
+            f"({origin[0]:.3f}, {origin[1]:.3f}, {origin[2]:.3f}); "
+            f"testing only {axis_name}-axis."
+        )
+
+        current_offset = 0.0
+        rate = max(1.0, self.args.wp_rate_hz)
+        waypoint_index = 0
+        while rclpy.ok():
+            ready, missing = self.cmd_inputs_ready()
+            if not ready:
+                self.get_logger().warn("Stopping waypoint publishing; inputs stale: " + ", ".join(missing))
+                return
+            if self.fsm_state != "CMD_CTRL":
+                self.get_logger().info(
+                    f"px4ctrl left CMD_CTRL ({self.fsm_state}); stopping random waypoints."
+                )
+                return
+
+            target_offset = self.sample_next_axis_offset(
+                origin[axis_index],
+                axis_index,
+                current_offset,
+            )
+            target_pose = copy.deepcopy(origin_pose)
+            target_value = origin[axis_index] + target_offset
+            if axis_index == 0:
+                target_pose.position.x = target_value
+            elif axis_index == 1:
+                target_pose.position.y = target_value
+            else:
+                target_pose.position.z = target_value
+
+            waypoint_index += 1
+            self.get_logger().info(
+                f"waypoint #{waypoint_index}: axis={axis_name} "
+                f"offset={target_offset:+.3f}m step={target_offset - current_offset:+.3f}m"
+            )
+
+            hold_deadline = time.monotonic() + self.args.wp_hold_s
+            while rclpy.ok() and time.monotonic() < hold_deadline:
+                ready, missing = self.cmd_inputs_ready()
+                if not ready:
+                    self.get_logger().warn(
+                        "Stopping waypoint publishing; inputs stale: " + ", ".join(missing)
+                    )
+                    return
+                if self.fsm_state != "CMD_CTRL":
+                    self.get_logger().info(
+                        f"px4ctrl left CMD_CTRL ({self.fsm_state}); stopping random waypoints."
+                    )
+                    return
+                self.cmd_pub.publish(self.pose_cmd_from_pose(target_pose))
+                time.sleep(1.0 / rate)
+
+            current_offset = target_offset
 
     def run_optional_cmd_ctrl_test(self) -> None:
         self.get_logger().info(
@@ -317,7 +497,7 @@ class TakeoffHoverTest(Node):
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Independent UDE/bodyrate manual-takeoff AUTO_HOVER test helper."
+        description="Independent UDE/bodyrate AUTO_HOVER/CMD_CTRL waypoint test helper."
     )
     parser.add_argument("--state-topic", default="/px4ctrl/state")
     parser.add_argument("--takeoff-land-topic", default="/px4ctrl/takeoff_land")
@@ -339,6 +519,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cmd-state-timeout", type=float, default=5.0)
     parser.add_argument("--cmd-return-timeout", type=float, default=3.0)
     parser.add_argument("--enter-cmd", action="store_true")
+    parser.add_argument("--run-waypoints", action="store_true")
+    parser.add_argument("--test-axis", choices=("x", "y", "z"), default="x")
+    parser.add_argument("--wp-step-min-m", type=float, default=0.05)
+    parser.add_argument("--wp-step-max-m", type=float, default=1.0)
+    parser.add_argument("--wp-axis-limit-m", type=float, default=1.0)
+    parser.add_argument("--wp-hold-s", type=float, default=4.0)
+    parser.add_argument("--wp-rate-hz", type=float, default=20.0)
+    parser.add_argument("--wp-resample-attempts", type=int, default=50)
+    parser.add_argument("--wp-random-seed", type=int, default=None)
+    parser.add_argument("--limit-x-min", type=float, default=-7.0)
+    parser.add_argument("--limit-x-max", type=float, default=14.0)
+    parser.add_argument("--limit-y-min", type=float, default=-2.5)
+    parser.add_argument("--limit-y-max", type=float, default=2.5)
+    parser.add_argument("--limit-z-min", type=float, default=-0.3)
+    parser.add_argument("--limit-z-max", type=float, default=2.5)
     parser.add_argument(
         "--publish-takeoff",
         action="store_true",
@@ -354,6 +549,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--skip-mavros-connected-check", action="store_true")
     parser.add_argument("--skip-setpoint-check", action="store_true")
+    parser.add_argument("--require-vision-pose", action="store_true")
     return parser
 
 
@@ -412,7 +608,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0 if node.safe_to_clean_stack() else MAYBE_AIRBORNE_EXIT_CODE
 
-        if args.enter_cmd:
+        if args.run_waypoints:
+            node.run_random_axis_waypoints()
+        elif args.enter_cmd:
             node.run_optional_cmd_ctrl_test()
 
         exit_code = node.interactive_after_hover()

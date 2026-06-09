@@ -42,8 +42,8 @@ twist.twist.linear.y  = AttitudeTarget type_mask
 twist.twist.linear.z  = output mode, 1 bodyrate, 0 attitude
 ```
 
-For Simulink reference/actual tracking diagnostics, px4ctrl also publishes two
-standard `nav_msgs/msg/Odometry` topics:
+For Simulink reference/actual tracking diagnostics, px4ctrl also publishes
+standard topics:
 
 ```text
 /px4ctrl/simulink/reference_state
@@ -52,11 +52,23 @@ standard `nav_msgs/msg/Odometry` topics:
   twist.twist.linear = desired velocity
   twist.twist.angular.z = desired yaw_rate
 
+/px4ctrl/simulink/actual_state
+  pose.pose.position = odom position used by the controller
+  pose.pose.orientation = odom attitude
+  twist.twist.linear = odom velocity in the controller/world frame
+  twist.twist.angular = odom angular velocity
+
 /px4ctrl/simulink/tracking_error
   pose.pose.position = desired position - odom position
   pose.pose.orientation = desired yaw - odom yaw as quaternion
   twist.twist.linear = desired velocity - odom velocity
   twist.twist.angular.z = desired yaw_rate - odom yaw_rate
+
+/px4ctrl/simulink/ude_debug
+  std_msgs/Float64MultiArray with UDE intermediate vectors and final command
+
+/px4ctrl/ude_tune
+  std_msgs/Float64MultiArray for online Kp/Kd/T tuning only
 ```
 
 See `simulink_reference_actual_topics.md` for the complete field mapping.

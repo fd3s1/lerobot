@@ -3,7 +3,10 @@
 
 #include <array>
 #include <string>
+#include <vector>
 
+#include <rcl_interfaces/msg/set_parameters_result.hpp>
+#include <rclcpp/parameter.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 class Parameter_t
@@ -45,7 +48,12 @@ public:
     std::string setpoint{"/mavros/setpoint_raw/attitude"};
     std::string simulink_setpoint{"/px4ctrl/simulink/attitude_target"};
     std::string simulink_reference{"/px4ctrl/simulink/reference_state"};
+    std::string simulink_actual{"/px4ctrl/simulink/actual_state"};
     std::string simulink_tracking_error{"/px4ctrl/simulink/tracking_error"};
+    std::string simulink_ude_debug{"/px4ctrl/simulink/ude_debug"};
+    std::string ude_tune{"/px4ctrl/ude_tune"};
+    std::string ude_tune_status{"/px4ctrl/ude_tune_status"};
+    std::string ude_tune_status_text{"/px4ctrl/ude_tune_status_text"};
     std::string expert_pose{"/px4ctrl/expert_pose"};
     std::string gripper_command{"/gripper/command"};
     std::string traj_start_trigger{"/traj_start_trigger"};
@@ -63,12 +71,12 @@ public:
 
   struct Limits
   {
-    double x_min{-6.5};
-    double x_max{6.5};
-    double y_min{-3.5};
-    double y_max{3.5};
+    double x_min{-7.0};
+    double x_max{14.0};
+    double y_min{-2.5};
+    double y_max{2.5};
     double z_min{-0.3};
-    double z_max{3.0};
+    double z_max{2.5};
   };
 
   struct Gripper
@@ -143,6 +151,9 @@ public:
 
   Parameter_t() = default;
   void config_from_ros_node(rclcpp::Node &node);
+  rcl_interfaces::msg::SetParametersResult apply_runtime_parameters(
+    const std::vector<rclcpp::Parameter> &params,
+    bool *thrust_mapping_changed = nullptr);
 };
 
 #endif

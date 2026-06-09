@@ -122,7 +122,8 @@ Controller_Output_t LinearControl::calculateControl(
   const Desired_State_t &des,
   const Odom_Data_t &odom,
   const Imu_Data_t &imu,
-  const rclcpp::Time &now)
+  const rclcpp::Time &now,
+  Controller_Debug_t *debug)
 {
   Controller_Output_t u;
   u.q = odom.q;
@@ -191,6 +192,28 @@ Controller_Output_t LinearControl::calculateControl(
     u.thrust = param_.controller.min_thrust;
   }
   u.thrust = std::clamp(u.thrust, param_.controller.min_thrust, param_.controller.max_thrust);
+
+  if (debug) {
+    debug->des_p = des.p;
+    debug->odom_p = odom.p;
+    debug->e = e;
+    debug->des_v = des.v;
+    debug->odom_v = odom.v;
+    debug->e_dot = e_dot;
+    debug->u0 = u0;
+    debug->integral_u0 = integral_u0_;
+    debug->f_hat = f_hat;
+    debug->u_acc = u_acc;
+    debug->thrust_acc_limited = thrust_acc;
+    debug->bodyrates_ff = feedforward_bodyrates;
+    debug->bodyrates_fb = feedback_bodyrates;
+    debug->bodyrates_cmd = u.bodyrates;
+    debug->thrust = u.thrust;
+    debug->yaw_des = uav_utils::normalize_angle(des.yaw);
+    debug->yaw_odom = uav_utils::normalize_angle(uav_utils::get_yaw_from_quaternion(odom.q));
+    debug->yaw_error = uav_utils::normalize_angle(debug->yaw_des - debug->yaw_odom);
+    debug->dt = dt;
+  }
 
   u.q = imu.q * odom.q.inverse() * desired_attitude;
   if (u.q.norm() > 1e-6) {

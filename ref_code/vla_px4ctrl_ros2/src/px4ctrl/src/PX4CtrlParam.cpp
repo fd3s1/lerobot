@@ -1,6 +1,7 @@
 #include "PX4CtrlParam.h"
 
 #include <array>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,51 @@ void declare_diag_parameter(
   }
 }
 
+bool is_finite(double value)
+{
+  return std::isfinite(value);
+}
+
+bool vector_to_array(
+  const rclcpp::Parameter &param,
+  std::array<double, 3> &target,
+  const char *label,
+  double min_value,
+  double max_value,
+  bool strict_min,
+  std::string &reason)
+{
+  if (param.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY) {
+    reason = std::string(label) + " must be a double array.";
+    return false;
+  }
+  const auto values = param.as_double_array();
+  if (values.size() != target.size()) {
+    reason = std::string(label) + " must have exactly 3 elements.";
+    return false;
+  }
+  std::array<double, 3> next{};
+  for (std::size_t i = 0; i < next.size(); ++i) {
+    const double value = values[i];
+    const bool above_min = strict_min ? value > min_value : value >= min_value;
+    if (!is_finite(value) || !above_min || value > max_value) {
+      reason = std::string(label) + " contains an out-of-range value.";
+      return false;
+    }
+    next[i] = value;
+  }
+  target = next;
+  return true;
+}
+
+rcl_interfaces::msg::SetParametersResult make_param_result(bool success, const std::string &reason)
+{
+  rcl_interfaces::msg::SetParametersResult result;
+  result.successful = success;
+  result.reason = reason;
+  return result;
+}
+
 }  // namespace
 
 void Parameter_t::config_from_ros_node(rclcpp::Node &node)
@@ -49,9 +95,19 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
     node.declare_parameter<std::string>("topics.simulink_setpoint", topics.simulink_setpoint);
   topics.simulink_reference =
     node.declare_parameter<std::string>("topics.simulink_reference", topics.simulink_reference);
+  topics.simulink_actual =
+    node.declare_parameter<std::string>("topics.simulink_actual", topics.simulink_actual);
   topics.simulink_tracking_error =
     node.declare_parameter<std::string>(
       "topics.simulink_tracking_error", topics.simulink_tracking_error);
+  topics.simulink_ude_debug =
+    node.declare_parameter<std::string>("topics.simulink_ude_debug", topics.simulink_ude_debug);
+  topics.ude_tune = node.declare_parameter<std::string>("topics.ude_tune", topics.ude_tune);
+  topics.ude_tune_status =
+    node.declare_parameter<std::string>("topics.ude_tune_status", topics.ude_tune_status);
+  topics.ude_tune_status_text =
+    node.declare_parameter<std::string>(
+      "topics.ude_tune_status_text", topics.ude_tune_status_text);
   topics.expert_pose = node.declare_parameter<std::string>("topics.expert_pose", topics.expert_pose);
   topics.gripper_command =
     node.declare_parameter<std::string>("topics.gripper_command", topics.gripper_command);
@@ -153,4 +209,38 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
       node.get_logger(),
       "\"enable_auto_arm\" is only allowed with \"auto_takeoff_land.enable\" enabled.");
   }
+}
+
+rcl_interfaces::msg::SetParametersResult Parameter_t::apply_runtime_parameters(
+  const std::vector<rclcpp::Parameter> &params,
+  bool *thrust_mapping_changed)
+{
+  if (thrust_mapping_changed) {
+    *thrust_mapping_changed = false;
+  }
+
+  Parameter_t next = *this;
+  std::string reason;
+
+  for (const auto &param : params) {
+    const std::string &name = param.get_name();
+    if (name == "ude.Kp_diag") {
+      if (!vector_to_array(param, next.ude.Kp_diag, name.c_str(), 0.0, 20.0, false, reason)) {
+        return make_param_result(false, reason);
+      }
+    } else if (name == "ude.Kd_diag") {
+      if (!vector_to_array(param, next.ude.Kd_diag, name.c_str(), 0.0, 30.0, false, reason)) {
+        return make_param_result(false, reason);
+      }
+    } else if (name == "ude.T_diag") {
+      if (!vector_to_array(param, next.ude.T_diag, name.c_str(), 0.02, 10.0, true, reason)) {
+        return make_param_result(false, reason);
+      }
+    } else {
+      return make_param_result(false, "Unsupported runtime parameter: " + name);
+    }
+  }
+
+  ude = next.ude;
+  return make_param_result(true, "runtime UDE Kp/Kd/T updated");
 }

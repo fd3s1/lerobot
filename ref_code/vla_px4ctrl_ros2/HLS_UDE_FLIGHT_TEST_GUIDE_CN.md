@@ -64,27 +64,63 @@ ros2 topic echo --once /mavros/state
 
 一键脚本也会做这些检查。如果 `POSE_PREFLIGHT_REQUIRED=true`，任何关键 topic 检查失败都会退出。
 
-### 4. 单独 UDE 手动起飞检查
+### 4. 单独 UDE 精调和随机单轴 waypoint 检查
 
-如果只想验证和以前一致的 UDE 起飞/悬停控制链，使用：
+`test_ude_takeoff_hover.sh` 现在默认用于 UDE 精调：一键启动 stack，发布自动起飞，进入 `AUTO_HOVER` 后发布当前位置 `/position_cmd` 进入 `CMD_CTRL`，随后围绕进入 `CMD_CTRL` 那一刻的 odom pose 锁存 origin，持续发布随机单轴 waypoint。
 
 ```bash
 cd /home/user/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
 
+TEST_AXIS=x \
 bash shflies/test_ude_takeoff_hover.sh
 ```
 
-这个脚本默认不会发布 `/px4ctrl/takeoff_land`，也不会要求按 Enter 或输入 `TAKEOFF` 来触发起飞。你仍按以前的流程手动起飞；脚本只等待 px4ctrl 进入 `AUTO_HOVER`，然后进入状态查看/降落菜单。
+默认行为：
 
-只有在明确需要恢复“helper 代发 TAKEOFF”的旧流程时，才使用：
+- 自动发布 `/px4ctrl/takeoff_land` 的 `TAKEOFF`，但默认仍需要输入 `TAKEOFF` 确认；设置 `TEST_AUTO_CONFIRM=true` 可取消确认。
+- RC 门控只看 px4ctrl 的 CH5/CH6 hover/command，不看 CH10。
+- `TEST_AXIS=x|y|z` 决定本次只测试哪个轴；非测试轴和 yaw 保持 origin，不随飞机当前位置漂移。
+- 相邻 waypoint 在所选轴上的差值随机落在 `TEST_WP_STEP_MIN_M=0.05` 到 `TEST_WP_STEP_MAX_M=1.00`。
+- waypoint 相对 origin 不超过 `TEST_WP_AXIS_LIMIT_M=1.00`，且不超过 px4ctrl 全局场地限制 `x=[-7,14] y=[-2.5,2.5] z=[-0.3,2.5]`。
+- 一旦 px4ctrl 离开 `CMD_CTRL`，脚本立即停止发布随机 waypoint；如果回到 `AUTO_HOVER`，进入 `STATUS/LAND/EXIT` 菜单。
+
+常用示例：
 
 ```bash
-TEST_PUBLISH_TAKEOFF=true \
-TEST_AUTO_CONFIRM=true \
+TEST_AXIS=y \
+TEST_WP_STEP_MIN_M=0.05 \
+TEST_WP_STEP_MAX_M=0.40 \
+TEST_WP_AXIS_LIMIT_M=0.80 \
 bash shflies/test_ude_takeoff_hover.sh
 ```
 
-其中 `TEST_PUBLISH_TAKEOFF=true` 表示由 helper 发布 `TakeoffLand.TAKEOFF`；`TEST_AUTO_CONFIRM=true` 只在这个模式下生效，表示不再输入 `TAKEOFF` 确认。
+如果要回到以前“只启动 stack，人工起飞，脚本只等待 `AUTO_HOVER`”的悬停检查模式：
+
+```bash
+TEST_PUBLISH_TAKEOFF=false \
+TEST_RUN_WAYPOINTS=false \
+TEST_ENTER_CMD=false \
+bash shflies/test_ude_takeoff_hover.sh
+```
+
+Simulink 可订阅：
+
+```text
+/px4ctrl/simulink/reference_state
+/px4ctrl/simulink/actual_state
+/px4ctrl/simulink/tracking_error
+/px4ctrl/simulink/attitude_target
+/px4ctrl/simulink/ude_debug
+/px4ctrl/ude_tune_status
+```
+
+在线调参只支持 `ude.Kp_diag`、`ude.Kd_diag`、`ude.T_diag`，通过 `/px4ctrl/ude_tune` 的 `std_msgs/msg/Float64MultiArray` 发布：
+
+```text
+[seq, reset_control, Kp_x, Kp_y, Kp_z, Kd_x, Kd_y, Kd_z, T_x, T_y, T_z]
+```
+
+某组三个值填 `NaN` 表示不改该组；`reset_control=1` 会在更新后重置 UDE 积分状态。推力、限角、角速度、`max_f_hat` 和 `max_u_acc` 不通过在线调参修改。
 
 ### 5. 无桨自动流程检查
 

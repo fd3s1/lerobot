@@ -2,6 +2,7 @@
 #define PX4CTRL_FSM_H
 
 #include <utility>
+#include <vector>
 
 #include <Eigen/Dense>
 
@@ -11,8 +12,11 @@
 #include <mavros_msgs/srv/command_long.hpp>
 #include <mavros_msgs/srv/set_mode.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <rcl_interfaces/msg/set_parameters_result.hpp>
+#include <rclcpp/parameter.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/u_int8.hpp>
 
@@ -61,7 +65,11 @@ public:
   rclcpp::Publisher<mavros_msgs::msg::AttitudeTarget>::SharedPtr ctrl_FCU_pub;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr simulink_setpoint_pub;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr simulink_reference_pub;
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr simulink_actual_pub;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr simulink_tracking_error_pub;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr simulink_ude_debug_pub;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr ude_tune_status_pub;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr ude_tune_status_text_pub;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr gripper_cmd_pub;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr fsm_state_pub;
   rclcpp::Client<mavros_msgs::srv::SetMode>::SharedPtr set_FCU_mode_srv;
@@ -83,6 +91,9 @@ public:
   State_t get_state() const { return state; }
   bool get_landed() const { return takeoff_land.landed; }
   void manual_flag_cb(const std_msgs::msg::UInt8::SharedPtr msg);
+  void ude_tune_cb(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
+  rcl_interfaces::msg::SetParametersResult runtime_param_cb(
+    const std::vector<rclcpp::Parameter> &params);
 
 private:
   rclcpp::Node *node_;
@@ -106,10 +117,13 @@ private:
   void publish_ctrl(const Controller_Output_t &u, const rclcpp::Time &stamp);
   void publish_expert_pose(const Desired_State_t &des, const rclcpp::Time &stamp);
   void publish_simulink_reference(const Desired_State_t &des, const rclcpp::Time &stamp);
+  void publish_simulink_actual(const Odom_Data_t &odom, const rclcpp::Time &stamp);
   void publish_simulink_tracking_error(
     const Desired_State_t &des,
     const Odom_Data_t &odom,
     const rclcpp::Time &stamp);
+  void publish_simulink_ude_debug(const Controller_Debug_t &debug, const rclcpp::Time &stamp);
+  void publish_ude_tune_status(double seq, bool accepted, double code, const std::string &text);
   void publish_trigger(const Odom_Data_t &odom, const rclcpp::Time &stamp);
   void publish_fsm_state();
   void publish_gripper_safety(const rclcpp::Time &now_time);

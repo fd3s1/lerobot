@@ -1,9 +1,12 @@
 #include "PX4CtrlFSM.h"
 
+#include <array>
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <sstream>
 #include <string>
+#include <vector>
 
 #include <quadrotor_msgs/msg/takeoff_land.hpp>
 #include <uav_utils/utils.h>
@@ -61,6 +64,42 @@ Eigen::Vector3d quaternion_to_rpy(const Eigen::Quaterniond &q)
   const double cosy_cosp = 1.0 - 2.0 * (q.y() * q.y() + q.z() * q.z());
   const double yaw = std::atan2(siny_cosp, cosy_cosp);
   return Eigen::Vector3d(roll, pitch, yaw);
+}
+
+void append_vector(std::vector<double> &data, const Eigen::Vector3d &value)
+{
+  data.push_back(value.x());
+  data.push_back(value.y());
+  data.push_back(value.z());
+}
+
+void append_array(std::vector<double> &data, const std::array<double, 3> &value)
+{
+  data.push_back(value[0]);
+  data.push_back(value[1]);
+  data.push_back(value[2]);
+}
+
+bool is_nan(double value)
+{
+  return std::isnan(value);
+}
+
+void add_array_param_from_tune(
+  std::vector<rclcpp::Parameter> &updates,
+  const std::vector<double> &data,
+  std::size_t offset,
+  const char *name)
+{
+  if (data.size() <= offset + 2) {
+    return;
+  }
+  if (is_nan(data[offset]) || is_nan(data[offset + 1]) || is_nan(data[offset + 2])) {
+    return;
+  }
+  updates.emplace_back(
+    name,
+    std::vector<double>{data[offset], data[offset + 1], data[offset + 2]});
 }
 
 }  // namespace
@@ -299,6 +338,8 @@ void PX4CtrlFSM::process()
 
     const Desired_State_t safe_des = clamp_desired(des);
     Controller_Output_t u;
+    Controller_Debug_t debug;
+    bool have_debug = false;
     if (state == MANUAL_CTRL || rotor_low_speed_during_land) {
       u.q = odom_data.q;
       u.bodyrates.setZero();
@@ -320,14 +361,17 @@ void PX4CtrlFSM::process()
         param.controller.max_thrust);
 
       controller.resetControlState();
-      u = controller.calculateControl(safe_des, odom_data, imu_data, now_time);
+      u = controller.calculateControl(safe_des, odom_data, imu_data, now_time, &debug);
+      have_debug = true;
       u.thrust = clamp(
         std::min(u.thrust, ramp_thrust),
         param.controller.min_thrust,
         param.controller.max_thrust);
+      debug.thrust = u.thrust;
       controller.resetControlState();
     } else {
-      u = controller.calculateControl(safe_des, odom_data, imu_data, now_time);
+      u = controller.calculateControl(safe_des, odom_data, imu_data, now_time, &debug);
+      have_debug = true;
     }
     if (state == AUTO_TAKEOFF) {
       const Eigen::Vector3d cmd_rpy = quaternion_to_rpy(u.q);
@@ -351,7 +395,11 @@ void PX4CtrlFSM::process()
     publish_ctrl(u, now_time);
     publish_expert_pose(safe_des, now_time);
     publish_simulink_reference(safe_des, now_time);
+    publish_simulink_actual(odom_data, now_time);
     publish_simulink_tracking_error(safe_des, odom_data, now_time);
+    if (have_debug) {
+      publish_simulink_ude_debug(debug, now_time);
+    }
   }
 
   land_detector(state, des, odom_data);
@@ -624,6 +672,25 @@ void PX4CtrlFSM::publish_simulink_reference(
   simulink_reference_pub->publish(msg);
 }
 
+void PX4CtrlFSM::publish_simulink_actual(
+  const Odom_Data_t &odom,
+  const rclcpp::Time &stamp)
+{
+  if (!simulink_actual_pub) {
+    return;
+  }
+
+  nav_msgs::msg::Odometry msg;
+  msg.header.stamp = stamp;
+  msg.header.frame_id = param.frame_id;
+  msg.child_frame_id = "actual_state_world_velocity";
+  set_point(msg.pose.pose.position, odom.p);
+  set_quaternion(msg.pose.pose.orientation, odom.q);
+  set_vector3(msg.twist.twist.linear, odom.v);
+  set_vector3(msg.twist.twist.angular, odom.w);
+  simulink_actual_pub->publish(msg);
+}
+
 void PX4CtrlFSM::publish_simulink_tracking_error(
   const Desired_State_t &des,
   const Odom_Data_t &odom,
@@ -647,6 +714,80 @@ void PX4CtrlFSM::publish_simulink_tracking_error(
   msg.twist.twist.angular.z = des.yaw_rate - odom.w.z();
 
   simulink_tracking_error_pub->publish(msg);
+}
+
+void PX4CtrlFSM::publish_simulink_ude_debug(
+  const Controller_Debug_t &debug,
+  const rclcpp::Time &stamp)
+{
+  if (!simulink_ude_debug_pub) {
+    return;
+  }
+
+  std_msgs::msg::Float64MultiArray msg;
+  msg.layout.dim.resize(1);
+  msg.layout.dim[0].label = "ude_debug_v1";
+  msg.layout.dim[0].size = 49;
+  msg.layout.dim[0].stride = 49;
+  msg.layout.data_offset = 0;
+  msg.data.reserve(49);
+
+  msg.data.push_back(stamp.seconds());
+  msg.data.push_back(static_cast<double>(state));
+  append_vector(msg.data, debug.des_p);
+  append_vector(msg.data, debug.odom_p);
+  append_vector(msg.data, debug.e);
+  append_vector(msg.data, debug.des_v);
+  append_vector(msg.data, debug.odom_v);
+  append_vector(msg.data, debug.e_dot);
+  append_vector(msg.data, debug.u0);
+  append_vector(msg.data, debug.integral_u0);
+  append_vector(msg.data, debug.f_hat);
+  append_vector(msg.data, debug.u_acc);
+  append_vector(msg.data, debug.thrust_acc_limited);
+  append_vector(msg.data, debug.bodyrates_ff);
+  append_vector(msg.data, debug.bodyrates_fb);
+  append_vector(msg.data, debug.bodyrates_cmd);
+  msg.data.push_back(debug.thrust);
+  msg.data.push_back(debug.yaw_des);
+  msg.data.push_back(debug.yaw_odom);
+  msg.data.push_back(debug.yaw_error);
+  msg.data.push_back(debug.dt);
+
+  simulink_ude_debug_pub->publish(msg);
+}
+
+void PX4CtrlFSM::publish_ude_tune_status(
+  double seq,
+  bool accepted,
+  double code,
+  const std::string &text)
+{
+  if (ude_tune_status_pub) {
+    std_msgs::msg::Float64MultiArray msg;
+    msg.layout.dim.resize(1);
+    msg.layout.dim[0].label = "ude_tune_status_v1";
+    msg.layout.dim[0].size = 12;
+    msg.layout.dim[0].stride = 12;
+    msg.layout.data_offset = 0;
+    msg.data.reserve(12);
+    msg.data.push_back(seq);
+    msg.data.push_back(accepted ? 1.0 : 0.0);
+    msg.data.push_back(code);
+    append_array(msg.data, param.ude.Kp_diag);
+    append_array(msg.data, param.ude.Kd_diag);
+    append_array(msg.data, param.ude.T_diag);
+    ude_tune_status_pub->publish(msg);
+  }
+
+  if (ude_tune_status_text_pub) {
+    std_msgs::msg::String msg;
+    std::ostringstream oss;
+    oss << "seq=" << seq << " accepted=" << (accepted ? "true" : "false")
+        << " code=" << code << " " << text;
+    msg.data = oss.str();
+    ude_tune_status_text_pub->publish(msg);
+  }
 }
 
 void PX4CtrlFSM::publish_trigger(const Odom_Data_t &odom, const rclcpp::Time &stamp)
@@ -765,6 +906,72 @@ bool PX4CtrlFSM::should_force_gripper_open(const rclcpp::Time &now_time) const
   return land_requested || state == AUTO_TAKEOFF || state == AUTO_LAND ||
          odom_timeout || rc_timeout || below_safe_height ||
          !state_data.current_state.armed || !px4_mode_allows_gripper_rc();
+}
+
+void PX4CtrlFSM::ude_tune_cb(const std_msgs::msg::Float64MultiArray::SharedPtr msg)
+{
+  if (!msg) {
+    return;
+  }
+
+  constexpr double kMalformedCode = -1.0;
+  constexpr double kRejectedCode = 0.0;
+  constexpr double kAcceptedCode = 1.0;
+
+  const std::vector<double> &data = msg->data;
+  const double seq = data.empty() ? -1.0 : data[0];
+  if (data.size() < 2) {
+    publish_ude_tune_status(
+      seq,
+      false,
+      kMalformedCode,
+      "ude_tune expects at least seq and reset_control.");
+    return;
+  }
+
+  std::vector<rclcpp::Parameter> updates;
+  add_array_param_from_tune(updates, data, 2, "ude.Kp_diag");
+  add_array_param_from_tune(updates, data, 5, "ude.Kd_diag");
+  add_array_param_from_tune(updates, data, 8, "ude.T_diag");
+
+  bool thrust_mapping_changed = false;
+  const auto result = param.apply_runtime_parameters(updates, &thrust_mapping_changed);
+  if (!result.successful) {
+    publish_ude_tune_status(seq, false, kRejectedCode, result.reason);
+    return;
+  }
+
+  const bool reset_control = data[1] >= 0.5;
+  if (reset_control) {
+    controller.resetControlState();
+  }
+  if (thrust_mapping_changed) {
+    controller.resetThrustMapping();
+  }
+
+  std::ostringstream oss;
+  oss << result.reason << "; updates=" << updates.size()
+      << " reset_control=" << (reset_control ? "true" : "false");
+  publish_ude_tune_status(seq, true, kAcceptedCode, oss.str());
+}
+
+rcl_interfaces::msg::SetParametersResult PX4CtrlFSM::runtime_param_cb(
+  const std::vector<rclcpp::Parameter> &params)
+{
+  bool thrust_mapping_changed = false;
+  const auto result = param.apply_runtime_parameters(params, &thrust_mapping_changed);
+  if (result.successful) {
+    controller.resetControlState();
+    if (thrust_mapping_changed) {
+      controller.resetThrustMapping();
+    }
+  }
+  publish_ude_tune_status(
+    -1.0,
+    result.successful,
+    result.successful ? 1.0 : 0.0,
+    result.reason);
+  return result;
 }
 
 void PX4CtrlFSM::change_state(State_t new_state)
