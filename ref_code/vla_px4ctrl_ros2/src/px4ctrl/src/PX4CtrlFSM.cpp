@@ -24,6 +24,28 @@ Eigen::Vector3d limit_norm(const Eigen::Vector3d &value, double max_norm)
   return value * (max_norm / norm);
 }
 
+void set_vector3(geometry_msgs::msg::Vector3 &msg, const Eigen::Vector3d &value)
+{
+  msg.x = value.x();
+  msg.y = value.y();
+  msg.z = value.z();
+}
+
+void set_point(geometry_msgs::msg::Point &msg, const Eigen::Vector3d &value)
+{
+  msg.x = value.x();
+  msg.y = value.y();
+  msg.z = value.z();
+}
+
+void set_quaternion(geometry_msgs::msg::Quaternion &msg, const Eigen::Quaterniond &value)
+{
+  msg.x = value.x();
+  msg.y = value.y();
+  msg.z = value.z();
+  msg.w = value.w();
+}
+
 Eigen::Vector3d quaternion_to_rpy(const Eigen::Quaterniond &q)
 {
   const double sinr_cosp = 2.0 * (q.w() * q.x() + q.y() * q.z());
@@ -328,6 +350,8 @@ void PX4CtrlFSM::process()
     }
     publish_ctrl(u, now_time);
     publish_expert_pose(safe_des, now_time);
+    publish_simulink_reference(safe_des, now_time);
+    publish_simulink_tracking_error(safe_des, odom_data, now_time);
   }
 
   land_detector(state, des, odom_data);
@@ -576,6 +600,53 @@ void PX4CtrlFSM::publish_expert_pose(const Desired_State_t &des, const rclcpp::T
   msg.pose.orientation.w = q.w();
 
   expert_pose_pub->publish(msg);
+}
+
+void PX4CtrlFSM::publish_simulink_reference(
+  const Desired_State_t &des,
+  const rclcpp::Time &stamp)
+{
+  if (!simulink_reference_pub) {
+    return;
+  }
+
+  nav_msgs::msg::Odometry msg;
+  msg.header.stamp = stamp;
+  msg.header.frame_id = param.frame_id;
+  msg.child_frame_id = "reference_state";
+  set_point(msg.pose.pose.position, des.p);
+  set_vector3(msg.twist.twist.linear, des.v);
+  msg.twist.twist.angular.z = des.yaw_rate;
+
+  const Eigen::Quaterniond q = uav_utils::yaw_to_quaternion(uav_utils::normalize_angle(des.yaw));
+  set_quaternion(msg.pose.pose.orientation, q);
+
+  simulink_reference_pub->publish(msg);
+}
+
+void PX4CtrlFSM::publish_simulink_tracking_error(
+  const Desired_State_t &des,
+  const Odom_Data_t &odom,
+  const rclcpp::Time &stamp)
+{
+  if (!simulink_tracking_error_pub) {
+    return;
+  }
+
+  nav_msgs::msg::Odometry msg;
+  msg.header.stamp = stamp;
+  msg.header.frame_id = param.frame_id;
+  msg.child_frame_id = "tracking_error_des_minus_odom";
+  set_point(msg.pose.pose.position, des.p - odom.p);
+  set_vector3(msg.twist.twist.linear, des.v - odom.v);
+
+  const double odom_yaw = uav_utils::normalize_angle(uav_utils::get_yaw_from_quaternion(odom.q));
+  const double yaw_error = uav_utils::normalize_angle(des.yaw - odom_yaw);
+  const Eigen::Quaterniond yaw_error_q = uav_utils::yaw_to_quaternion(yaw_error);
+  set_quaternion(msg.pose.pose.orientation, yaw_error_q);
+  msg.twist.twist.angular.z = des.yaw_rate - odom.w.z();
+
+  simulink_tracking_error_pub->publish(msg);
 }
 
 void PX4CtrlFSM::publish_trigger(const Odom_Data_t &odom, const rclcpp::Time &stamp)

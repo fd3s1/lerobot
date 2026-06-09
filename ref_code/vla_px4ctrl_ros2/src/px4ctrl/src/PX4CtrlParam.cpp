@@ -47,6 +47,11 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
   topics.setpoint = node.declare_parameter<std::string>("topics.setpoint", topics.setpoint);
   topics.simulink_setpoint =
     node.declare_parameter<std::string>("topics.simulink_setpoint", topics.simulink_setpoint);
+  topics.simulink_reference =
+    node.declare_parameter<std::string>("topics.simulink_reference", topics.simulink_reference);
+  topics.simulink_tracking_error =
+    node.declare_parameter<std::string>(
+      "topics.simulink_tracking_error", topics.simulink_tracking_error);
   topics.expert_pose = node.declare_parameter<std::string>("topics.expert_pose", topics.expert_pose);
   topics.gripper_command =
     node.declare_parameter<std::string>("topics.gripper_command", topics.gripper_command);

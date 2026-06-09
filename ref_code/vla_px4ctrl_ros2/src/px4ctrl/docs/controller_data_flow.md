@@ -42,6 +42,25 @@ twist.twist.linear.y  = AttitudeTarget type_mask
 twist.twist.linear.z  = output mode, 1 bodyrate, 0 attitude
 ```
 
+For Simulink reference/actual tracking diagnostics, px4ctrl also publishes two
+standard `nav_msgs/msg/Odometry` topics:
+
+```text
+/px4ctrl/simulink/reference_state
+  pose.pose.position = desired position used by the controller
+  pose.pose.orientation = desired yaw as quaternion
+  twist.twist.linear = desired velocity
+  twist.twist.angular.z = desired yaw_rate
+
+/px4ctrl/simulink/tracking_error
+  pose.pose.position = desired position - odom position
+  pose.pose.orientation = desired yaw - odom yaw as quaternion
+  twist.twist.linear = desired velocity - odom velocity
+  twist.twist.angular.z = desired yaw_rate - odom yaw_rate
+```
+
+See `simulink_reference_actual_topics.md` for the complete field mapping.
+
 ## Top Level Flow
 
 ```mermaid
@@ -213,6 +232,9 @@ flowchart TD
   ATT --> MSG
   MSG --> PX4["/mavros/setpoint_raw/attitude"]
   MSG --> SIM["/px4ctrl/simulink/attitude_target<br/>nav_msgs/msg/Odometry"]
+  DESREF["Desired_State_t safe_des"] --> REF["/px4ctrl/simulink/reference_state<br/>nav_msgs/msg/Odometry"]
+  DESREF --> ERR["/px4ctrl/simulink/tracking_error<br/>nav_msgs/msg/Odometry<br/>des - odom"]
+  ODOM["Odom_Data_t odom"] --> ERR
 ```
 
 Variable mapping:

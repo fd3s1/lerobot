@@ -60,6 +60,8 @@ public:
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr expert_pose_pub;
   rclcpp::Publisher<mavros_msgs::msg::AttitudeTarget>::SharedPtr ctrl_FCU_pub;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr simulink_setpoint_pub;
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr simulink_reference_pub;
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr simulink_tracking_error_pub;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr gripper_cmd_pub;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr fsm_state_pub;
   rclcpp::Client<mavros_msgs::srv::SetMode>::SharedPtr set_FCU_mode_srv;
@@ -103,6 +105,11 @@ private:
   void set_hov_with_rc();
   void publish_ctrl(const Controller_Output_t &u, const rclcpp::Time &stamp);
   void publish_expert_pose(const Desired_State_t &des, const rclcpp::Time &stamp);
+  void publish_simulink_reference(const Desired_State_t &des, const rclcpp::Time &stamp);
+  void publish_simulink_tracking_error(
+    const Desired_State_t &des,
+    const Odom_Data_t &odom,
+    const rclcpp::Time &stamp);
   void publish_trigger(const Odom_Data_t &odom, const rclcpp::Time &stamp);
   void publish_fsm_state();
   void publish_gripper_safety(const rclcpp::Time &now_time);

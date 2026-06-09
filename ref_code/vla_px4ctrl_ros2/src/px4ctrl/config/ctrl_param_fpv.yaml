@@ -13,6 +13,8 @@ px4ctrl:
       takeoff_land: /px4ctrl/takeoff_land
       setpoint: /mavros/setpoint_raw/attitude
       simulink_setpoint: /px4ctrl/simulink/attitude_target
+      simulink_reference: /px4ctrl/simulink/reference_state
+      simulink_tracking_error: /px4ctrl/simulink/tracking_error
       expert_pose: /px4ctrl/expert_pose
       gripper_command: /gripper/command
       traj_start_trigger: /traj_start_trigger

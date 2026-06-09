@@ -107,6 +107,10 @@ int main(int argc, char *argv[])
     node->create_publisher<mavros_msgs::msg::AttitudeTarget>(param.topics.setpoint, 10);
   fsm.simulink_setpoint_pub =
     node->create_publisher<nav_msgs::msg::Odometry>(param.topics.simulink_setpoint, 10);
+  fsm.simulink_reference_pub =
+    node->create_publisher<nav_msgs::msg::Odometry>(param.topics.simulink_reference, 10);
+  fsm.simulink_tracking_error_pub =
+    node->create_publisher<nav_msgs::msg::Odometry>(param.topics.simulink_tracking_error, 10);
   fsm.expert_pose_pub =
     node->create_publisher<geometry_msgs::msg::PoseStamped>(param.topics.expert_pose, 10);
   fsm.traj_start_trigger_pub =
