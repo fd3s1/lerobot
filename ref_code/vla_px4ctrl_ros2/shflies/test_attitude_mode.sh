@@ -35,7 +35,7 @@ STICK_EXPO="${STICK_EXPO:-1.7}"
 ROLL_REVERSE="${ROLL_REVERSE:-false}"
 PITCH_REVERSE="${PITCH_REVERSE:-true}"
 YAW_REVERSE="${YAW_REVERSE:-false}"
-THROTTLE_REVERSE="${THROTTLE_REVERSE:-true}"
+THROTTLE_REVERSE="${THROTTLE_REVERSE:-false}"
 
 MAX_ROLL_RATE_DPS="${MAX_ROLL_RATE_DPS:-45.0}"
 MAX_PITCH_RATE_DPS="${MAX_PITCH_RATE_DPS:-45.0}"
@@ -50,6 +50,7 @@ THRUST_RAMP_PER_S="${THRUST_RAMP_PER_S:-0.05}"
 THRUST_SLEW_PER_S="${THRUST_SLEW_PER_S:-0.20}"
 REQUIRE_ARMED_FOR_THRUST_RAMP="${REQUIRE_ARMED_FOR_THRUST_RAMP:-true}"
 REQUIRE_OFFBOARD_FOR_THRUST_RAMP="${REQUIRE_OFFBOARD_FOR_THRUST_RAMP:-true}"
+SETPOINT_OUTPUT_MODE="${SETPOINT_OUTPUT_MODE:-attitude}"
 SETPOINT_ALIGNMENT_MODE="${SETPOINT_ALIGNMENT_MODE:-direct_imu}"
 FRAME_ID="${FRAME_ID:-map}"
 
@@ -105,7 +106,9 @@ echo "[test-att] CH${TEST_ATT_CHANNEL} active_threshold=${ACTIVE_THRESHOLD} rate
 echo "[test-att] stick deadzone=${STICK_DEADZONE} expo=${STICK_EXPO} reverse roll=${ROLL_REVERSE} pitch=${PITCH_REVERSE} yaw=${YAW_REVERSE} throttle=${THROTTLE_REVERSE}"
 echo "[test-att] rate limits dps: roll=${MAX_ROLL_RATE_DPS} pitch=${MAX_PITCH_RATE_DPS} yaw=${MAX_YAW_RATE_DPS}; angle limits deg: roll=${MAX_ROLL_DEG} pitch=${MAX_PITCH_DEG}"
 echo "[test-att] thrust base=${THRUST_BASE} min=${THRUST_MIN} max=${THRUST_MAX} ramp=${THRUST_RAMP_PER_S}/s slew=${THRUST_SLEW_PER_S}/s"
-echo "[test-att] setpoint_alignment_mode=${SETPOINT_ALIGNMENT_MODE}; /test_att/reference_rpy is FCU setpoint, /test_att/desired_rpy is stick-integrated target"
+echo "[test-att] setpoint_output_mode=${SETPOINT_OUTPUT_MODE} setpoint_alignment_mode=${SETPOINT_ALIGNMENT_MODE}"
+echo "[test-att] attitude mode: /test_att/reference_rpy is FCU setpoint, /test_att/desired_rpy is stick-integrated target"
+echo "[test-att] bodyrate mode: use /test_att/reference_bodyrate and /test_att/actual_bodyrate as primary signals"
 echo "[test-att] this script does not start px4ctrl or publish /position_cmd."
 echo "[test-att] trigger sequence: press Enter in this terminal, then raise CH${TEST_ATT_CHANNEL}; node streams setpoint, requests OFFBOARD, arms, and ramps thrust."
 
@@ -152,6 +155,7 @@ exec ros2 run px4ctrl test_attitude_mode_node --ros-args \
   -p thrust_slew_per_s:="${THRUST_SLEW_PER_S_P}" \
   -p require_armed_for_thrust_ramp:="${REQUIRE_ARMED_FOR_THRUST_RAMP}" \
   -p require_offboard_for_thrust_ramp:="${REQUIRE_OFFBOARD_FOR_THRUST_RAMP}" \
+  -p setpoint_output_mode:="${SETPOINT_OUTPUT_MODE}" \
   -p setpoint_alignment_mode:="${SETPOINT_ALIGNMENT_MODE}" \
   -p frame_id:="${FRAME_ID}" \
   "$@"

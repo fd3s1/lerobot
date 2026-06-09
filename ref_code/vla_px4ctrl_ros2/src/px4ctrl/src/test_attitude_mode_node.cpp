@@ -234,7 +234,7 @@ public:
     roll_reverse_ = declare_parameter<bool>("roll_reverse", false);
     pitch_reverse_ = declare_parameter<bool>("pitch_reverse", true);
     yaw_reverse_ = declare_parameter<bool>("yaw_reverse", false);
-    throttle_reverse_ = declare_parameter<bool>("throttle_reverse", true);
+    throttle_reverse_ = declare_parameter<bool>("throttle_reverse", false);
 
     max_roll_rate_ = deg2rad(declare_parameter<double>("max_roll_rate_dps", 45.0));
     max_pitch_rate_ = deg2rad(declare_parameter<double>("max_pitch_rate_dps", 45.0));
@@ -250,6 +250,8 @@ public:
     require_armed_for_thrust_ramp_ = declare_parameter<bool>("require_armed_for_thrust_ramp", true);
     require_offboard_for_thrust_ramp_ =
       declare_parameter<bool>("require_offboard_for_thrust_ramp", true);
+    setpoint_output_mode_ =
+      declare_parameter<std::string>("setpoint_output_mode", "attitude");
     setpoint_alignment_mode_ =
       declare_parameter<std::string>("setpoint_alignment_mode", "direct_imu");
     frame_id_ = declare_parameter<std::string>("frame_id", "map");
@@ -363,6 +365,14 @@ private:
 
   void sanitize_parameters()
   {
+    if (setpoint_output_mode_ != "attitude" &&
+        setpoint_output_mode_ != "bodyrate") {
+      RCLCPP_WARN(
+        get_logger(),
+        "unknown setpoint_output_mode='%s'; using attitude",
+        setpoint_output_mode_.c_str());
+      setpoint_output_mode_ = "attitude";
+    }
     if (setpoint_alignment_mode_ != "direct_imu" &&
         setpoint_alignment_mode_ != "px4ctrl_align" &&
         setpoint_alignment_mode_ != "direct_odom") {
@@ -424,6 +434,9 @@ private:
 
   bool odom_required_for_setpoint() const
   {
+    if (setpoint_output_mode_ == "bodyrate") {
+      return false;
+    }
     return setpoint_alignment_mode_ == "px4ctrl_align" ||
            setpoint_alignment_mode_ == "direct_odom";
   }
@@ -744,18 +757,29 @@ private:
     mavros_msgs::msg::AttitudeTarget msg;
     msg.header.stamp = stamp;
     msg.header.frame_id = frame_id_;
-    msg.type_mask =
-      mavros_msgs::msg::AttitudeTarget::IGNORE_ROLL_RATE |
-      mavros_msgs::msg::AttitudeTarget::IGNORE_PITCH_RATE |
-      mavros_msgs::msg::AttitudeTarget::IGNORE_YAW_RATE;
-    const Eigen::Quaterniond setpoint_q = setpoint_quaternion_from_reference();
-    last_setpoint_q_ = setpoint_q;
-    last_setpoint_rpy_ = rpy_from_quaternion(setpoint_q);
-    have_last_setpoint_ = true;
-    msg.orientation = quaternion_msg_from_eigen(setpoint_q);
-    msg.body_rate.x = 0.0;
-    msg.body_rate.y = 0.0;
-    msg.body_rate.z = 0.0;
+    if (setpoint_output_mode_ == "bodyrate") {
+      msg.type_mask = mavros_msgs::msg::AttitudeTarget::IGNORE_ATTITUDE;
+      msg.orientation = quaternion_msg_from_eigen(Eigen::Quaterniond::Identity());
+      msg.body_rate.x = reference_bodyrate_.x();
+      msg.body_rate.y = reference_bodyrate_.y();
+      msg.body_rate.z = reference_bodyrate_.z();
+      last_setpoint_q_ = actual_attitude_quaternion();
+      last_setpoint_rpy_ = reference_rpy_;
+      have_last_setpoint_ = true;
+    } else {
+      msg.type_mask =
+        mavros_msgs::msg::AttitudeTarget::IGNORE_ROLL_RATE |
+        mavros_msgs::msg::AttitudeTarget::IGNORE_PITCH_RATE |
+        mavros_msgs::msg::AttitudeTarget::IGNORE_YAW_RATE;
+      const Eigen::Quaterniond setpoint_q = setpoint_quaternion_from_reference();
+      last_setpoint_q_ = setpoint_q;
+      last_setpoint_rpy_ = rpy_from_quaternion(setpoint_q);
+      have_last_setpoint_ = true;
+      msg.orientation = quaternion_msg_from_eigen(setpoint_q);
+      msg.body_rate.x = 0.0;
+      msg.body_rate.y = 0.0;
+      msg.body_rate.z = 0.0;
+    }
     msg.thrust = static_cast<float>(current_thrust_);
     setpoint_pub_->publish(msg);
   }
@@ -823,6 +847,7 @@ private:
        << " imu_age_s=" << imu_age(stamp)
        << " odom_age_s=" << odom_age(stamp)
        << " state_age_s=" << state_age(stamp)
+       << " setpoint_output=" << setpoint_output_mode_
        << " setpoint_alignment=" << setpoint_alignment_mode_
        << " nominal_thrust=" << nominal_thrust_
        << " thrust=" << current_thrust_;
@@ -950,7 +975,7 @@ private:
   bool roll_reverse_{false};
   bool pitch_reverse_{true};
   bool yaw_reverse_{false};
-  bool throttle_reverse_{true};
+  bool throttle_reverse_{false};
   double max_roll_rate_{deg2rad(45.0)};
   double max_pitch_rate_{deg2rad(45.0)};
   double max_yaw_rate_{deg2rad(60.0)};
@@ -963,6 +988,7 @@ private:
   double thrust_slew_per_s_{0.20};
   bool require_armed_for_thrust_ramp_{true};
   bool require_offboard_for_thrust_ramp_{true};
+  std::string setpoint_output_mode_{"attitude"};
   std::string setpoint_alignment_mode_{"direct_imu"};
 
   mavros_msgs::msg::RCIn rc_msg_;
