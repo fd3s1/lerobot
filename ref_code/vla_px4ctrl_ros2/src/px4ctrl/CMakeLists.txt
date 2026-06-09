@@ -52,6 +52,7 @@ ament_target_dependencies(px4ctrl_node
 ament_target_dependencies(test_attitude_mode_node
   geometry_msgs
   mavros_msgs
+  nav_msgs
   rclcpp
   sensor_msgs
   std_msgs

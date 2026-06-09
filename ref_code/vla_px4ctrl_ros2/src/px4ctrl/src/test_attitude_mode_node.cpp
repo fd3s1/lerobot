@@ -12,6 +12,7 @@
 #include <geometry_msgs/msg/vector3_stamped.hpp>
 #include <mavros_msgs/msg/attitude_target.hpp>
 #include <mavros_msgs/msg/rc_in.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <std_msgs/msg/float64.hpp>
@@ -47,7 +48,7 @@ double slew_toward(double current, double target, double max_delta)
   return target;
 }
 
-Eigen::Vector3d rpy_from_quaternion(const geometry_msgs::msg::Quaternion &q_msg)
+Eigen::Quaterniond eigen_quaternion_from_msg(const geometry_msgs::msg::Quaternion &q_msg)
 {
   Eigen::Quaterniond q(q_msg.w, q_msg.x, q_msg.y, q_msg.z);
   if (q.norm() > 1e-6) {
@@ -55,7 +56,11 @@ Eigen::Vector3d rpy_from_quaternion(const geometry_msgs::msg::Quaternion &q_msg)
   } else {
     q.setIdentity();
   }
+  return q;
+}
 
+Eigen::Vector3d rpy_from_quaternion(const Eigen::Quaterniond &q)
+{
   const double sinr_cosp = 2.0 * (q.w() * q.x() + q.y() * q.z());
   const double cosr_cosp = 1.0 - 2.0 * (q.x() * q.x() + q.y() * q.y());
   const double roll = std::atan2(sinr_cosp, cosr_cosp);
@@ -71,14 +76,29 @@ Eigen::Vector3d rpy_from_quaternion(const geometry_msgs::msg::Quaternion &q_msg)
   return Eigen::Vector3d(roll, pitch, normalize_angle(yaw));
 }
 
-geometry_msgs::msg::Quaternion quaternion_from_rpy(const Eigen::Vector3d &rpy)
+Eigen::Vector3d rpy_from_quaternion(const geometry_msgs::msg::Quaternion &q_msg)
+{
+  return rpy_from_quaternion(eigen_quaternion_from_msg(q_msg));
+}
+
+Eigen::Quaterniond eigen_quaternion_from_rpy(const Eigen::Vector3d &rpy)
 {
   const Eigen::AngleAxisd roll_angle(rpy.x(), Eigen::Vector3d::UnitX());
   const Eigen::AngleAxisd pitch_angle(rpy.y(), Eigen::Vector3d::UnitY());
   const Eigen::AngleAxisd yaw_angle(rpy.z(), Eigen::Vector3d::UnitZ());
   Eigen::Quaterniond q = yaw_angle * pitch_angle * roll_angle;
   q.normalize();
+  return q;
+}
 
+geometry_msgs::msg::Quaternion quaternion_msg_from_eigen(const Eigen::Quaterniond &q_in)
+{
+  Eigen::Quaterniond q = q_in;
+  if (q.norm() > 1e-6) {
+    q.normalize();
+  } else {
+    q.setIdentity();
+  }
   geometry_msgs::msg::Quaternion msg;
   msg.w = q.w();
   msg.x = q.x();
@@ -87,18 +107,19 @@ geometry_msgs::msg::Quaternion quaternion_from_rpy(const Eigen::Vector3d &rpy)
   return msg;
 }
 
-Eigen::Vector3d euler_rates_to_body_rates(const Eigen::Vector3d &rpy, const Eigen::Vector3d &rpy_rate)
+Eigen::Quaterniond integrate_bodyrate(
+  const Eigen::Quaterniond &q_current,
+  const Eigen::Vector3d &bodyrate,
+  double dt)
 {
-  const double roll = rpy.x();
-  const double pitch = rpy.y();
-  const double roll_dot = rpy_rate.x();
-  const double pitch_dot = rpy_rate.y();
-  const double yaw_dot = rpy_rate.z();
-
-  const double p = roll_dot - yaw_dot * std::sin(pitch);
-  const double q = pitch_dot * std::cos(roll) + yaw_dot * std::sin(roll) * std::cos(pitch);
-  const double r = -pitch_dot * std::sin(roll) + yaw_dot * std::cos(roll) * std::cos(pitch);
-  return Eigen::Vector3d(p, q, r);
+  const double angle = bodyrate.norm() * std::max(0.0, dt);
+  if (angle < 1e-9) {
+    return q_current.normalized();
+  }
+  const Eigen::Vector3d axis = bodyrate.normalized();
+  Eigen::Quaterniond q_next = q_current * Eigen::Quaterniond(Eigen::AngleAxisd(angle, axis));
+  q_next.normalize();
+  return q_next;
 }
 
 double channel_pwm(const mavros_msgs::msg::RCIn &rc, int one_based_channel, double default_value)
@@ -163,6 +184,7 @@ public:
   {
     rc_topic_ = declare_parameter<std::string>("rc_topic", "/mavros/rc/in");
     imu_topic_ = declare_parameter<std::string>("imu_topic", "/mavros/imu/data");
+    odom_topic_ = declare_parameter<std::string>("odom_topic", "/mavros/local_position/odom");
     setpoint_topic_ =
       declare_parameter<std::string>("setpoint_topic", "/mavros/setpoint_raw/attitude");
 
@@ -184,6 +206,7 @@ public:
     active_threshold_ = declare_parameter<double>("active_threshold", 0.75);
     rc_timeout_s_ = declare_parameter<double>("rc_timeout_s", 0.3);
     imu_timeout_s_ = declare_parameter<double>("imu_timeout_s", 0.3);
+    odom_timeout_s_ = declare_parameter<double>("odom_timeout_s", 0.3);
 
     stick_deadzone_ = declare_parameter<double>("stick_deadzone", 0.08);
     stick_expo_ = declare_parameter<double>("stick_expo", 1.7);
@@ -224,6 +247,15 @@ public:
         have_imu_ = true;
       });
 
+    odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
+      odom_topic_,
+      rclcpp::SensorDataQoS(),
+      [this](const nav_msgs::msg::Odometry::SharedPtr msg) {
+        odom_msg_ = *msg;
+        odom_stamp_ = now();
+        have_odom_ = true;
+      });
+
     setpoint_pub_ = create_publisher<mavros_msgs::msg::AttitudeTarget>(setpoint_topic_, 10);
     reference_rpy_pub_ =
       create_publisher<geometry_msgs::msg::Vector3Stamped>(reference_rpy_topic_, 10);
@@ -249,10 +281,11 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "test_attitude_mode_node started. CH%d high enables setpoint. rc=%s imu=%s setpoint=%s",
+      "test_attitude_mode_node started. CH%d high enables setpoint. rc=%s imu=%s odom=%s setpoint=%s",
       test_att_channel_,
       rc_topic_.c_str(),
       imu_topic_.c_str(),
+      odom_topic_.c_str(),
       setpoint_topic_.c_str());
   }
 
@@ -284,6 +317,7 @@ private:
     rate_hz_ = std::max(1.0, rate_hz_);
     rc_timeout_s_ = std::max(0.05, rc_timeout_s_);
     imu_timeout_s_ = std::max(0.05, imu_timeout_s_);
+    odom_timeout_s_ = std::max(0.05, odom_timeout_s_);
     thrust_slew_per_s_ = std::max(0.0, thrust_slew_per_s_);
   }
 
@@ -297,6 +331,11 @@ private:
     return have_imu_ && (stamp - imu_stamp_).seconds() <= imu_timeout_s_;
   }
 
+  bool odom_fresh(const rclcpp::Time &stamp) const
+  {
+    return have_odom_ && (stamp - odom_stamp_).seconds() <= odom_timeout_s_;
+  }
+
   double rc_age(const rclcpp::Time &stamp) const
   {
     return have_rc_ ? (stamp - rc_stamp_).seconds() : -1.0;
@@ -305,6 +344,11 @@ private:
   double imu_age(const rclcpp::Time &stamp) const
   {
     return have_imu_ ? (stamp - imu_stamp_).seconds() : -1.0;
+  }
+
+  double odom_age(const rclcpp::Time &stamp) const
+  {
+    return have_odom_ ? (stamp - odom_stamp_).seconds() : -1.0;
   }
 
   bool test_att_switch_high() const
@@ -336,39 +380,62 @@ private:
       imu_msg_.angular_velocity.z);
   }
 
-  void initialize_reference_from_imu(const Eigen::Vector3d &actual_rpy)
+  Eigen::Quaterniond imu_quaternion() const
   {
-    reference_rpy_ = actual_rpy;
-    reference_rate_rpy_.setZero();
+    return eigen_quaternion_from_msg(imu_msg_.orientation);
+  }
+
+  Eigen::Quaterniond odom_quaternion() const
+  {
+    return eigen_quaternion_from_msg(odom_msg_.pose.pose.orientation);
+  }
+
+  Eigen::Vector3d command_bodyrate_from_rc() const
+  {
+    const double roll_axis = shaped_channel(1, roll_reverse_);
+    const double pitch_axis = shaped_channel(2, pitch_reverse_);
+    const double yaw_axis = shaped_channel(4, yaw_reverse_);
+    return Eigen::Vector3d(
+      roll_axis * max_roll_rate_,
+      pitch_axis * max_pitch_rate_,
+      yaw_axis * max_yaw_rate_);
+  }
+
+  void update_reference_rpy_from_quaternion()
+  {
+    reference_rpy_ = rpy_from_quaternion(reference_q_);
+  }
+
+  void initialize_reference_from_attitude(const Eigen::Quaterniond &actual_q)
+  {
+    reference_q_ = actual_q;
+    if (reference_q_.norm() > 1e-6) {
+      reference_q_.normalize();
+    } else {
+      reference_q_.setIdentity();
+    }
+    update_reference_rpy_from_quaternion();
     reference_bodyrate_.setZero();
     reference_initialized_ = true;
   }
 
-  void update_reference(double dt, const Eigen::Vector3d &actual_rpy)
+  void update_reference(double dt, const Eigen::Quaterniond &actual_q)
   {
     if (!reference_initialized_) {
-      initialize_reference_from_imu(actual_rpy);
+      initialize_reference_from_attitude(actual_q);
     }
 
-    const double roll_axis = shaped_channel(1, roll_reverse_);
-    const double pitch_axis = shaped_channel(2, pitch_reverse_);
-    const double yaw_axis = shaped_channel(4, yaw_reverse_);
-
-    reference_rate_rpy_.x() = roll_axis * max_roll_rate_;
-    reference_rate_rpy_.y() = pitch_axis * max_pitch_rate_;
-    reference_rate_rpy_.z() = yaw_axis * max_yaw_rate_;
-
-    reference_rpy_ += reference_rate_rpy_ * dt;
+    reference_bodyrate_ = command_bodyrate_from_rc();
+    reference_q_ = integrate_bodyrate(reference_q_, reference_bodyrate_, dt);
+    reference_rpy_ = rpy_from_quaternion(reference_q_);
     reference_rpy_.x() = clamp_symmetric(reference_rpy_.x(), max_roll_);
     reference_rpy_.y() = clamp_symmetric(reference_rpy_.y(), max_pitch_);
     reference_rpy_.z() = normalize_angle(reference_rpy_.z());
-
-    reference_bodyrate_ = euler_rates_to_body_rates(reference_rpy_, reference_rate_rpy_);
+    reference_q_ = eigen_quaternion_from_rpy(reference_rpy_);
   }
 
   void stop_reference_motion()
   {
-    reference_rate_rpy_.setZero();
     reference_bodyrate_.setZero();
   }
 
@@ -389,7 +456,9 @@ private:
       mavros_msgs::msg::AttitudeTarget::IGNORE_ROLL_RATE |
       mavros_msgs::msg::AttitudeTarget::IGNORE_PITCH_RATE |
       mavros_msgs::msg::AttitudeTarget::IGNORE_YAW_RATE;
-    msg.orientation = quaternion_from_rpy(reference_rpy_);
+    const Eigen::Quaterniond setpoint_q =
+      imu_quaternion() * odom_quaternion().inverse() * reference_q_;
+    msg.orientation = quaternion_msg_from_eigen(setpoint_q);
     msg.body_rate.x = 0.0;
     msg.body_rate.y = 0.0;
     msg.body_rate.z = 0.0;
@@ -399,11 +468,12 @@ private:
 
   void publish_vectors(
     const rclcpp::Time &stamp,
+    const Eigen::Quaterniond &actual_q,
     const Eigen::Vector3d &actual_rpy,
     const Eigen::Vector3d &actual_bodyrate)
   {
     if (!reference_initialized_) {
-      initialize_reference_from_imu(actual_rpy);
+      initialize_reference_from_attitude(actual_q);
     }
 
     Eigen::Vector3d rpy_error = reference_rpy_ - actual_rpy;
@@ -426,6 +496,16 @@ private:
 
   void publish_status(const rclcpp::Time &stamp, bool active, bool rc_ok, bool imu_ok) const
   {
+    publish_status(stamp, active, rc_ok, imu_ok, odom_fresh(stamp));
+  }
+
+  void publish_status(
+    const rclcpp::Time &stamp,
+    bool active,
+    bool rc_ok,
+    bool imu_ok,
+    bool odom_ok) const
+  {
     std_msgs::msg::String msg;
     std::ostringstream ss;
     ss.setf(std::ios::fixed);
@@ -433,9 +513,12 @@ private:
     ss << "active=" << (active ? "true" : "false")
        << " rc_ok=" << (rc_ok ? "true" : "false")
        << " imu_ok=" << (imu_ok ? "true" : "false")
+       << " odom_ok=" << (odom_ok ? "true" : "false")
        << " ch" << test_att_channel_ << "_pwm=" << channel_pwm(rc_msg_, test_att_channel_, 1000.0)
        << " rc_age_s=" << rc_age(stamp)
        << " imu_age_s=" << imu_age(stamp)
+       << " odom_age_s=" << odom_age(stamp)
+       << " setpoint_alignment=imu_q*odom_q_inv*ref_q"
        << " thrust=" << current_thrust_;
     msg.data = ss.str();
     status_pub_->publish(msg);
@@ -456,20 +539,23 @@ private:
 
     const bool rc_ok = rc_fresh(stamp);
     const bool imu_ok = imu_fresh(stamp);
-    const bool active = rc_ok && imu_ok && test_att_switch_high();
+    const bool odom_ok = odom_fresh(stamp);
+    const bool feedback_ok = imu_ok && odom_ok;
+    const bool active = rc_ok && feedback_ok && test_att_switch_high();
 
-    if (!imu_ok) {
+    if (!feedback_ok) {
       active_ = false;
       update_thrust(dt, false);
-      publish_status(stamp, false, rc_ok, false);
+      publish_status(stamp, false, rc_ok, imu_ok, odom_ok);
       return;
     }
 
-    const Eigen::Vector3d actual_rpy = rpy_from_quaternion(imu_msg_.orientation);
+    const Eigen::Quaterniond actual_q = odom_quaternion();
+    const Eigen::Vector3d actual_rpy = rpy_from_quaternion(actual_q);
     const Eigen::Vector3d actual_bodyrate = actual_bodyrate_from_imu();
 
     if (active && !active_) {
-      initialize_reference_from_imu(actual_rpy);
+      initialize_reference_from_attitude(actual_q);
       RCLCPP_INFO(get_logger(), "CH%d high: entering test_att mode.", test_att_channel_);
     } else if (!active && active_) {
       stop_reference_motion();
@@ -477,10 +563,10 @@ private:
     }
 
     if (active) {
-      update_reference(dt, actual_rpy);
+      update_reference(dt, actual_q);
     } else {
       if (!reference_initialized_) {
-        initialize_reference_from_imu(actual_rpy);
+        initialize_reference_from_attitude(actual_q);
       }
       stop_reference_motion();
     }
@@ -489,13 +575,14 @@ private:
     if (active) {
       publish_setpoint(stamp);
     }
-    publish_vectors(stamp, actual_rpy, actual_bodyrate);
-    publish_status(stamp, active, rc_ok, imu_ok);
+    publish_vectors(stamp, actual_q, actual_rpy, actual_bodyrate);
+    publish_status(stamp, active, rc_ok, imu_ok, odom_ok);
     active_ = active;
   }
 
   std::string rc_topic_;
   std::string imu_topic_;
+  std::string odom_topic_;
   std::string setpoint_topic_;
   std::string reference_rpy_topic_;
   std::string actual_rpy_topic_;
@@ -512,6 +599,7 @@ private:
   double active_threshold_{0.75};
   double rc_timeout_s_{0.3};
   double imu_timeout_s_{0.3};
+  double odom_timeout_s_{0.3};
   double stick_deadzone_{0.08};
   double stick_expo_{1.7};
   bool roll_reverse_{false};
@@ -530,22 +618,26 @@ private:
 
   mavros_msgs::msg::RCIn rc_msg_;
   sensor_msgs::msg::Imu imu_msg_;
+  nav_msgs::msg::Odometry odom_msg_;
   rclcpp::Time rc_stamp_{0, 0, RCL_ROS_TIME};
   rclcpp::Time imu_stamp_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time odom_stamp_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_loop_stamp_{0, 0, RCL_ROS_TIME};
   bool have_rc_{false};
   bool have_imu_{false};
+  bool have_odom_{false};
   bool have_last_loop_{false};
   bool active_{false};
   bool reference_initialized_{false};
 
+  Eigen::Quaterniond reference_q_{Eigen::Quaterniond::Identity()};
   Eigen::Vector3d reference_rpy_{Eigen::Vector3d::Zero()};
-  Eigen::Vector3d reference_rate_rpy_{Eigen::Vector3d::Zero()};
   Eigen::Vector3d reference_bodyrate_{Eigen::Vector3d::Zero()};
   double current_thrust_{0.35};
 
   rclcpp::Subscription<mavros_msgs::msg::RCIn>::SharedPtr rc_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Publisher<mavros_msgs::msg::AttitudeTarget>::SharedPtr setpoint_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr reference_rpy_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr actual_rpy_pub_;
