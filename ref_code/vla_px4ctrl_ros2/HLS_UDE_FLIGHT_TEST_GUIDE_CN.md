@@ -111,11 +111,7 @@ Simulink 可订阅：
 /px4ctrl/simulink/actual_state
 /px4ctrl/simulink/tracking_error
 /px4ctrl/simulink/attitude_target
-/px4ctrl/simulink/ude_debug/e_x
-/px4ctrl/simulink/ude_debug/u0_x
-/px4ctrl/simulink/ude_debug/f_hat_x
-/px4ctrl/simulink/ude_debug/u_acc_x
-/px4ctrl/simulink/ude_debug/thrust
+/px4ctrl/simulink/ude_debug
 /px4ctrl/ude_tune_status
 ```
 

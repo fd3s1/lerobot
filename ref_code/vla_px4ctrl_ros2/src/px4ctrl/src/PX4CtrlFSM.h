@@ -67,7 +67,7 @@ public:
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr simulink_reference_pub;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr simulink_actual_pub;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr simulink_tracking_error_pub;
-  std::vector<rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr> simulink_ude_debug_scalar_pubs;
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr simulink_ude_debug_pub;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr ude_tune_status_pub;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr ude_tune_status_text_pub;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr gripper_cmd_pub;
@@ -92,7 +92,6 @@ public:
   bool get_landed() const { return takeoff_land.landed; }
   void manual_flag_cb(const std_msgs::msg::UInt8::SharedPtr msg);
   void ude_tune_cb(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
-  void create_simulink_ude_debug_publishers(const std::string &prefix);
   rcl_interfaces::msg::SetParametersResult runtime_param_cb(
     const std::vector<rclcpp::Parameter> &params);
 

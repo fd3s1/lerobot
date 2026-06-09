@@ -14,7 +14,7 @@ is required.
 | Actual UAV state used by controller | `/px4ctrl/simulink/actual_state` | `nav_msgs/msg/Odometry` | `px4ctrl_node` |
 | Reference minus actual error | `/px4ctrl/simulink/tracking_error` | `nav_msgs/msg/Odometry` | `px4ctrl_node` |
 | Controller output setpoint | `/px4ctrl/simulink/attitude_target` | `nav_msgs/msg/Odometry` | `px4ctrl_node` |
-| UDE internal debug scalars | `/px4ctrl/simulink/ude_debug/*` | `std_msgs/msg/Float64` | `px4ctrl_node` |
+| UDE internal debug pack | `/px4ctrl/simulink/ude_debug` | `nav_msgs/msg/Odometry` | `px4ctrl_node` |
 | Online UDE Kp/Kd/T command | `/px4ctrl/ude_tune` | `std_msgs/msg/Float64MultiArray` | Simulink or ROS2 CLI |
 | Online UDE Kp/Kd/T status | `/px4ctrl/ude_tune_status` | `std_msgs/msg/Float64MultiArray` | `px4ctrl_node` |
 | Online UDE Kp/Kd/T status text | `/px4ctrl/ude_tune_status_text` | `std_msgs/msg/String` | `px4ctrl_node` |
@@ -126,49 +126,33 @@ child_frame_id               = bodyrate_setpoint or attitude_setpoint
 This topic is for controller output inspection. It is not the position tracking
 reference.
 
-## `/px4ctrl/simulink/ude_debug/*`
+## `/px4ctrl/simulink/ude_debug`
 
-Type: `std_msgs/msg/Float64`
+Type: `nav_msgs/msg/Odometry`
 
-Each UDE debug value is published as its own scalar topic so Simulink can
-subscribe with ordinary float/double blocks. The topic prefix is
-`/px4ctrl/simulink/ude_debug`.
+This is a single standard ROS topic for Simulink. It avoids arrays and packs the
+main UDE debug values into ordinary scalar fields:
 
 ```text
-/px4ctrl/simulink/ude_debug/stamp_s
-/px4ctrl/simulink/ude_debug/fsm_state
-/px4ctrl/simulink/ude_debug/e_x
-/px4ctrl/simulink/ude_debug/e_y
-/px4ctrl/simulink/ude_debug/e_z
-/px4ctrl/simulink/ude_debug/e_dot_x
-/px4ctrl/simulink/ude_debug/e_dot_y
-/px4ctrl/simulink/ude_debug/e_dot_z
-/px4ctrl/simulink/ude_debug/u0_x
-/px4ctrl/simulink/ude_debug/u0_y
-/px4ctrl/simulink/ude_debug/u0_z
-/px4ctrl/simulink/ude_debug/integral_u0_x
-/px4ctrl/simulink/ude_debug/integral_u0_y
-/px4ctrl/simulink/ude_debug/integral_u0_z
-/px4ctrl/simulink/ude_debug/f_hat_x
-/px4ctrl/simulink/ude_debug/f_hat_y
-/px4ctrl/simulink/ude_debug/f_hat_z
-/px4ctrl/simulink/ude_debug/u_acc_x
-/px4ctrl/simulink/ude_debug/u_acc_y
-/px4ctrl/simulink/ude_debug/u_acc_z
-/px4ctrl/simulink/ude_debug/thrust_acc_x
-/px4ctrl/simulink/ude_debug/thrust_acc_y
-/px4ctrl/simulink/ude_debug/thrust_acc_z
-/px4ctrl/simulink/ude_debug/bodyrates_cmd_x
-/px4ctrl/simulink/ude_debug/bodyrates_cmd_y
-/px4ctrl/simulink/ude_debug/bodyrates_cmd_z
-/px4ctrl/simulink/ude_debug/thrust
-/px4ctrl/simulink/ude_debug/yaw_error
-/px4ctrl/simulink/ude_debug/dt
+header.stamp                 = controller loop stamp
+header.frame_id              = px4ctrl frame_id, normally map
+child_frame_id               = field mapping note
+pose.pose.position.{x,y,z}   = e = desired position - odom position
+pose.pose.orientation.{x,y,z}= u0 = Kp*e + Kd*e_dot
+pose.pose.orientation.w      = normalized thrust command
+twist.twist.linear.{x,y,z}   = f_hat
+twist.twist.angular.{x,y,z}  = u_acc = u0 - f_hat
 ```
 
-Additional scalar topics are also available for `des_p_*`, `odom_p_*`,
-`des_v_*`, `odom_v_*`, `bodyrates_ff_*`, `bodyrates_fb_*`, `yaw_des`, and
-`yaw_odom`.
+For X-axis tuning in Simulink, use:
+
+```text
+e_x       = pose.pose.position.x
+u0_x      = pose.pose.orientation.x
+f_hat_x   = twist.twist.linear.x
+u_acc_x   = twist.twist.angular.x
+thrust    = pose.pose.orientation.w
+```
 
 ## Online UDE Tuning
 
@@ -214,7 +198,7 @@ After starting px4ctrl:
 ros2 topic info /px4ctrl/simulink/reference_state
 ros2 topic info /px4ctrl/simulink/actual_state
 ros2 topic info /px4ctrl/simulink/tracking_error
-ros2 topic info /px4ctrl/simulink/ude_debug/e_x
+ros2 topic info /px4ctrl/simulink/ude_debug
 ros2 topic echo --once /px4ctrl/simulink/tracking_error
 ```
 
@@ -237,11 +221,7 @@ Topic names:
   /px4ctrl/simulink/actual_state
   /px4ctrl/simulink/tracking_error
   /px4ctrl/simulink/attitude_target
-  /px4ctrl/simulink/ude_debug/e_x
-  /px4ctrl/simulink/ude_debug/u0_x
-  /px4ctrl/simulink/ude_debug/f_hat_x
-  /px4ctrl/simulink/ude_debug/u_acc_x
-  /px4ctrl/simulink/ude_debug/thrust
+  /px4ctrl/simulink/ude_debug
   /px4ctrl/ude_tune_status
 ```
 

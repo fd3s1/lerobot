@@ -65,7 +65,7 @@ standard topics:
   twist.twist.angular.z = desired yaw_rate - odom yaw_rate
 
 /px4ctrl/simulink/ude_debug
-  prefix for std_msgs/Float64 scalar topics with UDE intermediate values and final command
+  nav_msgs/Odometry packing key UDE debug values into scalar fields
 
 /px4ctrl/ude_tune
   std_msgs/Float64MultiArray for online Kp/Kd/T tuning only

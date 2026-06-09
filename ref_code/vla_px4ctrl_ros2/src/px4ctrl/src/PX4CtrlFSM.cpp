@@ -102,92 +102,6 @@ void add_array_param_from_tune(
     std::vector<double>{data[offset], data[offset + 1], data[offset + 2]});
 }
 
-const std::vector<std::string> &ude_debug_scalar_names()
-{
-  static const std::vector<std::string> names = {
-    "stamp_s",
-    "fsm_state",
-    "des_p_x",
-    "des_p_y",
-    "des_p_z",
-    "odom_p_x",
-    "odom_p_y",
-    "odom_p_z",
-    "e_x",
-    "e_y",
-    "e_z",
-    "des_v_x",
-    "des_v_y",
-    "des_v_z",
-    "odom_v_x",
-    "odom_v_y",
-    "odom_v_z",
-    "e_dot_x",
-    "e_dot_y",
-    "e_dot_z",
-    "u0_x",
-    "u0_y",
-    "u0_z",
-    "integral_u0_x",
-    "integral_u0_y",
-    "integral_u0_z",
-    "f_hat_x",
-    "f_hat_y",
-    "f_hat_z",
-    "u_acc_x",
-    "u_acc_y",
-    "u_acc_z",
-    "thrust_acc_x",
-    "thrust_acc_y",
-    "thrust_acc_z",
-    "bodyrates_ff_x",
-    "bodyrates_ff_y",
-    "bodyrates_ff_z",
-    "bodyrates_fb_x",
-    "bodyrates_fb_y",
-    "bodyrates_fb_z",
-    "bodyrates_cmd_x",
-    "bodyrates_cmd_y",
-    "bodyrates_cmd_z",
-    "thrust",
-    "yaw_des",
-    "yaw_odom",
-    "yaw_error",
-    "dt",
-  };
-  return names;
-}
-
-void append_ude_debug_values(
-  std::vector<double> &data,
-  const Controller_Debug_t &debug,
-  const rclcpp::Time &stamp,
-  PX4CtrlFSM::State_t state)
-{
-  data.reserve(ude_debug_scalar_names().size());
-  data.push_back(stamp.seconds());
-  data.push_back(static_cast<double>(state));
-  append_vector(data, debug.des_p);
-  append_vector(data, debug.odom_p);
-  append_vector(data, debug.e);
-  append_vector(data, debug.des_v);
-  append_vector(data, debug.odom_v);
-  append_vector(data, debug.e_dot);
-  append_vector(data, debug.u0);
-  append_vector(data, debug.integral_u0);
-  append_vector(data, debug.f_hat);
-  append_vector(data, debug.u_acc);
-  append_vector(data, debug.thrust_acc_limited);
-  append_vector(data, debug.bodyrates_ff);
-  append_vector(data, debug.bodyrates_fb);
-  append_vector(data, debug.bodyrates_cmd);
-  data.push_back(debug.thrust);
-  data.push_back(debug.yaw_des);
-  data.push_back(debug.yaw_odom);
-  data.push_back(debug.yaw_error);
-  data.push_back(debug.dt);
-}
-
 }  // namespace
 
 PX4CtrlFSM::PX4CtrlFSM(Parameter_t &param_, LinearControl &controller_, rclcpp::Node *node)
@@ -600,16 +514,6 @@ void PX4CtrlFSM::manual_flag_cb(const std_msgs::msg::UInt8::SharedPtr msg)
   traj_start_trigger_pub->publish(now_pose);
 }
 
-void PX4CtrlFSM::create_simulink_ude_debug_publishers(const std::string &prefix)
-{
-  simulink_ude_debug_scalar_pubs.clear();
-  const std::string clean_prefix = prefix.empty() ? "/px4ctrl/simulink/ude_debug" : prefix;
-  for (const auto &name : ude_debug_scalar_names()) {
-    simulink_ude_debug_scalar_pubs.push_back(
-      node_->create_publisher<std_msgs::msg::Float64>(clean_prefix + "/" + name, 10));
-  }
-}
-
 void PX4CtrlFSM::set_start_pose_for_takeoff_land(const Odom_Data_t &odom)
 {
   takeoff_land.start_pose.head<3>() = odom.p;
@@ -816,24 +720,22 @@ void PX4CtrlFSM::publish_simulink_ude_debug(
   const Controller_Debug_t &debug,
   const rclcpp::Time &stamp)
 {
-  if (simulink_ude_debug_scalar_pubs.empty()) {
+  if (!simulink_ude_debug_pub) {
     return;
   }
 
-  std::vector<double> values;
-  append_ude_debug_values(values, debug, stamp, state);
-  if (values.size() != simulink_ude_debug_scalar_pubs.size()) {
-    return;
-  }
-
-  for (std::size_t i = 0; i < values.size(); ++i) {
-    if (!simulink_ude_debug_scalar_pubs[i]) {
-      continue;
-    }
-    std_msgs::msg::Float64 msg;
-    msg.data = values[i];
-    simulink_ude_debug_scalar_pubs[i]->publish(msg);
-  }
+  nav_msgs::msg::Odometry msg;
+  msg.header.stamp = stamp;
+  msg.header.frame_id = param.frame_id;
+  msg.child_frame_id = "ude_debug: position=e orientation.xyz=u0 orientation.w=thrust linear=f_hat angular=u_acc";
+  set_point(msg.pose.pose.position, debug.e);
+  msg.pose.pose.orientation.x = debug.u0.x();
+  msg.pose.pose.orientation.y = debug.u0.y();
+  msg.pose.pose.orientation.z = debug.u0.z();
+  msg.pose.pose.orientation.w = debug.thrust;
+  set_vector3(msg.twist.twist.linear, debug.f_hat);
+  set_vector3(msg.twist.twist.angular, debug.u_acc);
+  simulink_ude_debug_pub->publish(msg);
 }
 
 void PX4CtrlFSM::publish_ude_tune_status(
