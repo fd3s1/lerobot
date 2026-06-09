@@ -23,11 +23,20 @@ add_executable(px4ctrl_node
   src/input.cpp
 )
 
+add_executable(test_attitude_mode_node
+  src/test_attitude_mode_node.cpp
+)
+
 target_include_directories(px4ctrl_node PRIVATE
   src
 )
 
+target_include_directories(test_attitude_mode_node PRIVATE
+  src
+)
+
 target_link_libraries(px4ctrl_node Eigen3::Eigen)
+target_link_libraries(test_attitude_mode_node Eigen3::Eigen)
 
 ament_target_dependencies(px4ctrl_node
   geometry_msgs
@@ -40,7 +49,17 @@ ament_target_dependencies(px4ctrl_node
   uav_utils
 )
 
-install(TARGETS px4ctrl_node
+ament_target_dependencies(test_attitude_mode_node
+  geometry_msgs
+  mavros_msgs
+  rclcpp
+  sensor_msgs
+  std_msgs
+)
+
+install(TARGETS
+  px4ctrl_node
+  test_attitude_mode_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
