@@ -231,7 +231,8 @@ public:
 
     stick_deadzone_ = declare_parameter<double>("stick_deadzone", 0.08);
     stick_expo_ = declare_parameter<double>("stick_expo", 1.7);
-    throttle_expo_ = declare_parameter<double>("throttle_expo", 1.2);
+    throttle_deadzone_ = declare_parameter<double>("throttle_deadzone", 0.03);
+    throttle_expo_ = declare_parameter<double>("throttle_expo", 1.05);
     roll_reverse_ = declare_parameter<bool>("roll_reverse", false);
     pitch_reverse_ = declare_parameter<bool>("pitch_reverse", false);
     yaw_reverse_ = declare_parameter<bool>("yaw_reverse", true);
@@ -255,7 +256,7 @@ public:
     thrust_min_ = declare_parameter<double>("thrust_min", 0.20);
     thrust_max_ = declare_parameter<double>("thrust_max", 0.80);
     thrust_ramp_per_s_ = declare_parameter<double>("thrust_ramp_per_s", 0.05);
-    thrust_slew_per_s_ = declare_parameter<double>("thrust_slew_per_s", 0.45);
+    thrust_slew_per_s_ = declare_parameter<double>("thrust_slew_per_s", 0.80);
     require_armed_for_thrust_ramp_ = declare_parameter<bool>("require_armed_for_thrust_ramp", true);
     require_offboard_for_thrust_ramp_ =
       declare_parameter<bool>("require_offboard_for_thrust_ramp", true);
@@ -415,6 +416,7 @@ private:
       thrust_base_ = std::clamp(thrust_base_, thrust_min_, thrust_max_);
     }
     rate_hz_ = std::max(1.0, rate_hz_);
+    throttle_deadzone_ = std::clamp(throttle_deadzone_, 0.0, 0.95);
     throttle_expo_ = std::max(0.1, throttle_expo_);
     rc_timeout_s_ = std::max(0.05, rc_timeout_s_);
     imu_timeout_s_ = std::max(0.05, imu_timeout_s_);
@@ -619,7 +621,7 @@ private:
   double target_thrust_from_rc() const
   {
     const double raw = raw_axis_from_pwm(channel_pwm(rc_msg_, 3, 1500.0), throttle_reverse_);
-    const double throttle = shape_axis(raw, stick_deadzone_, throttle_expo_);
+    const double throttle = shape_axis(raw, throttle_deadzone_, throttle_expo_);
     if (throttle >= 0.0) {
       return nominal_thrust_ + throttle * (thrust_max_ - nominal_thrust_);
     }
@@ -1032,7 +1034,8 @@ private:
   double offboard_request_period_s_{1.0};
   double stick_deadzone_{0.08};
   double stick_expo_{1.7};
-  double throttle_expo_{1.2};
+  double throttle_deadzone_{0.03};
+  double throttle_expo_{1.05};
   bool roll_reverse_{false};
   bool pitch_reverse_{false};
   bool yaw_reverse_{true};
@@ -1048,7 +1051,7 @@ private:
   double thrust_min_{0.20};
   double thrust_max_{0.80};
   double thrust_ramp_per_s_{0.05};
-  double thrust_slew_per_s_{0.45};
+  double thrust_slew_per_s_{0.80};
   bool require_armed_for_thrust_ramp_{true};
   bool require_offboard_for_thrust_ramp_{true};
   std::string setpoint_output_mode_{"attitude"};
