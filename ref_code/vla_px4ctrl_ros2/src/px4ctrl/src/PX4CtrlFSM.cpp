@@ -110,11 +110,31 @@ PX4CtrlFSM::PX4CtrlFSM(Parameter_t &param_, LinearControl &controller_, rclcpp::
   state = MANUAL_CTRL;
   hover_pose.setZero();
   fsm_state_pub = node_->create_publisher<std_msgs::msg::String>("/px4ctrl/state", 1);
+  if (param.ctrl_freq_max <= 0.0) {
+    RCLCPP_ERROR(
+      node_->get_logger(),
+      "[px4ctrl] TD disabled because ctrl_freq_max=%.6f is invalid.",
+      param.ctrl_freq_max);
+  } else {
+    RCLCPP_INFO(
+      node_->get_logger(),
+      "[px4ctrl] TD h=%.6fs from ctrl_freq_max=%.3fHz enable=%s r=(%.3f,%.3f,%.3f)",
+      td_h(),
+      param.ctrl_freq_max,
+      param.td.enable ? "true" : "false",
+      param.td.r_diag[0],
+      param.td.r_diag[1],
+      param.td.r_diag[2]);
+  }
 }
 
 void PX4CtrlFSM::process()
 {
   const rclcpp::Time now_time = node_->now();
+  if (!odom_is_received(now_time)) {
+    reset_td_tracker("odom timeout");
+  }
+
   Desired_State_t des(odom_data);
   bool rotor_low_speed_during_land = false;
   bool rotor_speedup_during_takeoff = false;
@@ -416,7 +436,7 @@ Desired_State_t PX4CtrlFSM::get_hover_des()
   Desired_State_t des;
   des.p = hover_pose.head<3>();
   des.yaw = hover_pose(3);
-  return des;
+  return apply_td_reference(des, AUTO_HOVER, node_->now());
 }
 
 Desired_State_t PX4CtrlFSM::get_cmd_des()
@@ -431,7 +451,7 @@ Desired_State_t PX4CtrlFSM::get_cmd_des()
     des.a.setZero();
   }
   des.yaw = cmd_data.yaw;
-  return des;
+  return apply_td_reference(des, CMD_CTRL, node_->now());
 }
 
 Desired_State_t PX4CtrlFSM::get_rotor_speed_up_des(const rclcpp::Time & /*now*/)
@@ -939,12 +959,16 @@ void PX4CtrlFSM::ude_tune_cb(const std_msgs::msg::Float64MultiArray::SharedPtr m
 rcl_interfaces::msg::SetParametersResult PX4CtrlFSM::runtime_param_cb(
   const std::vector<rclcpp::Parameter> &params)
 {
+  const bool td_was_enabled = param.td.enable;
   bool thrust_mapping_changed = false;
   const auto result = param.apply_runtime_parameters(params, &thrust_mapping_changed);
   if (result.successful) {
     controller.resetControlState();
     if (thrust_mapping_changed) {
       controller.resetThrustMapping();
+    }
+    if (!td_was_enabled && param.td.enable) {
+      reset_td_tracker("td.enable enabled at runtime");
     }
   }
   publish_ude_tune_status(
@@ -958,10 +982,216 @@ rcl_interfaces::msg::SetParametersResult PX4CtrlFSM::runtime_param_cb(
 void PX4CtrlFSM::change_state(State_t new_state)
 {
   if (state != new_state) {
+    const State_t old_state = state;
     controller.resetControlState();
     had_valid_control_feedback = false;
+    if (td_applicable_state(old_state) || td_applicable_state(new_state)) {
+      std::ostringstream oss;
+      oss << "state " << state_to_string(old_state) << " -> " << state_to_string(new_state);
+      reset_td_tracker(oss.str());
+    }
   }
   state = new_state;
+}
+
+Desired_State_t PX4CtrlFSM::apply_td_reference(
+  const Desired_State_t &raw_des,
+  State_t source_state,
+  const rclcpp::Time &now_time)
+{
+  if (!param.td.enable) {
+    reset_td_tracker("td disabled");
+    return raw_des;
+  }
+  if (!td_applicable_state(source_state)) {
+    reset_td_tracker("state is not TD applicable");
+    return raw_des;
+  }
+  if (!td_parameters_valid()) {
+    reset_td_tracker("invalid TD parameters");
+    RCLCPP_ERROR_THROTTLE(
+      node_->get_logger(),
+      *node_->get_clock(),
+      1000,
+      "[px4ctrl] TD fallback to raw reference because h/r is invalid.");
+    return raw_des;
+  }
+
+  const auto vector_finite = [](const Eigen::Vector3d &value) {
+    return std::isfinite(value.x()) && std::isfinite(value.y()) && std::isfinite(value.z());
+  };
+  if (!vector_finite(raw_des.p)) {
+    reset_td_tracker("raw reference is not finite");
+    RCLCPP_ERROR_THROTTLE(
+      node_->get_logger(),
+      *node_->get_clock(),
+      1000,
+      "[px4ctrl] TD fallback to raw reference because raw_des.p is not finite.");
+    return raw_des;
+  }
+  if (!vector_finite(td_tracker.v1) || !vector_finite(td_tracker.v2)) {
+    reset_td_tracker("TD state is not finite");
+    RCLCPP_ERROR_THROTTLE(
+      node_->get_logger(),
+      *node_->get_clock(),
+      1000,
+      "[px4ctrl] TD state was not finite; resetting and using raw reference this cycle.");
+    return raw_des;
+  }
+  if (td_tracker.initialized && td_tracker.last_state != source_state) {
+    std::ostringstream oss;
+    oss << "source state " << state_to_string(td_tracker.last_state)
+        << " -> " << state_to_string(source_state);
+    reset_td_tracker(oss.str());
+  }
+
+  const double h = td_h();
+  Desired_State_t des = raw_des;
+
+  if (!td_tracker.initialized) {
+    td_tracker.v1 = odom_data.p;
+    td_tracker.v2.setZero();
+    td_tracker.last_raw_ref = raw_des.p;
+    td_tracker.last_process_time = now_time;
+    td_tracker.last_state = source_state;
+    td_tracker.initialized = true;
+    RCLCPP_INFO(
+      node_->get_logger(),
+      "[px4ctrl] TD init reason='%s' state=%s h=%.6f r=(%.3f,%.3f,%.3f) "
+      "odom_init=(%.3f,%.3f,%.3f) raw_ref=(%.3f,%.3f,%.3f)",
+      td_tracker.reset_reason.c_str(),
+      state_to_string(source_state),
+      h,
+      param.td.r_diag[0],
+      param.td.r_diag[1],
+      param.td.r_diag[2],
+      td_tracker.v1.x(),
+      td_tracker.v1.y(),
+      td_tracker.v1.z(),
+      raw_des.p.x(),
+      raw_des.p.y(),
+      raw_des.p.z());
+    td_tracker.reset_reason = "continuous";
+    des.p = td_tracker.v1;
+    des.v = td_tracker.v2;
+    des.a.setZero();
+    return des;
+  }
+
+  const double elapsed = (now_time - td_tracker.last_process_time).seconds();
+  if (!std::isfinite(elapsed) || elapsed < 0.0) {
+    reset_td_tracker("TD time jump");
+    RCLCPP_WARN(
+      node_->get_logger(),
+      "[px4ctrl] TD saw invalid elapsed=%.6f; resetting and using raw reference this cycle.",
+      elapsed);
+    return raw_des;
+  }
+  if (elapsed > 2.5 * h) {
+    RCLCPP_WARN_THROTTLE(
+      node_->get_logger(),
+      *node_->get_clock(),
+      1000,
+      "[px4ctrl] TD process interval %.6fs exceeded 2.5*h=%.6fs; holding TD output this cycle.",
+      elapsed,
+      2.5 * h);
+    td_tracker.last_raw_ref = raw_des.p;
+    td_tracker.last_process_time = now_time;
+    des.p = td_tracker.v1;
+    des.v = td_tracker.v2;
+    des.a.setZero();
+    return des;
+  }
+
+  Eigen::Vector3d next_v1 = td_tracker.v1;
+  Eigen::Vector3d next_v2 = td_tracker.v2;
+  for (int i = 0; i < 3; ++i) {
+    const double fn =
+      td_fst(td_tracker.v1(i) - raw_des.p(i), td_tracker.v2(i), param.td.r_diag[i], h);
+    next_v1(i) = td_tracker.v1(i) + h * td_tracker.v2(i);
+    next_v2(i) = td_tracker.v2(i) + h * fn;
+  }
+
+  if (!vector_finite(next_v1) || !vector_finite(next_v2)) {
+    reset_td_tracker("TD update produced non-finite state");
+    RCLCPP_ERROR(
+      node_->get_logger(),
+      "[px4ctrl] TD update produced non-finite state; resetting and using raw reference this cycle.");
+    return raw_des;
+  }
+
+  td_tracker.v1 = next_v1;
+  td_tracker.v2 = next_v2;
+  td_tracker.last_raw_ref = raw_des.p;
+  td_tracker.last_process_time = now_time;
+  td_tracker.last_state = source_state;
+
+  des.p = td_tracker.v1;
+  des.v = td_tracker.v2;
+  des.a.setZero();
+  return des;
+}
+
+void PX4CtrlFSM::reset_td_tracker(const std::string &reason)
+{
+  td_tracker.initialized = false;
+  td_tracker.v1.setZero();
+  td_tracker.v2.setZero();
+  td_tracker.last_raw_ref.setZero();
+  td_tracker.last_process_time = rclcpp::Time(0, 0, RCL_ROS_TIME);
+  td_tracker.reset_reason = reason;
+}
+
+bool PX4CtrlFSM::td_applicable_state(State_t check_state) const
+{
+  return check_state == AUTO_HOVER || check_state == CMD_CTRL;
+}
+
+bool PX4CtrlFSM::td_parameters_valid() const
+{
+  if (td_h() <= 0.0 || !std::isfinite(td_h())) {
+    return false;
+  }
+  for (double r : param.td.r_diag) {
+    if (!std::isfinite(r) || r <= 0.0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+double PX4CtrlFSM::td_h() const
+{
+  if (param.ctrl_freq_max <= 0.0 || !std::isfinite(param.ctrl_freq_max)) {
+    return 0.0;
+  }
+  return 1.0 / param.ctrl_freq_max;
+}
+
+double PX4CtrlFSM::td_fst(double x1, double x2, double r, double h) const
+{
+  const auto sgn = [](double x) {
+    if (x > 0.0) {
+      return 1.0;
+    }
+    if (x < 0.0) {
+      return -1.0;
+    }
+    return 0.0;
+  };
+
+  const double d = h * r;
+  if (d <= 0.0 || !std::isfinite(d)) {
+    return 0.0;
+  }
+  const double d0 = h * d;
+  const double y = x1 + h * x2;
+  const double a0 = std::sqrt(d * d + 8.0 * r * std::abs(y));
+  const double a = std::abs(y) <= d0 ?
+    x2 + y / h :
+    x2 + 0.5 * (a0 - d) * sgn(y);
+  const double sat = std::abs(a) <= d ? a / d : sgn(a);
+  return -r * sat;
 }
 
 bool PX4CtrlFSM::toggle_offboard_mode(bool on_off)

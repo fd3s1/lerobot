@@ -96,6 +96,12 @@ public:
     double max_acceleration{2.0};
   };
 
+  struct TrackingDifferentiator
+  {
+    bool enable{true};
+    std::array<double, 3> r_diag{2.0, 2.0, 2.0};
+  };
+
   struct Controller
   {
     double gravity{9.81};
@@ -139,6 +145,7 @@ public:
   Limits limits;
   Gripper gripper;
   CmdFeedforward cmd_feedforward;
+  TrackingDifferentiator td;
   Controller controller;
   Ude ude;
   Attitude attitude;

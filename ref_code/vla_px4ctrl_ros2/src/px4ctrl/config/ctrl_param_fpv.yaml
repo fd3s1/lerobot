@@ -72,6 +72,10 @@ px4ctrl:
       max_velocity: 2.0
       max_acceleration: 2.0
 
+    td:
+      enable: true
+      r_diag: [2.0, 2.0, 2.0]
+
     controller:
       gravity: 9.81
       max_angle_deg: 35.0

@@ -103,6 +103,17 @@ private:
   double last_gripper_target{0.0};
   rclcpp::Time last_gripper_force_open_time{0, 0, RCL_ROS_TIME};
   bool had_valid_control_feedback{false};
+  struct TdTrackerState
+  {
+    bool initialized{false};
+    Eigen::Vector3d v1{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d v2{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d last_raw_ref{Eigen::Vector3d::Zero()};
+    rclcpp::Time last_process_time{0, 0, RCL_ROS_TIME};
+    State_t last_state{MANUAL_CTRL};
+    std::string reset_reason{"not initialized"};
+  };
+  TdTrackerState td_tracker;
 
   Desired_State_t get_hover_des();
   Desired_State_t get_cmd_des();
@@ -133,6 +144,15 @@ private:
   bool px4_mode_allows_gripper_rc() const;
   bool should_force_gripper_open(const rclcpp::Time &now_time) const;
   void change_state(State_t new_state);
+  Desired_State_t apply_td_reference(
+    const Desired_State_t &raw_des,
+    State_t source_state,
+    const rclcpp::Time &now_time);
+  void reset_td_tracker(const std::string &reason);
+  bool td_applicable_state(State_t check_state) const;
+  bool td_parameters_valid() const;
+  double td_h() const;
+  double td_fst(double x1, double x2, double r, double h) const;
 
   bool toggle_offboard_mode(bool on_off);
   bool toggle_arm_disarm(bool arm);

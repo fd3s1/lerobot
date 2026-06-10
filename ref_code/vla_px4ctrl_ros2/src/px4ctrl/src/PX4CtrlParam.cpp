@@ -31,6 +31,24 @@ void declare_diag_parameter(
   }
 }
 
+void ensure_positive_diag(
+  rclcpp::Node &node,
+  const std::string &name,
+  std::array<double, 3> &value,
+  const std::array<double, 3> &fallback)
+{
+  for (double entry : value) {
+    if (!std::isfinite(entry) || entry <= 0.0) {
+      RCLCPP_ERROR(
+        node.get_logger(),
+        "Parameter %s must contain finite positive values; using defaults.",
+        name.c_str());
+      value = fallback;
+      return;
+    }
+  }
+}
+
 bool is_finite(double value)
 {
   return std::isfinite(value);
@@ -168,6 +186,11 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
   cmd_feedforward.max_acceleration =
     node.declare_parameter<double>("cmd_feedforward.max_acceleration", cmd_feedforward.max_acceleration);
 
+  td.enable = node.declare_parameter<bool>("td.enable", td.enable);
+  const std::array<double, 3> default_td_r = td.r_diag;
+  declare_diag_parameter(node, "td.r_diag", td.r_diag);
+  ensure_positive_diag(node, "td.r_diag", td.r_diag, default_td_r);
+
   controller.gravity =
     node.declare_parameter<double>("controller.gravity", controller.gravity);
   controller.max_angle_deg =
@@ -236,11 +259,21 @@ rcl_interfaces::msg::SetParametersResult Parameter_t::apply_runtime_parameters(
       if (!vector_to_array(param, next.ude.T_diag, name.c_str(), 0.02, 10.0, true, reason)) {
         return make_param_result(false, reason);
       }
+    } else if (name == "td.enable") {
+      if (param.get_type() != rclcpp::ParameterType::PARAMETER_BOOL) {
+        return make_param_result(false, "td.enable must be a bool.");
+      }
+      next.td.enable = param.as_bool();
+    } else if (name == "td.r_diag") {
+      if (!vector_to_array(param, next.td.r_diag, name.c_str(), 0.0, 1000.0, true, reason)) {
+        return make_param_result(false, reason);
+      }
     } else {
       return make_param_result(false, "Unsupported runtime parameter: " + name);
     }
   }
 
   ude = next.ude;
-  return make_param_result(true, "runtime UDE Kp/Kd/T updated");
+  td = next.td;
+  return make_param_result(true, "runtime parameters updated");
 }
