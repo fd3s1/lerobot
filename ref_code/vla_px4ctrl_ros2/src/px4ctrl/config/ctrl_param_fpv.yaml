@@ -79,9 +79,9 @@ px4ctrl:
     controller:
       gravity: 9.81
       max_angle_deg: 45.0
-      max_bodyrate_x: 5
-      max_bodyrate_y: 5
-      max_bodyrate_z: 5
+      max_bodyrate_x: 5.0
+      max_bodyrate_y: 5.0
+      max_bodyrate_z: 5.0
       min_thrust: 0.05
       max_thrust: 0.90
 
