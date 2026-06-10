@@ -16,6 +16,13 @@ TEST_PUBLISH_TAKEOFF="${TEST_PUBLISH_TAKEOFF:-true}"
 TEST_AUTO_CONFIRM="${TEST_AUTO_CONFIRM:-false}"
 TEST_RUN_WAYPOINTS="${TEST_RUN_WAYPOINTS:-true}"
 TEST_AXIS="${TEST_AXIS:-x}"
+TEST_WP_MODE="${TEST_WP_MODE:-toggle}"
+TEST_WP_X_LOW="${TEST_WP_X_LOW:--1.0}"
+TEST_WP_X_HIGH="${TEST_WP_X_HIGH:-1.0}"
+TEST_WP_Y_LOW="${TEST_WP_Y_LOW:--1.0}"
+TEST_WP_Y_HIGH="${TEST_WP_Y_HIGH:-1.0}"
+TEST_WP_Z_LOW="${TEST_WP_Z_LOW:-0.6}"
+TEST_WP_Z_HIGH="${TEST_WP_Z_HIGH:-1.2}"
 TEST_WP_STEP_MIN_M="${TEST_WP_STEP_MIN_M:-0.05}"
 TEST_WP_STEP_MAX_M="${TEST_WP_STEP_MAX_M:-1.00}"
 TEST_WP_AXIS_LIMIT_M="${TEST_WP_AXIS_LIMIT_M:-1.00}"
@@ -108,6 +115,13 @@ if [[ "${TEST_RUN_WAYPOINTS}" == "true" ]]; then
   HELPER_ARGS+=(
     "--run-waypoints"
     "--test-axis" "${TEST_AXIS}"
+    "--wp-mode" "${TEST_WP_MODE}"
+    "--wp-x-low" "${TEST_WP_X_LOW}"
+    "--wp-x-high" "${TEST_WP_X_HIGH}"
+    "--wp-y-low" "${TEST_WP_Y_LOW}"
+    "--wp-y-high" "${TEST_WP_Y_HIGH}"
+    "--wp-z-low" "${TEST_WP_Z_LOW}"
+    "--wp-z-high" "${TEST_WP_Z_HIGH}"
     "--wp-step-min-m" "${TEST_WP_STEP_MIN_M}"
     "--wp-step-max-m" "${TEST_WP_STEP_MAX_M}"
     "--wp-axis-limit-m" "${TEST_WP_AXIS_LIMIT_M}"
@@ -124,7 +138,11 @@ if [[ "${TEST_RUN_WAYPOINTS}" == "true" ]]; then
   if [[ -n "${TEST_WP_RANDOM_SEED}" ]]; then
     HELPER_ARGS+=("--wp-random-seed" "${TEST_WP_RANDOM_SEED}")
   fi
-  echo "[ude-test] waypoint mode: axis=${TEST_AXIS} step=[${TEST_WP_STEP_MIN_M},${TEST_WP_STEP_MAX_M}]m origin_limit=${TEST_WP_AXIS_LIMIT_M}m"
+  if [[ "${TEST_WP_MODE}" == "random" ]]; then
+    echo "[ude-test] waypoint mode: random axis=${TEST_AXIS} step=[${TEST_WP_STEP_MIN_M},${TEST_WP_STEP_MAX_M}]m origin_limit=${TEST_WP_AXIS_LIMIT_M}m"
+  else
+    echo "[ude-test] waypoint mode: toggle axis=${TEST_AXIS} x=[${TEST_WP_X_LOW},${TEST_WP_X_HIGH}] y=[${TEST_WP_Y_LOW},${TEST_WP_Y_HIGH}] z=[${TEST_WP_Z_LOW},${TEST_WP_Z_HIGH}]"
+  fi
 else
   echo "[ude-test] waypoint mode: disabled"
 fi

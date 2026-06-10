@@ -64,9 +64,9 @@ ros2 topic echo --once /mavros/state
 
 一键脚本也会做这些检查。如果 `POSE_PREFLIGHT_REQUIRED=true`，任何关键 topic 检查失败都会退出。
 
-### 4. 单独 UDE 精调和随机单轴 waypoint 检查
+### 4. 单独 UDE 精调和固定单轴 waypoint 检查
 
-`test_ude_takeoff_hover.sh` 现在默认用于 UDE 精调：一键启动 stack，发布自动起飞，进入 `AUTO_HOVER` 后发布当前位置 `/position_cmd` 进入 `CMD_CTRL`，随后围绕进入 `CMD_CTRL` 那一刻的 odom pose 锁存 origin，持续发布随机单轴 waypoint。
+`test_ude_takeoff_hover.sh` 现在默认用于 UDE 精调：一键启动 stack，发布自动起飞，进入 `AUTO_HOVER` 后发布当前位置 `/position_cmd` 进入 `CMD_CTRL`，随后锁存进入 `CMD_CTRL` 那一刻的 odom pose 作为非测试轴 origin，并在选定轴上持续发布固定两端往返 waypoint。
 
 ```bash
 cd /home/user/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
@@ -80,15 +80,32 @@ bash shflies/test_ude_takeoff_hover.sh
 - 自动发布 `/px4ctrl/takeoff_land` 的 `TAKEOFF`，但默认会先停止底层 stack 刷屏并等待按一次 Enter 确认；设置 `TEST_AUTO_CONFIRM=true` 可取消确认。
 - RC 门控只看 px4ctrl 的 CH5/CH6 hover/command，不看 CH10。
 - `TEST_AXIS=x|y|z` 决定本次只测试哪个轴；非测试轴和 yaw 保持 origin，不随飞机当前位置漂移。
-- 相邻 waypoint 在所选轴上的差值随机落在 `TEST_WP_STEP_MIN_M=0.05` 到 `TEST_WP_STEP_MAX_M=1.00`。
-- waypoint 相对 origin 不超过 `TEST_WP_AXIS_LIMIT_M=1.00`，且不超过 px4ctrl 全局场地限制 `x=[-7,14] y=[-2.5,2.5] z=[-0.3,2.5]`。
-- 一旦 px4ctrl 离开 `CMD_CTRL`，脚本立即停止发布随机 waypoint；如果回到 `AUTO_HOVER`，进入 `STATUS/LAND/EXIT` 菜单。
+- 默认 `TEST_WP_MODE=toggle`：`x=-1.0 <-> +1.0`，`y=-1.0 <-> +1.0`，`z=0.6 <-> 1.2`。
+- 固定两端 waypoint 是 mocap/map 坐标下的绝对值；非测试轴仍保持 origin。
+- 一旦 px4ctrl 离开 `CMD_CTRL`，脚本立即停止发布 waypoint；如果回到 `AUTO_HOVER`，进入 `STATUS/LAND/EXIT` 菜单。
 - 底层 stack 输出默认重定向到 `log/ude_takeoff_hover_stack_*.log`；设置 `QUIET_STACK_OUTPUT=false` 可恢复直接打印。VRPN bridge 状态打印默认 `BRIDGE_STATUS_PERIOD_S=10.0` 秒。
 
 常用示例：
 
 ```bash
 TEST_AXIS=y \
+bash shflies/test_ude_takeoff_hover.sh
+```
+
+如果要临时改两端点：
+
+```bash
+TEST_AXIS=z \
+TEST_WP_Z_LOW=0.7 \
+TEST_WP_Z_HIGH=1.1 \
+bash shflies/test_ude_takeoff_hover.sh
+```
+
+如果要回到旧随机单轴 waypoint：
+
+```bash
+TEST_WP_MODE=random \
+TEST_AXIS=x \
 TEST_WP_STEP_MIN_M=0.05 \
 TEST_WP_STEP_MAX_M=0.40 \
 TEST_WP_AXIS_LIMIT_M=0.80 \

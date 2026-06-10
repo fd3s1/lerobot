@@ -291,6 +291,23 @@ class TakeoffHoverTest(Node):
             return 0.0
         return min(max(current_offset, safe_low), safe_high)
 
+    def axis_toggle_values(self, axis_index: int) -> tuple[float, float]:
+        pairs = [
+            (self.args.wp_x_low, self.args.wp_x_high),
+            (self.args.wp_y_low, self.args.wp_y_high),
+            (self.args.wp_z_low, self.args.wp_z_high),
+        ]
+        low, high = pairs[axis_index]
+        return (min(low, high), max(low, high))
+
+    def set_axis_value(self, pose, axis_index: int, value: float) -> None:
+        if axis_index == 0:
+            pose.position.x = value
+        elif axis_index == 1:
+            pose.position.y = value
+        else:
+            pose.position.z = value
+
     def publish_until_cmd_ctrl(self) -> bool:
         self.get_logger().info(
             "Publishing current odom pose until CMD_CTRL. RC gate uses CH5/CH6 only; CH10 is ignored here."
@@ -311,7 +328,7 @@ class TakeoffHoverTest(Node):
             time.sleep(1.0 / rate)
         return self.fsm_state == "CMD_CTRL"
 
-    def run_random_axis_waypoints(self) -> None:
+    def run_axis_waypoints(self) -> None:
         axis_map = {"x": 0, "y": 1, "z": 2}
         axis_index = axis_map[self.args.test_axis]
         axis_name = self.args.test_axis
@@ -344,12 +361,28 @@ class TakeoffHoverTest(Node):
         self.get_logger().info(
             f"CMD_CTRL reached. Waypoint origin locked at "
             f"({origin[0]:.3f}, {origin[1]:.3f}, {origin[2]:.3f}); "
-            f"testing only {axis_name}-axis."
+            f"testing only {axis_name}-axis with mode={self.args.wp_mode}."
         )
 
         current_offset = 0.0
         rate = max(1.0, self.args.wp_rate_hz)
         waypoint_index = 0
+        previous_axis_value = origin[axis_index]
+        toggle_values = self.axis_toggle_values(axis_index)
+        if self.args.wp_mode == "toggle":
+            low, high = bounds[axis_index]
+            for value in toggle_values:
+                if not (low <= value <= high):
+                    self.get_logger().warn(
+                        f"Toggle waypoint {axis_name}={value:.3f} is outside limits "
+                        f"[{low:.3f},{high:.3f}]."
+                    )
+                    return
+            self.get_logger().info(
+                f"Toggle waypoints: {axis_name}={toggle_values[0]:.3f} <-> "
+                f"{toggle_values[1]:.3f}; non-test axes hold origin."
+            )
+
         while rclpy.ok():
             ready, missing = self.cmd_inputs_ready()
             if not ready:
@@ -357,28 +390,29 @@ class TakeoffHoverTest(Node):
                 return
             if self.fsm_state != "CMD_CTRL":
                 self.get_logger().info(
-                    f"px4ctrl left CMD_CTRL ({self.fsm_state}); stopping random waypoints."
+                    f"px4ctrl left CMD_CTRL ({self.fsm_state}); stopping waypoints."
                 )
                 return
 
-            target_offset = self.sample_next_axis_offset(
-                origin[axis_index],
-                axis_index,
-                current_offset,
-            )
-            target_pose = copy.deepcopy(origin_pose)
-            target_value = origin[axis_index] + target_offset
-            if axis_index == 0:
-                target_pose.position.x = target_value
-            elif axis_index == 1:
-                target_pose.position.y = target_value
+            if self.args.wp_mode == "random":
+                target_offset = self.sample_next_axis_offset(
+                    origin[axis_index],
+                    axis_index,
+                    current_offset,
+                )
+                target_value = origin[axis_index] + target_offset
             else:
-                target_pose.position.z = target_value
+                target_value = toggle_values[waypoint_index % 2]
+                target_offset = target_value - origin[axis_index]
+
+            target_pose = copy.deepcopy(origin_pose)
+            self.set_axis_value(target_pose, axis_index, target_value)
 
             waypoint_index += 1
             self.get_logger().info(
-                f"waypoint #{waypoint_index}: axis={axis_name} "
-                f"offset={target_offset:+.3f}m step={target_offset - current_offset:+.3f}m"
+                f"waypoint #{waypoint_index}: mode={self.args.wp_mode} axis={axis_name} "
+                f"value={target_value:.3f} offset={target_offset:+.3f}m "
+                f"step={target_value - previous_axis_value:+.3f}m"
             )
 
             hold_deadline = time.monotonic() + self.args.wp_hold_s
@@ -391,13 +425,14 @@ class TakeoffHoverTest(Node):
                     return
                 if self.fsm_state != "CMD_CTRL":
                     self.get_logger().info(
-                        f"px4ctrl left CMD_CTRL ({self.fsm_state}); stopping random waypoints."
+                        f"px4ctrl left CMD_CTRL ({self.fsm_state}); stopping waypoints."
                     )
                     return
                 self.cmd_pub.publish(self.pose_cmd_from_pose(target_pose))
                 time.sleep(1.0 / rate)
 
             current_offset = target_offset
+            previous_axis_value = target_value
 
     def run_optional_cmd_ctrl_test(self) -> None:
         self.get_logger().info(
@@ -521,6 +556,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--enter-cmd", action="store_true")
     parser.add_argument("--run-waypoints", action="store_true")
     parser.add_argument("--test-axis", choices=("x", "y", "z"), default="x")
+    parser.add_argument("--wp-mode", choices=("toggle", "random"), default="toggle")
+    parser.add_argument("--wp-x-low", type=float, default=-1.0)
+    parser.add_argument("--wp-x-high", type=float, default=1.0)
+    parser.add_argument("--wp-y-low", type=float, default=-1.0)
+    parser.add_argument("--wp-y-high", type=float, default=1.0)
+    parser.add_argument("--wp-z-low", type=float, default=0.6)
+    parser.add_argument("--wp-z-high", type=float, default=1.2)
     parser.add_argument("--wp-step-min-m", type=float, default=0.05)
     parser.add_argument("--wp-step-max-m", type=float, default=1.0)
     parser.add_argument("--wp-axis-limit-m", type=float, default=1.0)
@@ -606,7 +648,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if node.safe_to_clean_stack() else MAYBE_AIRBORNE_EXIT_CODE
 
         if args.run_waypoints:
-            node.run_random_axis_waypoints()
+            node.run_axis_waypoints()
         elif args.enter_cmd:
             node.run_optional_cmd_ctrl_test()
 
