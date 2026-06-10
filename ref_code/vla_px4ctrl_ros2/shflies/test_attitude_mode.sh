@@ -32,6 +32,7 @@ OFFBOARD_REQUEST_PERIOD_S="${OFFBOARD_REQUEST_PERIOD_S:-1.0}"
 
 STICK_DEADZONE="${STICK_DEADZONE:-0.08}"
 STICK_EXPO="${STICK_EXPO:-1.7}"
+THROTTLE_EXPO="${THROTTLE_EXPO:-1.2}"
 ROLL_REVERSE="${ROLL_REVERSE:-false}"
 PITCH_REVERSE="${PITCH_REVERSE:-false}"
 YAW_REVERSE="${YAW_REVERSE:-true}"
@@ -51,9 +52,9 @@ MAX_BODYRATE_YAW_DPS="${MAX_BODYRATE_YAW_DPS:-86.0}"
 
 THRUST_BASE="${THRUST_BASE:-0.35}"
 THRUST_MIN="${THRUST_MIN:-0.20}"
-THRUST_MAX="${THRUST_MAX:-0.60}"
+THRUST_MAX="${THRUST_MAX:-0.80}"
 THRUST_RAMP_PER_S="${THRUST_RAMP_PER_S:-0.05}"
-THRUST_SLEW_PER_S="${THRUST_SLEW_PER_S:-0.20}"
+THRUST_SLEW_PER_S="${THRUST_SLEW_PER_S:-0.45}"
 REQUIRE_ARMED_FOR_THRUST_RAMP="${REQUIRE_ARMED_FOR_THRUST_RAMP:-true}"
 REQUIRE_OFFBOARD_FOR_THRUST_RAMP="${REQUIRE_OFFBOARD_FOR_THRUST_RAMP:-true}"
 SETPOINT_OUTPUT_MODE="${SETPOINT_OUTPUT_MODE:-attitude_bodyrate}"
@@ -76,6 +77,7 @@ OFFBOARD_REQUEST_DELAY_S_P="$(as_float "${OFFBOARD_REQUEST_DELAY_S}")"
 OFFBOARD_REQUEST_PERIOD_S_P="$(as_float "${OFFBOARD_REQUEST_PERIOD_S}")"
 STICK_DEADZONE_P="$(as_float "${STICK_DEADZONE}")"
 STICK_EXPO_P="$(as_float "${STICK_EXPO}")"
+THROTTLE_EXPO_P="$(as_float "${THROTTLE_EXPO}")"
 MAX_ROLL_RATE_DPS_P="$(as_float "${MAX_ROLL_RATE_DPS}")"
 MAX_PITCH_RATE_DPS_P="$(as_float "${MAX_PITCH_RATE_DPS}")"
 MAX_YAW_RATE_DPS_P="$(as_float "${MAX_YAW_RATE_DPS}")"
@@ -115,7 +117,7 @@ echo "[test-att] enter_confirm=${ENTER_CONFIRM_ENABLE} auto_offboard=${AUTO_OFFB
 echo "[test-att] restore_mode_on_inactive=${RESTORE_MODE_ON_INACTIVE} disarm_on_inactive=${DISARM_ON_INACTIVE}"
 echo "[test-att] request delay/period: offboard=${OFFBOARD_REQUEST_DELAY_S}/${OFFBOARD_REQUEST_PERIOD_S}s arm=${ARM_REQUEST_DELAY_S}/${ARM_REQUEST_PERIOD_S}s"
 echo "[test-att] CH${TEST_ATT_CHANNEL} active_threshold=${ACTIVE_THRESHOLD} rate=${RATE_HZ}Hz"
-echo "[test-att] stick deadzone=${STICK_DEADZONE} expo=${STICK_EXPO} reverse roll=${ROLL_REVERSE} pitch=${PITCH_REVERSE} yaw=${YAW_REVERSE} throttle=${THROTTLE_REVERSE}"
+echo "[test-att] stick deadzone=${STICK_DEADZONE} expo=${STICK_EXPO} throttle_expo=${THROTTLE_EXPO} reverse roll=${ROLL_REVERSE} pitch=${PITCH_REVERSE} yaw=${YAW_REVERSE} throttle=${THROTTLE_REVERSE}"
 echo "[test-att] rate limits dps: roll=${MAX_ROLL_RATE_DPS} pitch=${MAX_PITCH_RATE_DPS} yaw=${MAX_YAW_RATE_DPS}; angle limits deg: roll=${MAX_ROLL_DEG} pitch=${MAX_PITCH_DEG}"
 echo "[test-att] attitude feedback KAng: roll=${ATTITUDE_KANG_ROLL} pitch=${ATTITUDE_KANG_PITCH} yaw=${ATTITUDE_KANG_YAW}; bodyrate clamp dps: roll=${MAX_BODYRATE_ROLL_DPS} pitch=${MAX_BODYRATE_PITCH_DPS} yaw=${MAX_BODYRATE_YAW_DPS}"
 echo "[test-att] thrust base=${THRUST_BASE} min=${THRUST_MIN} max=${THRUST_MAX} ramp=${THRUST_RAMP_PER_S}/s slew=${THRUST_SLEW_PER_S}/s"
@@ -152,6 +154,7 @@ exec ros2 run px4ctrl test_attitude_mode_node --ros-args \
   -p offboard_request_period_s:="${OFFBOARD_REQUEST_PERIOD_S_P}" \
   -p stick_deadzone:="${STICK_DEADZONE_P}" \
   -p stick_expo:="${STICK_EXPO_P}" \
+  -p throttle_expo:="${THROTTLE_EXPO_P}" \
   -p roll_reverse:="${ROLL_REVERSE}" \
   -p pitch_reverse:="${PITCH_REVERSE}" \
   -p yaw_reverse:="${YAW_REVERSE}" \

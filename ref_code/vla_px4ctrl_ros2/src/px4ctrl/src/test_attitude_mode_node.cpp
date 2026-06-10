@@ -231,6 +231,7 @@ public:
 
     stick_deadzone_ = declare_parameter<double>("stick_deadzone", 0.08);
     stick_expo_ = declare_parameter<double>("stick_expo", 1.7);
+    throttle_expo_ = declare_parameter<double>("throttle_expo", 1.2);
     roll_reverse_ = declare_parameter<bool>("roll_reverse", false);
     pitch_reverse_ = declare_parameter<bool>("pitch_reverse", false);
     yaw_reverse_ = declare_parameter<bool>("yaw_reverse", true);
@@ -252,9 +253,9 @@ public:
 
     thrust_base_ = declare_parameter<double>("thrust_base", 0.35);
     thrust_min_ = declare_parameter<double>("thrust_min", 0.20);
-    thrust_max_ = declare_parameter<double>("thrust_max", 0.60);
+    thrust_max_ = declare_parameter<double>("thrust_max", 0.80);
     thrust_ramp_per_s_ = declare_parameter<double>("thrust_ramp_per_s", 0.05);
-    thrust_slew_per_s_ = declare_parameter<double>("thrust_slew_per_s", 0.20);
+    thrust_slew_per_s_ = declare_parameter<double>("thrust_slew_per_s", 0.45);
     require_armed_for_thrust_ramp_ = declare_parameter<bool>("require_armed_for_thrust_ramp", true);
     require_offboard_for_thrust_ramp_ =
       declare_parameter<bool>("require_offboard_for_thrust_ramp", true);
@@ -400,9 +401,9 @@ private:
       thrust_max_ = 1.0;
     }
     if (thrust_min_ > thrust_max_) {
-      RCLCPP_WARN(get_logger(), "thrust_min > thrust_max; resetting to [0.20, 0.60]");
+      RCLCPP_WARN(get_logger(), "thrust_min > thrust_max; resetting to [0.20, 0.80]");
       thrust_min_ = 0.20;
-      thrust_max_ = 0.60;
+      thrust_max_ = 0.80;
     }
     if (thrust_base_ < thrust_min_ || thrust_base_ > thrust_max_) {
       RCLCPP_WARN(
@@ -414,6 +415,7 @@ private:
       thrust_base_ = std::clamp(thrust_base_, thrust_min_, thrust_max_);
     }
     rate_hz_ = std::max(1.0, rate_hz_);
+    throttle_expo_ = std::max(0.1, throttle_expo_);
     rc_timeout_s_ = std::max(0.05, rc_timeout_s_);
     imu_timeout_s_ = std::max(0.05, imu_timeout_s_);
     odom_timeout_s_ = std::max(0.05, odom_timeout_s_);
@@ -616,7 +618,8 @@ private:
 
   double target_thrust_from_rc() const
   {
-    const double throttle = shaped_channel(3, throttle_reverse_);
+    const double raw = raw_axis_from_pwm(channel_pwm(rc_msg_, 3, 1500.0), throttle_reverse_);
+    const double throttle = shape_axis(raw, stick_deadzone_, throttle_expo_);
     if (throttle >= 0.0) {
       return nominal_thrust_ + throttle * (thrust_max_ - nominal_thrust_);
     }
@@ -1029,6 +1032,7 @@ private:
   double offboard_request_period_s_{1.0};
   double stick_deadzone_{0.08};
   double stick_expo_{1.7};
+  double throttle_expo_{1.2};
   bool roll_reverse_{false};
   bool pitch_reverse_{false};
   bool yaw_reverse_{true};
@@ -1042,9 +1046,9 @@ private:
   Eigen::Vector3d max_bodyrate_cmd_{deg2rad(143.0), deg2rad(143.0), deg2rad(86.0)};
   double thrust_base_{0.35};
   double thrust_min_{0.20};
-  double thrust_max_{0.60};
+  double thrust_max_{0.80};
   double thrust_ramp_per_s_{0.05};
-  double thrust_slew_per_s_{0.20};
+  double thrust_slew_per_s_{0.45};
   bool require_armed_for_thrust_ramp_{true};
   bool require_offboard_for_thrust_ramp_{true};
   std::string setpoint_output_mode_{"attitude"};
