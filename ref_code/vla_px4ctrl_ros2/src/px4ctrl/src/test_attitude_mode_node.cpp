@@ -232,8 +232,8 @@ public:
     stick_deadzone_ = declare_parameter<double>("stick_deadzone", 0.08);
     stick_expo_ = declare_parameter<double>("stick_expo", 1.7);
     roll_reverse_ = declare_parameter<bool>("roll_reverse", false);
-    pitch_reverse_ = declare_parameter<bool>("pitch_reverse", true);
-    yaw_reverse_ = declare_parameter<bool>("yaw_reverse", false);
+    pitch_reverse_ = declare_parameter<bool>("pitch_reverse", false);
+    yaw_reverse_ = declare_parameter<bool>("yaw_reverse", true);
     throttle_reverse_ = declare_parameter<bool>("throttle_reverse", false);
 
     max_roll_rate_ = deg2rad(declare_parameter<double>("max_roll_rate_dps", 45.0));
@@ -1030,8 +1030,8 @@ private:
   double stick_deadzone_{0.08};
   double stick_expo_{1.7};
   bool roll_reverse_{false};
-  bool pitch_reverse_{true};
-  bool yaw_reverse_{false};
+  bool pitch_reverse_{false};
+  bool yaw_reverse_{true};
   bool throttle_reverse_{false};
   double max_roll_rate_{deg2rad(45.0)};
   double max_pitch_rate_{deg2rad(45.0)};
