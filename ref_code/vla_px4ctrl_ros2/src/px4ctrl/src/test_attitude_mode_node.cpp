@@ -231,7 +231,8 @@ public:
 
     stick_deadzone_ = declare_parameter<double>("stick_deadzone", 0.08);
     stick_expo_ = declare_parameter<double>("stick_expo", 1.7);
-    throttle_deadzone_ = declare_parameter<double>("throttle_deadzone", 0.03);
+    throttle_mode_ = declare_parameter<std::string>("throttle_mode", "direct");
+    throttle_deadzone_ = declare_parameter<double>("throttle_deadzone", 0.00);
     throttle_expo_ = declare_parameter<double>("throttle_expo", 1.05);
     roll_reverse_ = declare_parameter<bool>("roll_reverse", false);
     pitch_reverse_ = declare_parameter<bool>("pitch_reverse", false);
@@ -256,7 +257,7 @@ public:
     thrust_min_ = declare_parameter<double>("thrust_min", 0.20);
     thrust_max_ = declare_parameter<double>("thrust_max", 0.80);
     thrust_ramp_per_s_ = declare_parameter<double>("thrust_ramp_per_s", 0.05);
-    thrust_slew_per_s_ = declare_parameter<double>("thrust_slew_per_s", 0.80);
+    thrust_slew_per_s_ = declare_parameter<double>("thrust_slew_per_s", 3.00);
     require_armed_for_thrust_ramp_ = declare_parameter<bool>("require_armed_for_thrust_ramp", true);
     require_offboard_for_thrust_ramp_ =
       declare_parameter<bool>("require_offboard_for_thrust_ramp", true);
@@ -392,6 +393,13 @@ private:
         "unknown setpoint_alignment_mode='%s'; using direct_imu",
         setpoint_alignment_mode_.c_str());
       setpoint_alignment_mode_ = "direct_imu";
+    }
+    if (throttle_mode_ != "direct" && throttle_mode_ != "centered") {
+      RCLCPP_WARN(
+        get_logger(),
+        "unknown throttle_mode='%s'; using direct",
+        throttle_mode_.c_str());
+      throttle_mode_ = "direct";
     }
     if (thrust_min_ < 0.0) {
       RCLCPP_WARN(get_logger(), "thrust_min %.3f < 0.0; clamping to 0.0", thrust_min_);
@@ -621,6 +629,12 @@ private:
   double target_thrust_from_rc() const
   {
     const double raw = raw_axis_from_pwm(channel_pwm(rc_msg_, 3, 1500.0), throttle_reverse_);
+    if (throttle_mode_ == "direct") {
+      const double normalized = std::clamp((raw + 1.0) * 0.5, 0.0, 1.0);
+      const double curved = std::pow(normalized, throttle_expo_);
+      return thrust_min_ + curved * (thrust_max_ - thrust_min_);
+    }
+
     const double throttle = shape_axis(raw, throttle_deadzone_, throttle_expo_);
     if (throttle >= 0.0) {
       return nominal_thrust_ + throttle * (thrust_max_ - nominal_thrust_);
@@ -906,6 +920,7 @@ private:
        << " state_age_s=" << state_age(stamp)
        << " setpoint_output=" << setpoint_output_mode_
        << " setpoint_alignment=" << setpoint_alignment_mode_
+       << " throttle_mode=" << throttle_mode_
        << " KAng=(" << attitude_kang_.x() << "," << attitude_kang_.y() << ","
        << attitude_kang_.z() << ")"
        << " stick_bodyrate=(" << stick_bodyrate_.x() << "," << stick_bodyrate_.y()
@@ -1034,7 +1049,8 @@ private:
   double offboard_request_period_s_{1.0};
   double stick_deadzone_{0.08};
   double stick_expo_{1.7};
-  double throttle_deadzone_{0.03};
+  std::string throttle_mode_{"direct"};
+  double throttle_deadzone_{0.00};
   double throttle_expo_{1.05};
   bool roll_reverse_{false};
   bool pitch_reverse_{false};
@@ -1051,7 +1067,7 @@ private:
   double thrust_min_{0.20};
   double thrust_max_{0.80};
   double thrust_ramp_per_s_{0.05};
-  double thrust_slew_per_s_{0.80};
+  double thrust_slew_per_s_{3.00};
   bool require_armed_for_thrust_ramp_{true};
   bool require_offboard_for_thrust_ramp_{true};
   std::string setpoint_output_mode_{"attitude"};
