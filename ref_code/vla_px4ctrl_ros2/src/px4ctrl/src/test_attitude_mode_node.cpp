@@ -241,6 +241,14 @@ public:
     max_yaw_rate_ = deg2rad(declare_parameter<double>("max_yaw_rate_dps", 60.0));
     max_roll_ = deg2rad(declare_parameter<double>("max_roll_deg", 35.0));
     max_pitch_ = deg2rad(declare_parameter<double>("max_pitch_deg", 35.0));
+    attitude_kang_ = Eigen::Vector3d(
+      declare_parameter<double>("attitude_kang_roll", 6.0),
+      declare_parameter<double>("attitude_kang_pitch", 6.0),
+      declare_parameter<double>("attitude_kang_yaw", 3.0));
+    max_bodyrate_cmd_ = Eigen::Vector3d(
+      deg2rad(declare_parameter<double>("max_bodyrate_roll_dps", 143.0)),
+      deg2rad(declare_parameter<double>("max_bodyrate_pitch_dps", 143.0)),
+      deg2rad(declare_parameter<double>("max_bodyrate_yaw_dps", 86.0)));
 
     thrust_base_ = declare_parameter<double>("thrust_base", 0.35);
     thrust_min_ = declare_parameter<double>("thrust_min", 0.20);
@@ -366,7 +374,8 @@ private:
   void sanitize_parameters()
   {
     if (setpoint_output_mode_ != "attitude" &&
-        setpoint_output_mode_ != "bodyrate") {
+        setpoint_output_mode_ != "bodyrate" &&
+        setpoint_output_mode_ != "attitude_bodyrate") {
       RCLCPP_WARN(
         get_logger(),
         "unknown setpoint_output_mode='%s'; using attitude",
@@ -434,7 +443,9 @@ private:
 
   bool odom_required_for_setpoint() const
   {
-    if (setpoint_output_mode_ == "bodyrate") {
+    if (setpoint_output_mode_ == "bodyrate" ||
+        (setpoint_output_mode_ == "attitude_bodyrate" &&
+         setpoint_alignment_mode_ == "direct_imu")) {
       return false;
     }
     return setpoint_alignment_mode_ == "px4ctrl_align" ||
@@ -694,6 +705,31 @@ private:
       yaw_axis * max_yaw_rate_);
   }
 
+  Eigen::Vector3d attitude_feedback_bodyrate(
+    const Eigen::Quaterniond &actual_q,
+    const Eigen::Quaterniond &target_q) const
+  {
+    Eigen::Quaterniond q_error = actual_q.inverse() * target_q;
+    if (q_error.norm() > 1e-6) {
+      q_error.normalize();
+    } else {
+      return Eigen::Vector3d::Zero();
+    }
+
+    const double sign = q_error.w() >= 0.0 ? 1.0 : -1.0;
+    Eigen::Vector3d bodyrate(
+      sign * 2.0 * attitude_kang_.x() * q_error.x(),
+      sign * 2.0 * attitude_kang_.y() * q_error.y(),
+      sign * 2.0 * attitude_kang_.z() * q_error.z());
+    bodyrate.x() = clamp_symmetric(bodyrate.x(), max_bodyrate_cmd_.x());
+    bodyrate.y() = clamp_symmetric(bodyrate.y(), max_bodyrate_cmd_.y());
+    bodyrate.z() = clamp_symmetric(bodyrate.z(), max_bodyrate_cmd_.z());
+    if (!bodyrate.allFinite()) {
+      return Eigen::Vector3d::Zero();
+    }
+    return bodyrate;
+  }
+
   void update_reference_rpy_from_quaternion()
   {
     reference_rpy_ = rpy_from_quaternion(reference_q_);
@@ -709,6 +745,7 @@ private:
     }
     update_reference_rpy_from_quaternion();
     reference_bodyrate_.setZero();
+    stick_bodyrate_.setZero();
     reference_initialized_ = true;
   }
 
@@ -718,8 +755,8 @@ private:
       initialize_reference_from_attitude(actual_q);
     }
 
-    reference_bodyrate_ = command_bodyrate_from_rc();
-    reference_q_ = integrate_bodyrate(reference_q_, reference_bodyrate_, dt);
+    stick_bodyrate_ = command_bodyrate_from_rc();
+    reference_q_ = integrate_bodyrate(reference_q_, stick_bodyrate_, dt);
     reference_rpy_ = rpy_from_quaternion(reference_q_);
     reference_rpy_.x() = clamp_symmetric(reference_rpy_.x(), max_roll_);
     reference_rpy_.y() = clamp_symmetric(reference_rpy_.y(), max_pitch_);
@@ -729,6 +766,20 @@ private:
 
   void stop_reference_motion()
   {
+    stick_bodyrate_.setZero();
+    reference_bodyrate_.setZero();
+  }
+
+  void update_setpoint_bodyrate(const Eigen::Quaterniond &actual_q)
+  {
+    if (setpoint_output_mode_ == "bodyrate") {
+      reference_bodyrate_ = stick_bodyrate_;
+      return;
+    }
+    if (setpoint_output_mode_ == "attitude_bodyrate") {
+      reference_bodyrate_ = attitude_feedback_bodyrate(actual_q, reference_q_);
+      return;
+    }
     reference_bodyrate_.setZero();
   }
 
@@ -757,7 +808,8 @@ private:
     mavros_msgs::msg::AttitudeTarget msg;
     msg.header.stamp = stamp;
     msg.header.frame_id = frame_id_;
-    if (setpoint_output_mode_ == "bodyrate") {
+    if (setpoint_output_mode_ == "bodyrate" ||
+        setpoint_output_mode_ == "attitude_bodyrate") {
       msg.type_mask = mavros_msgs::msg::AttitudeTarget::IGNORE_ATTITUDE;
       msg.orientation = quaternion_msg_from_eigen(Eigen::Quaterniond::Identity());
       msg.body_rate.x = reference_bodyrate_.x();
@@ -849,6 +901,10 @@ private:
        << " state_age_s=" << state_age(stamp)
        << " setpoint_output=" << setpoint_output_mode_
        << " setpoint_alignment=" << setpoint_alignment_mode_
+       << " KAng=(" << attitude_kang_.x() << "," << attitude_kang_.y() << ","
+       << attitude_kang_.z() << ")"
+       << " stick_bodyrate=(" << stick_bodyrate_.x() << "," << stick_bodyrate_.y()
+       << "," << stick_bodyrate_.z() << ")"
        << " nominal_thrust=" << nominal_thrust_
        << " thrust=" << current_thrust_;
     msg.data = ss.str();
@@ -923,6 +979,7 @@ private:
       }
       stop_reference_motion();
     }
+    update_setpoint_bodyrate(actual_q);
 
     update_thrust(dt, active);
     if (active) {
@@ -981,6 +1038,8 @@ private:
   double max_yaw_rate_{deg2rad(60.0)};
   double max_roll_{deg2rad(35.0)};
   double max_pitch_{deg2rad(35.0)};
+  Eigen::Vector3d attitude_kang_{6.0, 6.0, 3.0};
+  Eigen::Vector3d max_bodyrate_cmd_{deg2rad(143.0), deg2rad(143.0), deg2rad(86.0)};
   double thrust_base_{0.35};
   double thrust_min_{0.20};
   double thrust_max_{0.45};
@@ -1018,6 +1077,7 @@ private:
 
   Eigen::Quaterniond reference_q_{Eigen::Quaterniond::Identity()};
   Eigen::Vector3d reference_rpy_{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d stick_bodyrate_{Eigen::Vector3d::Zero()};
   Eigen::Vector3d reference_bodyrate_{Eigen::Vector3d::Zero()};
   Eigen::Quaterniond last_setpoint_q_{Eigen::Quaterniond::Identity()};
   Eigen::Vector3d last_setpoint_rpy_{Eigen::Vector3d::Zero()};

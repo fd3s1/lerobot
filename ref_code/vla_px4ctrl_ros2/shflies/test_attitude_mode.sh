@@ -42,6 +42,12 @@ MAX_PITCH_RATE_DPS="${MAX_PITCH_RATE_DPS:-45.0}"
 MAX_YAW_RATE_DPS="${MAX_YAW_RATE_DPS:-60.0}"
 MAX_ROLL_DEG="${MAX_ROLL_DEG:-35.0}"
 MAX_PITCH_DEG="${MAX_PITCH_DEG:-35.0}"
+ATTITUDE_KANG_ROLL="${ATTITUDE_KANG_ROLL:-6.0}"
+ATTITUDE_KANG_PITCH="${ATTITUDE_KANG_PITCH:-6.0}"
+ATTITUDE_KANG_YAW="${ATTITUDE_KANG_YAW:-3.0}"
+MAX_BODYRATE_ROLL_DPS="${MAX_BODYRATE_ROLL_DPS:-143.0}"
+MAX_BODYRATE_PITCH_DPS="${MAX_BODYRATE_PITCH_DPS:-143.0}"
+MAX_BODYRATE_YAW_DPS="${MAX_BODYRATE_YAW_DPS:-86.0}"
 
 THRUST_BASE="${THRUST_BASE:-0.35}"
 THRUST_MIN="${THRUST_MIN:-0.20}"
@@ -50,7 +56,7 @@ THRUST_RAMP_PER_S="${THRUST_RAMP_PER_S:-0.05}"
 THRUST_SLEW_PER_S="${THRUST_SLEW_PER_S:-0.20}"
 REQUIRE_ARMED_FOR_THRUST_RAMP="${REQUIRE_ARMED_FOR_THRUST_RAMP:-true}"
 REQUIRE_OFFBOARD_FOR_THRUST_RAMP="${REQUIRE_OFFBOARD_FOR_THRUST_RAMP:-true}"
-SETPOINT_OUTPUT_MODE="${SETPOINT_OUTPUT_MODE:-attitude}"
+SETPOINT_OUTPUT_MODE="${SETPOINT_OUTPUT_MODE:-attitude_bodyrate}"
 SETPOINT_ALIGNMENT_MODE="${SETPOINT_ALIGNMENT_MODE:-direct_imu}"
 FRAME_ID="${FRAME_ID:-map}"
 
@@ -75,6 +81,12 @@ MAX_PITCH_RATE_DPS_P="$(as_float "${MAX_PITCH_RATE_DPS}")"
 MAX_YAW_RATE_DPS_P="$(as_float "${MAX_YAW_RATE_DPS}")"
 MAX_ROLL_DEG_P="$(as_float "${MAX_ROLL_DEG}")"
 MAX_PITCH_DEG_P="$(as_float "${MAX_PITCH_DEG}")"
+ATTITUDE_KANG_ROLL_P="$(as_float "${ATTITUDE_KANG_ROLL}")"
+ATTITUDE_KANG_PITCH_P="$(as_float "${ATTITUDE_KANG_PITCH}")"
+ATTITUDE_KANG_YAW_P="$(as_float "${ATTITUDE_KANG_YAW}")"
+MAX_BODYRATE_ROLL_DPS_P="$(as_float "${MAX_BODYRATE_ROLL_DPS}")"
+MAX_BODYRATE_PITCH_DPS_P="$(as_float "${MAX_BODYRATE_PITCH_DPS}")"
+MAX_BODYRATE_YAW_DPS_P="$(as_float "${MAX_BODYRATE_YAW_DPS}")"
 THRUST_BASE_P="$(as_float "${THRUST_BASE}")"
 THRUST_MIN_P="$(as_float "${THRUST_MIN}")"
 THRUST_MAX_P="$(as_float "${THRUST_MAX}")"
@@ -105,10 +117,11 @@ echo "[test-att] request delay/period: offboard=${OFFBOARD_REQUEST_DELAY_S}/${OF
 echo "[test-att] CH${TEST_ATT_CHANNEL} active_threshold=${ACTIVE_THRESHOLD} rate=${RATE_HZ}Hz"
 echo "[test-att] stick deadzone=${STICK_DEADZONE} expo=${STICK_EXPO} reverse roll=${ROLL_REVERSE} pitch=${PITCH_REVERSE} yaw=${YAW_REVERSE} throttle=${THROTTLE_REVERSE}"
 echo "[test-att] rate limits dps: roll=${MAX_ROLL_RATE_DPS} pitch=${MAX_PITCH_RATE_DPS} yaw=${MAX_YAW_RATE_DPS}; angle limits deg: roll=${MAX_ROLL_DEG} pitch=${MAX_PITCH_DEG}"
+echo "[test-att] attitude feedback KAng: roll=${ATTITUDE_KANG_ROLL} pitch=${ATTITUDE_KANG_PITCH} yaw=${ATTITUDE_KANG_YAW}; bodyrate clamp dps: roll=${MAX_BODYRATE_ROLL_DPS} pitch=${MAX_BODYRATE_PITCH_DPS} yaw=${MAX_BODYRATE_YAW_DPS}"
 echo "[test-att] thrust base=${THRUST_BASE} min=${THRUST_MIN} max=${THRUST_MAX} ramp=${THRUST_RAMP_PER_S}/s slew=${THRUST_SLEW_PER_S}/s"
 echo "[test-att] setpoint_output_mode=${SETPOINT_OUTPUT_MODE} setpoint_alignment_mode=${SETPOINT_ALIGNMENT_MODE}"
 echo "[test-att] attitude mode: /test_att/reference_rpy is FCU setpoint, /test_att/desired_rpy is stick-integrated target"
-echo "[test-att] bodyrate mode: use /test_att/reference_bodyrate and /test_att/actual_bodyrate as primary signals"
+echo "[test-att] bodyrate mode: direct RC bodyrate; attitude_bodyrate mode: IMU attitude feedback -> bodyrate setpoint"
 echo "[test-att] this script does not start px4ctrl or publish /position_cmd."
 echo "[test-att] trigger sequence: press Enter in this terminal, then raise CH${TEST_ATT_CHANNEL}; node streams setpoint, requests OFFBOARD, arms, and ramps thrust."
 
@@ -148,6 +161,12 @@ exec ros2 run px4ctrl test_attitude_mode_node --ros-args \
   -p max_yaw_rate_dps:="${MAX_YAW_RATE_DPS_P}" \
   -p max_roll_deg:="${MAX_ROLL_DEG_P}" \
   -p max_pitch_deg:="${MAX_PITCH_DEG_P}" \
+  -p attitude_kang_roll:="${ATTITUDE_KANG_ROLL_P}" \
+  -p attitude_kang_pitch:="${ATTITUDE_KANG_PITCH_P}" \
+  -p attitude_kang_yaw:="${ATTITUDE_KANG_YAW_P}" \
+  -p max_bodyrate_roll_dps:="${MAX_BODYRATE_ROLL_DPS_P}" \
+  -p max_bodyrate_pitch_dps:="${MAX_BODYRATE_PITCH_DPS_P}" \
+  -p max_bodyrate_yaw_dps:="${MAX_BODYRATE_YAW_DPS_P}" \
   -p thrust_base:="${THRUST_BASE_P}" \
   -p thrust_min:="${THRUST_MIN_P}" \
   -p thrust_max:="${THRUST_MAX_P}" \
