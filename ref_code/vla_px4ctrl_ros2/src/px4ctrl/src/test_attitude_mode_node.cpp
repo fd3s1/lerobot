@@ -236,9 +236,9 @@ public:
     yaw_reverse_ = declare_parameter<bool>("yaw_reverse", true);
     throttle_reverse_ = declare_parameter<bool>("throttle_reverse", false);
 
-    max_roll_rate_ = deg2rad(declare_parameter<double>("max_roll_rate_dps", 45.0));
-    max_pitch_rate_ = deg2rad(declare_parameter<double>("max_pitch_rate_dps", 45.0));
-    max_yaw_rate_ = deg2rad(declare_parameter<double>("max_yaw_rate_dps", 60.0));
+    max_roll_rate_ = deg2rad(declare_parameter<double>("max_roll_rate_dps", 50.0));
+    max_pitch_rate_ = deg2rad(declare_parameter<double>("max_pitch_rate_dps", 50.0));
+    max_yaw_rate_ = deg2rad(declare_parameter<double>("max_yaw_rate_dps", 66.0));
     max_roll_ = deg2rad(declare_parameter<double>("max_roll_deg", 35.0));
     max_pitch_ = deg2rad(declare_parameter<double>("max_pitch_deg", 35.0));
     attitude_kang_ = Eigen::Vector3d(
@@ -252,7 +252,7 @@ public:
 
     thrust_base_ = declare_parameter<double>("thrust_base", 0.35);
     thrust_min_ = declare_parameter<double>("thrust_min", 0.20);
-    thrust_max_ = declare_parameter<double>("thrust_max", 0.45);
+    thrust_max_ = declare_parameter<double>("thrust_max", 0.60);
     thrust_ramp_per_s_ = declare_parameter<double>("thrust_ramp_per_s", 0.05);
     thrust_slew_per_s_ = declare_parameter<double>("thrust_slew_per_s", 0.20);
     require_armed_for_thrust_ramp_ = declare_parameter<bool>("require_armed_for_thrust_ramp", true);
@@ -400,9 +400,9 @@ private:
       thrust_max_ = 1.0;
     }
     if (thrust_min_ > thrust_max_) {
-      RCLCPP_WARN(get_logger(), "thrust_min > thrust_max; resetting to [0.20, 0.45]");
+      RCLCPP_WARN(get_logger(), "thrust_min > thrust_max; resetting to [0.20, 0.60]");
       thrust_min_ = 0.20;
-      thrust_max_ = 0.45;
+      thrust_max_ = 0.60;
     }
     if (thrust_base_ < thrust_min_ || thrust_base_ > thrust_max_) {
       RCLCPP_WARN(
@@ -1033,16 +1033,16 @@ private:
   bool pitch_reverse_{false};
   bool yaw_reverse_{true};
   bool throttle_reverse_{false};
-  double max_roll_rate_{deg2rad(45.0)};
-  double max_pitch_rate_{deg2rad(45.0)};
-  double max_yaw_rate_{deg2rad(60.0)};
+  double max_roll_rate_{deg2rad(50.0)};
+  double max_pitch_rate_{deg2rad(50.0)};
+  double max_yaw_rate_{deg2rad(66.0)};
   double max_roll_{deg2rad(35.0)};
   double max_pitch_{deg2rad(35.0)};
   Eigen::Vector3d attitude_kang_{6.0, 6.0, 3.0};
   Eigen::Vector3d max_bodyrate_cmd_{deg2rad(143.0), deg2rad(143.0), deg2rad(86.0)};
   double thrust_base_{0.35};
   double thrust_min_{0.20};
-  double thrust_max_{0.45};
+  double thrust_max_{0.60};
   double thrust_ramp_per_s_{0.05};
   double thrust_slew_per_s_{0.20};
   bool require_armed_for_thrust_ramp_{true};
