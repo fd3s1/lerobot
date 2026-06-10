@@ -23,7 +23,6 @@ MAVROS_FULL_PLUGINLISTS_FILE="${MAVROS_FULL_PLUGINLISTS_FILE:-/opt/ros/humble/sh
 START_PX4CTRL="${START_PX4CTRL:-true}"
 PX4CTRL_GRIPPER_RC_CHANNEL="${PX4CTRL_GRIPPER_RC_CHANNEL:-}"
 PX4CTRL_TAKEOFF_LAND_SPEED="${PX4CTRL_TAKEOFF_LAND_SPEED:-}"
-PX4CTRL_TD_ENABLE="${PX4CTRL_TD_ENABLE:-}"
 
 PIDS=()
 CLEANED_UP=false
@@ -81,9 +80,6 @@ fi
 if [[ -n "${PX4CTRL_TAKEOFF_LAND_SPEED}" ]]; then
   echo "[run-mocap-mavros] px4ctrl auto_takeoff_land.takeoff_land_speed override: ${PX4CTRL_TAKEOFF_LAND_SPEED}"
 fi
-if [[ -n "${PX4CTRL_TD_ENABLE}" ]]; then
-  echo "[run-mocap-mavros] px4ctrl td.enable override: ${PX4CTRL_TD_ENABLE}"
-fi
 
 if [[ "${MAVROS_LIGHT}" == "true" ]]; then
   MAVROS_PLUGINLISTS_FILE="${MAVROS_LIGHT_PLUGINLISTS_FILE}"
@@ -125,9 +121,6 @@ if [[ "${START_PX4CTRL}" == "true" ]]; then
   fi
   if [[ -n "${PX4CTRL_TAKEOFF_LAND_SPEED}" ]]; then
     px4ctrl_args+=(-p "auto_takeoff_land.takeoff_land_speed:=${PX4CTRL_TAKEOFF_LAND_SPEED}")
-  fi
-  if [[ -n "${PX4CTRL_TD_ENABLE}" ]]; then
-    px4ctrl_args+=(-p "td.enable:=${PX4CTRL_TD_ENABLE}")
   fi
   start_process "${px4ctrl_args[@]}"
 else

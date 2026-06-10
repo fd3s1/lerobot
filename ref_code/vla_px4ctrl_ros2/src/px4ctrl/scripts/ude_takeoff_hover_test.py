@@ -6,6 +6,7 @@ import argparse
 import copy
 import math
 import random
+import subprocess
 import sys
 import threading
 import time
@@ -162,6 +163,46 @@ class TakeoffHoverTest(Node):
                 "Startup inputs are not ready: " + ", ".join(missing)
             )
         return ready
+
+    def set_td_enable_if_requested(self) -> bool:
+        if self.args.td_enable is None:
+            return True
+
+        value = self.args.td_enable
+        deadline = time.monotonic() + max(0.1, self.args.td_param_timeout_s)
+        last_error = ""
+        self.get_logger().info(f"Setting /px4ctrl td.enable={value} before TAKEOFF.")
+
+        while rclpy.ok() and time.monotonic() < deadline:
+            try:
+                result = subprocess.run(
+                    ["ros2", "param", "set", "/px4ctrl", "td.enable", value],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=2.0,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                last_error = "ros2 param set timed out"
+            except OSError as exc:
+                last_error = str(exc)
+            else:
+                if result.returncode == 0:
+                    output = result.stdout.strip()
+                    if output:
+                        self.get_logger().info(output)
+                    self.get_logger().info(f"/px4ctrl td.enable is now {value}.")
+                    return True
+                last_error = (result.stderr or result.stdout).strip()
+
+            time.sleep(0.5)
+
+        self.get_logger().error(
+            f"Failed to set /px4ctrl td.enable={value} within "
+            f"{self.args.td_param_timeout_s:.1f}s: {last_error}"
+        )
+        return False
 
     def publish_takeoff(self) -> None:
         msg = TakeoffLand()
@@ -592,6 +633,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-mavros-connected-check", action="store_true")
     parser.add_argument("--skip-setpoint-check", action="store_true")
     parser.add_argument("--require-vision-pose", action="store_true")
+    parser.add_argument("--td-enable", choices=("true", "false"), default=None)
+    parser.add_argument("--td-param-timeout-s", type=float, default=10.0)
     return parser
 
 
@@ -610,6 +653,9 @@ def main(argv: list[str] | None = None) -> int:
     exit_code = 0
     try:
         if not node.wait_for_startup():
+            return 1
+
+        if not node.set_td_enable_if_requested():
             return 1
 
         node.print_status()

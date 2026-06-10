@@ -57,41 +57,6 @@ normalize_bool() {
   esac
 }
 
-set_px4ctrl_td_enable() {
-  local requested="$1"
-  local normalized
-  if ! normalized="$(normalize_bool "${requested}")"; then
-    echo "[ude-test] invalid TEST_TD_ENABLE=${requested}; use true or false" >&2
-    return 1
-  fi
-
-  echo "[ude-test] setting /px4ctrl td.enable=${normalized}"
-  local deadline
-  deadline="$(python3 - <<PY
-import time
-print(time.monotonic() + float("${TEST_TD_PARAM_TIMEOUT_S}"))
-PY
-)"
-  while true; do
-    if ros2 param set /px4ctrl td.enable "${normalized}" >/tmp/ude_test_td_param_set.log 2>&1; then
-      cat /tmp/ude_test_td_param_set.log
-      rm -f /tmp/ude_test_td_param_set.log
-      return 0
-    fi
-    if python3 - <<PY
-import time, sys
-sys.exit(0 if time.monotonic() >= float("${deadline}") else 1)
-PY
-    then
-      cat /tmp/ude_test_td_param_set.log >&2 || true
-      rm -f /tmp/ude_test_td_param_set.log
-      echo "[ude-test] failed to set /px4ctrl td.enable within ${TEST_TD_PARAM_TIMEOUT_S}s" >&2
-      return 1
-    fi
-    sleep 0.5
-  done
-}
-
 cleanup_stack() {
   if [[ -z "${STACK_PID}" ]]; then
     return
@@ -151,10 +116,6 @@ set -u
 if [[ "${START_STACK}" == "true" ]]; then
   echo "[ude-test] starting mocap/MAVROS/bridge/px4ctrl stack"
   export START_PX4CTRL
-  if [[ -n "${TD_ENABLE_NORMALIZED}" && "${START_PX4CTRL}" == "true" ]]; then
-    export PX4CTRL_TD_ENABLE="${TD_ENABLE_NORMALIZED}"
-    echo "[ude-test] TD mode: px4ctrl launch override td.enable=${TD_ENABLE_NORMALIZED}"
-  fi
   if [[ "${QUIET_STACK_OUTPUT}" == "true" ]]; then
     mkdir -p "${STACK_LOG_DIR}"
     STACK_LOG_FILE="${STACK_LOG_DIR}/ude_takeoff_hover_stack_$(date +%Y%m%d_%H%M%S).log"
@@ -170,15 +131,14 @@ else
   echo "[ude-test] START_STACK=false; using already-running ROS2 stack"
 fi
 
-if [[ -n "${TD_ENABLE_NORMALIZED}" && ! ( "${START_STACK}" == "true" && "${START_PX4CTRL}" == "true" ) ]]; then
-  set_px4ctrl_td_enable "${TD_ENABLE_NORMALIZED}"
-elif [[ -n "${TD_ENABLE_NORMALIZED}" ]]; then
-  echo "[ude-test] TD mode: using launch override already passed to px4ctrl"
+HELPER_ARGS=("$@")
+if [[ -n "${TD_ENABLE_NORMALIZED}" ]]; then
+  HELPER_ARGS+=("--td-enable" "${TD_ENABLE_NORMALIZED}")
+  HELPER_ARGS+=("--td-param-timeout-s" "${TEST_TD_PARAM_TIMEOUT_S}")
+  echo "[ude-test] TD mode: helper will set /px4ctrl td.enable=${TD_ENABLE_NORMALIZED} after startup inputs are live"
 else
   echo "[ude-test] TD mode: using px4ctrl YAML/runtime default"
 fi
-
-HELPER_ARGS=("$@")
 if [[ "${TEST_ENTER_CMD}" == "true" ]]; then
   HELPER_ARGS+=("--enter-cmd")
 fi
