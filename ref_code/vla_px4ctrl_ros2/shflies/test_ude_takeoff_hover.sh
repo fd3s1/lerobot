@@ -16,6 +16,8 @@ TEST_PUBLISH_TAKEOFF="${TEST_PUBLISH_TAKEOFF:-true}"
 TEST_AUTO_CONFIRM="${TEST_AUTO_CONFIRM:-false}"
 TEST_RUN_WAYPOINTS="${TEST_RUN_WAYPOINTS:-true}"
 TEST_AXIS="${TEST_AXIS:-x}"
+TEST_TD_ENABLE="${TEST_TD_ENABLE:-}"
+TEST_TD_PARAM_TIMEOUT_S="${TEST_TD_PARAM_TIMEOUT_S:-10}"
 TEST_WP_MODE="${TEST_WP_MODE:-toggle}"
 TEST_WP_X_LOW="${TEST_WP_X_LOW:--1.0}"
 TEST_WP_X_HIGH="${TEST_WP_X_HIGH:-1.0}"
@@ -39,6 +41,55 @@ TEST_WP_Z_MAX="${TEST_WP_Z_MAX:-2.5}"
 
 STACK_PID=""
 HELPER_STATUS=0
+
+normalize_bool() {
+  case "$1" in
+    true|TRUE|True|1|yes|YES|Yes|on|ON|On)
+      printf "true"
+      ;;
+    false|FALSE|False|0|no|NO|No|off|OFF|Off)
+      printf "false"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+set_px4ctrl_td_enable() {
+  local requested="$1"
+  local normalized
+  if ! normalized="$(normalize_bool "${requested}")"; then
+    echo "[ude-test] invalid TEST_TD_ENABLE=${requested}; use true or false" >&2
+    return 1
+  fi
+
+  echo "[ude-test] setting /px4ctrl td.enable=${normalized}"
+  local deadline
+  deadline="$(python3 - <<PY
+import time
+print(time.monotonic() + float("${TEST_TD_PARAM_TIMEOUT_S}"))
+PY
+)"
+  while true; do
+    if ros2 param set /px4ctrl td.enable "${normalized}" >/tmp/ude_test_td_param_set.log 2>&1; then
+      cat /tmp/ude_test_td_param_set.log
+      rm -f /tmp/ude_test_td_param_set.log
+      return 0
+    fi
+    if python3 - <<PY
+import time, sys
+sys.exit(0 if time.monotonic() >= float("${deadline}") else 1)
+PY
+    then
+      cat /tmp/ude_test_td_param_set.log >&2 || true
+      rm -f /tmp/ude_test_td_param_set.log
+      echo "[ude-test] failed to set /px4ctrl td.enable within ${TEST_TD_PARAM_TIMEOUT_S}s" >&2
+      return 1
+    fi
+    sleep 0.5
+  done
+}
 
 cleanup_stack() {
   if [[ -z "${STACK_PID}" ]]; then
@@ -105,6 +156,12 @@ if [[ "${START_STACK}" == "true" ]]; then
   sleep "${STACK_STARTUP_WAIT_S}"
 else
   echo "[ude-test] START_STACK=false; using already-running ROS2 stack"
+fi
+
+if [[ -n "${TEST_TD_ENABLE}" ]]; then
+  set_px4ctrl_td_enable "${TEST_TD_ENABLE}"
+else
+  echo "[ude-test] TD mode: using px4ctrl YAML/runtime default"
 fi
 
 HELPER_ARGS=("$@")

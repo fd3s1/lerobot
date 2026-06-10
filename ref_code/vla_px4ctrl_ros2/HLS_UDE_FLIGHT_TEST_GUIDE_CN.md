@@ -72,6 +72,7 @@ ros2 topic echo --once /mavros/state
 cd /home/user/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
 
 TEST_AXIS=x \
+TEST_TD_ENABLE=false \
 bash shflies/test_ude_takeoff_hover.sh
 ```
 
@@ -79,6 +80,7 @@ bash shflies/test_ude_takeoff_hover.sh
 
 - 自动发布 `/px4ctrl/takeoff_land` 的 `TAKEOFF`，但默认会先停止底层 stack 刷屏并等待按一次 Enter 确认；设置 `TEST_AUTO_CONFIRM=true` 可取消确认。
 - RC 门控只看 px4ctrl 的 CH5/CH6 hover/command，不看 CH10。
+- `TEST_TD_ENABLE=true|false` 会在启动后设置 `/px4ctrl td.enable`；不设置则使用 YAML 默认值。单独调 UDE 时建议先用 `TEST_TD_ENABLE=false`。
 - `TEST_AXIS=x|y|z` 决定本次只测试哪个轴；非测试轴和 yaw 保持 origin，不随飞机当前位置漂移。
 - 默认 `TEST_WP_MODE=toggle`：`x=-1.0 <-> +1.0`，`y=-1.0 <-> +1.0`，`z=0.6 <-> 1.2`。
 - 固定两端 waypoint 是 mocap/map 坐标下的绝对值；非测试轴仍保持 origin。
