@@ -41,6 +41,7 @@ TEST_WP_Z_MAX="${TEST_WP_Z_MAX:-2.5}"
 
 STACK_PID=""
 HELPER_STATUS=0
+TD_ENABLE_NORMALIZED=""
 
 normalize_bool() {
   case "$1" in
@@ -124,6 +125,13 @@ on_interrupt() {
 trap on_interrupt INT TERM
 trap cleanup_stack EXIT
 
+if [[ -n "${TEST_TD_ENABLE}" ]]; then
+  if ! TD_ENABLE_NORMALIZED="$(normalize_bool "${TEST_TD_ENABLE}")"; then
+    echo "[ude-test] invalid TEST_TD_ENABLE=${TEST_TD_ENABLE}; use true or false" >&2
+    exit 1
+  fi
+fi
+
 set +u
 if [[ -f /opt/ros/humble/setup.bash ]]; then
   # shellcheck source=/opt/ros/humble/setup.bash
@@ -143,6 +151,10 @@ set -u
 if [[ "${START_STACK}" == "true" ]]; then
   echo "[ude-test] starting mocap/MAVROS/bridge/px4ctrl stack"
   export START_PX4CTRL
+  if [[ -n "${TD_ENABLE_NORMALIZED}" && "${START_PX4CTRL}" == "true" ]]; then
+    export PX4CTRL_TD_ENABLE="${TD_ENABLE_NORMALIZED}"
+    echo "[ude-test] TD mode: px4ctrl launch override td.enable=${TD_ENABLE_NORMALIZED}"
+  fi
   if [[ "${QUIET_STACK_OUTPUT}" == "true" ]]; then
     mkdir -p "${STACK_LOG_DIR}"
     STACK_LOG_FILE="${STACK_LOG_DIR}/ude_takeoff_hover_stack_$(date +%Y%m%d_%H%M%S).log"
@@ -158,8 +170,10 @@ else
   echo "[ude-test] START_STACK=false; using already-running ROS2 stack"
 fi
 
-if [[ -n "${TEST_TD_ENABLE}" ]]; then
-  set_px4ctrl_td_enable "${TEST_TD_ENABLE}"
+if [[ -n "${TD_ENABLE_NORMALIZED}" && ! ( "${START_STACK}" == "true" && "${START_PX4CTRL}" == "true" ) ]]; then
+  set_px4ctrl_td_enable "${TD_ENABLE_NORMALIZED}"
+elif [[ -n "${TD_ENABLE_NORMALIZED}" ]]; then
+  echo "[ude-test] TD mode: using launch override already passed to px4ctrl"
 else
   echo "[ude-test] TD mode: using px4ctrl YAML/runtime default"
 fi
