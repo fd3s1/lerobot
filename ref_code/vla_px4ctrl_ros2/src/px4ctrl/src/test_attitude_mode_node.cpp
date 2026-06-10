@@ -239,8 +239,8 @@ public:
     max_roll_rate_ = deg2rad(declare_parameter<double>("max_roll_rate_dps", 50.0));
     max_pitch_rate_ = deg2rad(declare_parameter<double>("max_pitch_rate_dps", 50.0));
     max_yaw_rate_ = deg2rad(declare_parameter<double>("max_yaw_rate_dps", 66.0));
-    max_roll_ = deg2rad(declare_parameter<double>("max_roll_deg", 35.0));
-    max_pitch_ = deg2rad(declare_parameter<double>("max_pitch_deg", 35.0));
+    max_roll_ = deg2rad(declare_parameter<double>("max_roll_deg", 45.0));
+    max_pitch_ = deg2rad(declare_parameter<double>("max_pitch_deg", 45.0));
     attitude_kang_ = Eigen::Vector3d(
       declare_parameter<double>("attitude_kang_roll", 6.0),
       declare_parameter<double>("attitude_kang_pitch", 6.0),
@@ -1036,8 +1036,8 @@ private:
   double max_roll_rate_{deg2rad(50.0)};
   double max_pitch_rate_{deg2rad(50.0)};
   double max_yaw_rate_{deg2rad(66.0)};
-  double max_roll_{deg2rad(35.0)};
-  double max_pitch_{deg2rad(35.0)};
+  double max_roll_{deg2rad(45.0)};
+  double max_pitch_{deg2rad(45.0)};
   Eigen::Vector3d attitude_kang_{6.0, 6.0, 3.0};
   Eigen::Vector3d max_bodyrate_cmd_{deg2rad(143.0), deg2rad(143.0), deg2rad(86.0)};
   double thrust_base_{0.35};
