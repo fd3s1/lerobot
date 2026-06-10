@@ -69,8 +69,8 @@ px4ctrl:
 
     cmd_feedforward:
       enable: false
-      max_velocity: 2.0
-      max_acceleration: 2.0
+      max_velocity: 4.0
+      max_acceleration: 5.0
 
     td:
       enable: true
@@ -78,17 +78,17 @@ px4ctrl:
 
     controller:
       gravity: 9.81
-      max_angle_deg: 35.0
-      max_bodyrate_x: 2.5
-      max_bodyrate_y: 2.5
-      max_bodyrate_z: 1.5
+      max_angle_deg: 45.0
+      max_bodyrate_x: 5
+      max_bodyrate_y: 5
+      max_bodyrate_z: 5
       min_thrust: 0.05
       max_thrust: 0.90
 
     ude:
-      Kp_diag: [0.5,0.8,2.0]
-      Kd_diag: [1.0,1.3,2.0]
-      T_diag: [1.0, 0.4, 0.4]
+      Kp_diag: [0.5,0.8,1.3]
+      Kd_diag: [1.0,1.3,1.8]
+      T_diag: [0.4, 0.4, 0.2]
       max_f_hat: [5.0, 5.0, 5.0]
       max_u_acc: [5.0, 5.0, 5.0]
 
