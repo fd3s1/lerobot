@@ -80,8 +80,8 @@ px4ctrl:
     mocap_state:
       enable: true
       twist_frame: map
-      max_pair_dt_s: 0.02
-      max_odom_attitude_dt_s: 0.03
+      max_pair_dt_s: 0.08
+      max_odom_attitude_dt_s: 0.08
       fallback_to_odom: true
 
     td:
