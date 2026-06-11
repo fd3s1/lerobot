@@ -148,18 +148,20 @@ Controller_Output_t LinearControl::calculateControl(
   const Eigen::Vector3d e = des.p - odom.p;
   const Eigen::Vector3d e_dot = des.v - odom.v;
   const Eigen::Vector3d u0 = Kp.asDiagonal() * e + Kd.asDiagonal() * e_dot;
-  if (dt > 0.0 && u0.allFinite()) {
+  if (param_.ude.enable && dt > 0.0 && u0.allFinite()) {
     integral_u0_ += u0 * dt;
   }
 
   Eigen::Vector3d f_hat = Eigen::Vector3d::Zero();
-  for (int i = 0; i < 3; ++i) {
-    const double t_i = std::max(std::abs(T(i)), 1e-3);
-    f_hat(i) = (odom.v(i) - integral_u0_(i)) / t_i;
+  if (param_.ude.enable) {
+    for (int i = 0; i < 3; ++i) {
+      const double t_i = std::max(std::abs(T(i)), 1e-3);
+      f_hat(i) = (odom.v(i) - integral_u0_(i)) / t_i;
+    }
+    f_hat = clampVectorByAxis(f_hat, param_.ude.max_f_hat);
   }
-  f_hat = clampVectorByAxis(f_hat, param_.ude.max_f_hat);
 
-  Eigen::Vector3d u_acc = u0 - f_hat;
+  Eigen::Vector3d u_acc = param_.ude.enable ? (u0 - f_hat) : u0;
   u_acc = clampVectorByAxis(u_acc, param_.ude.max_u_acc);
 
   Eigen::Vector3d thrust_acc =

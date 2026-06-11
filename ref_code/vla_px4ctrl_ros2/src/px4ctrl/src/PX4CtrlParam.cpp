@@ -206,6 +206,7 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
   controller.max_thrust =
     node.declare_parameter<double>("controller.max_thrust", controller.max_thrust);
 
+  ude.enable = node.declare_parameter<bool>("ude.enable", ude.enable);
   declare_diag_parameter(node, "ude.Kp_diag", ude.Kp_diag);
   declare_diag_parameter(node, "ude.Kd_diag", ude.Kd_diag);
   declare_diag_parameter(node, "ude.T_diag", ude.T_diag);
@@ -247,7 +248,12 @@ rcl_interfaces::msg::SetParametersResult Parameter_t::apply_runtime_parameters(
 
   for (const auto &param : params) {
     const std::string &name = param.get_name();
-    if (name == "ude.Kp_diag") {
+    if (name == "ude.enable") {
+      if (param.get_type() != rclcpp::ParameterType::PARAMETER_BOOL) {
+        return make_param_result(false, "ude.enable must be a bool.");
+      }
+      next.ude.enable = param.as_bool();
+    } else if (name == "ude.Kp_diag") {
       if (!vector_to_array(param, next.ude.Kp_diag, name.c_str(), 0.0, 20.0, false, reason)) {
         return make_param_result(false, reason);
       }

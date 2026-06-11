@@ -16,6 +16,8 @@ TEST_PUBLISH_TAKEOFF="${TEST_PUBLISH_TAKEOFF:-true}"
 TEST_AUTO_CONFIRM="${TEST_AUTO_CONFIRM:-false}"
 TEST_RUN_WAYPOINTS="${TEST_RUN_WAYPOINTS:-true}"
 TEST_AXIS="${TEST_AXIS:-x}"
+TEST_UDE_ENABLE="${TEST_UDE_ENABLE:-}"
+TEST_UDE_PARAM_TIMEOUT_S="${TEST_UDE_PARAM_TIMEOUT_S:-10}"
 TEST_TD_ENABLE="${TEST_TD_ENABLE:-}"
 TEST_TD_PARAM_TIMEOUT_S="${TEST_TD_PARAM_TIMEOUT_S:-10}"
 TEST_WP_MODE="${TEST_WP_MODE:-toggle}"
@@ -41,6 +43,7 @@ TEST_WP_Z_MAX="${TEST_WP_Z_MAX:-2.5}"
 
 STACK_PID=""
 HELPER_STATUS=0
+UDE_ENABLE_NORMALIZED=""
 TD_ENABLE_NORMALIZED=""
 
 normalize_bool() {
@@ -90,6 +93,13 @@ on_interrupt() {
 trap on_interrupt INT TERM
 trap cleanup_stack EXIT
 
+if [[ -n "${TEST_UDE_ENABLE}" ]]; then
+  if ! UDE_ENABLE_NORMALIZED="$(normalize_bool "${TEST_UDE_ENABLE}")"; then
+    echo "[ude-test] invalid TEST_UDE_ENABLE=${TEST_UDE_ENABLE}; use true or false" >&2
+    exit 1
+  fi
+fi
+
 if [[ -n "${TEST_TD_ENABLE}" ]]; then
   if ! TD_ENABLE_NORMALIZED="$(normalize_bool "${TEST_TD_ENABLE}")"; then
     echo "[ude-test] invalid TEST_TD_ENABLE=${TEST_TD_ENABLE}; use true or false" >&2
@@ -132,6 +142,13 @@ else
 fi
 
 HELPER_ARGS=("$@")
+if [[ -n "${UDE_ENABLE_NORMALIZED}" ]]; then
+  HELPER_ARGS+=("--ude-enable" "${UDE_ENABLE_NORMALIZED}")
+  HELPER_ARGS+=("--ude-param-timeout-s" "${TEST_UDE_PARAM_TIMEOUT_S}")
+  echo "[ude-test] UDE mode: helper will set /px4ctrl ude.enable=${UDE_ENABLE_NORMALIZED} after startup inputs are live"
+else
+  echo "[ude-test] UDE mode: using px4ctrl YAML/runtime default"
+fi
 if [[ -n "${TD_ENABLE_NORMALIZED}" ]]; then
   HELPER_ARGS+=("--td-enable" "${TD_ENABLE_NORMALIZED}")
   HELPER_ARGS+=("--td-param-timeout-s" "${TEST_TD_PARAM_TIMEOUT_S}")

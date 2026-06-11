@@ -164,19 +164,24 @@ class TakeoffHoverTest(Node):
             )
         return ready
 
-    def set_td_enable_if_requested(self) -> bool:
-        if self.args.td_enable is None:
+    def set_px4ctrl_bool_param_if_requested(
+        self,
+        *,
+        param_name: str,
+        value: str | None,
+        timeout_s: float,
+    ) -> bool:
+        if value is None:
             return True
 
-        value = self.args.td_enable
-        deadline = time.monotonic() + max(0.1, self.args.td_param_timeout_s)
+        deadline = time.monotonic() + max(0.1, timeout_s)
         last_error = ""
-        self.get_logger().info(f"Setting /px4ctrl td.enable={value} before TAKEOFF.")
+        self.get_logger().info(f"Setting /px4ctrl {param_name}={value} before TAKEOFF.")
 
         while rclpy.ok() and time.monotonic() < deadline:
             try:
                 result = subprocess.run(
-                    ["ros2", "param", "set", "/px4ctrl", "td.enable", value],
+                    ["ros2", "param", "set", "/px4ctrl", param_name, value],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
@@ -192,17 +197,31 @@ class TakeoffHoverTest(Node):
                     output = result.stdout.strip()
                     if output:
                         self.get_logger().info(output)
-                    self.get_logger().info(f"/px4ctrl td.enable is now {value}.")
+                    self.get_logger().info(f"/px4ctrl {param_name} is now {value}.")
                     return True
                 last_error = (result.stderr or result.stdout).strip()
 
             time.sleep(0.5)
 
         self.get_logger().error(
-            f"Failed to set /px4ctrl td.enable={value} within "
-            f"{self.args.td_param_timeout_s:.1f}s: {last_error}"
+            f"Failed to set /px4ctrl {param_name}={value} within "
+            f"{timeout_s:.1f}s: {last_error}"
         )
         return False
+
+    def set_ude_enable_if_requested(self) -> bool:
+        return self.set_px4ctrl_bool_param_if_requested(
+            param_name="ude.enable",
+            value=self.args.ude_enable,
+            timeout_s=self.args.ude_param_timeout_s,
+        )
+
+    def set_td_enable_if_requested(self) -> bool:
+        return self.set_px4ctrl_bool_param_if_requested(
+            param_name="td.enable",
+            value=self.args.td_enable,
+            timeout_s=self.args.td_param_timeout_s,
+        )
 
     def publish_takeoff(self) -> None:
         msg = TakeoffLand()
@@ -633,6 +652,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-mavros-connected-check", action="store_true")
     parser.add_argument("--skip-setpoint-check", action="store_true")
     parser.add_argument("--require-vision-pose", action="store_true")
+    parser.add_argument("--ude-enable", choices=("true", "false"), default=None)
+    parser.add_argument("--ude-param-timeout-s", type=float, default=10.0)
     parser.add_argument("--td-enable", choices=("true", "false"), default=None)
     parser.add_argument("--td-param-timeout-s", type=float, default=10.0)
     return parser
@@ -653,6 +674,9 @@ def main(argv: list[str] | None = None) -> int:
     exit_code = 0
     try:
         if not node.wait_for_startup():
+            return 1
+
+        if not node.set_ude_enable_if_requested():
             return 1
 
         if not node.set_td_enable_if_requested():

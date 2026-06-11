@@ -115,6 +115,7 @@ public:
 
   struct Ude
   {
+    bool enable{true};
     std::array<double, 3> Kp_diag{1.0, 1.0, 1.0};
     std::array<double, 3> Kd_diag{2.0, 2.0, 2.0};
     std::array<double, 3> T_diag{1.0, 1.0, 1.0};
