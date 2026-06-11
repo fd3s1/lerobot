@@ -45,6 +45,7 @@ STACK_PID=""
 HELPER_STATUS=0
 UDE_ENABLE_NORMALIZED=""
 TD_ENABLE_NORMALIZED=""
+PARAM_OVERRIDES_VIA_LAUNCH=false
 
 normalize_bool() {
   case "$1" in
@@ -65,11 +66,24 @@ cleanup_stack() {
     return
   fi
 
+  local child_pids=()
+  while IFS= read -r child_pid; do
+    if [[ -n "${child_pid}" ]]; then
+      child_pids+=("${child_pid}")
+    fi
+  done < <(pgrep -P "${STACK_PID}" 2>/dev/null || true)
+
   if [[ "${CLEANUP_STACK_ON_EXIT}" == "true" ]] ||
      [[ "${CLEANUP_STACK_ON_EXIT}" == "auto" && "${HELPER_STATUS}" != "20" ]]; then
     echo "[ude-test] stopping mocap/MAVROS/bridge/px4ctrl stack"
     kill -TERM -- "-${STACK_PID}" 2>/dev/null || kill -TERM "${STACK_PID}" 2>/dev/null || true
+    for child_pid in "${child_pids[@]:-}"; do
+      kill -TERM -- "-${child_pid}" 2>/dev/null || kill -TERM "${child_pid}" 2>/dev/null || true
+    done
     sleep 1
+    for child_pid in "${child_pids[@]:-}"; do
+      kill -KILL -- "-${child_pid}" 2>/dev/null || kill -KILL "${child_pid}" 2>/dev/null || true
+    done
     kill -KILL -- "-${STACK_PID}" 2>/dev/null || kill -KILL "${STACK_PID}" 2>/dev/null || true
   else
     echo "[ude-test] leaving stack running because the vehicle may still be airborne"
@@ -126,6 +140,18 @@ set -u
 if [[ "${START_STACK}" == "true" ]]; then
   echo "[ude-test] starting mocap/MAVROS/bridge/px4ctrl stack"
   export START_PX4CTRL
+  if [[ "${START_PX4CTRL}" == "true" ]]; then
+    if [[ -n "${UDE_ENABLE_NORMALIZED}" ]]; then
+      export PX4CTRL_UDE_ENABLE="${UDE_ENABLE_NORMALIZED}"
+      PARAM_OVERRIDES_VIA_LAUNCH=true
+      echo "[ude-test] UDE mode: px4ctrl launch override ude.enable=${UDE_ENABLE_NORMALIZED}"
+    fi
+    if [[ -n "${TD_ENABLE_NORMALIZED}" ]]; then
+      export PX4CTRL_TD_ENABLE="${TD_ENABLE_NORMALIZED}"
+      PARAM_OVERRIDES_VIA_LAUNCH=true
+      echo "[ude-test] TD mode: px4ctrl launch override td.enable=${TD_ENABLE_NORMALIZED}"
+    fi
+  fi
   if [[ "${QUIET_STACK_OUTPUT}" == "true" ]]; then
     mkdir -p "${STACK_LOG_DIR}"
     STACK_LOG_FILE="${STACK_LOG_DIR}/ude_takeoff_hover_stack_$(date +%Y%m%d_%H%M%S).log"
@@ -143,16 +169,24 @@ fi
 
 HELPER_ARGS=("$@")
 if [[ -n "${UDE_ENABLE_NORMALIZED}" ]]; then
-  HELPER_ARGS+=("--ude-enable" "${UDE_ENABLE_NORMALIZED}")
-  HELPER_ARGS+=("--ude-param-timeout-s" "${TEST_UDE_PARAM_TIMEOUT_S}")
-  echo "[ude-test] UDE mode: helper will set /px4ctrl ude.enable=${UDE_ENABLE_NORMALIZED} after startup inputs are live"
+  if [[ "${PARAM_OVERRIDES_VIA_LAUNCH}" == "true" && "${START_PX4CTRL}" == "true" ]]; then
+    echo "[ude-test] UDE mode: using px4ctrl launch override already passed"
+  else
+    HELPER_ARGS+=("--ude-enable" "${UDE_ENABLE_NORMALIZED}")
+    HELPER_ARGS+=("--ude-param-timeout-s" "${TEST_UDE_PARAM_TIMEOUT_S}")
+    echo "[ude-test] UDE mode: helper will set /px4ctrl ude.enable=${UDE_ENABLE_NORMALIZED} after startup inputs are live"
+  fi
 else
   echo "[ude-test] UDE mode: using px4ctrl YAML/runtime default"
 fi
 if [[ -n "${TD_ENABLE_NORMALIZED}" ]]; then
-  HELPER_ARGS+=("--td-enable" "${TD_ENABLE_NORMALIZED}")
-  HELPER_ARGS+=("--td-param-timeout-s" "${TEST_TD_PARAM_TIMEOUT_S}")
-  echo "[ude-test] TD mode: helper will set /px4ctrl td.enable=${TD_ENABLE_NORMALIZED} after startup inputs are live"
+  if [[ "${PARAM_OVERRIDES_VIA_LAUNCH}" == "true" && "${START_PX4CTRL}" == "true" ]]; then
+    echo "[ude-test] TD mode: using px4ctrl launch override already passed"
+  else
+    HELPER_ARGS+=("--td-enable" "${TD_ENABLE_NORMALIZED}")
+    HELPER_ARGS+=("--td-param-timeout-s" "${TEST_TD_PARAM_TIMEOUT_S}")
+    echo "[ude-test] TD mode: helper will set /px4ctrl td.enable=${TD_ENABLE_NORMALIZED} after startup inputs are live"
+  fi
 else
   echo "[ude-test] TD mode: using px4ctrl YAML/runtime default"
 fi
