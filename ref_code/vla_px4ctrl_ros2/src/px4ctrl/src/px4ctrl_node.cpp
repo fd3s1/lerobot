@@ -2,6 +2,7 @@
 #include <memory>
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <mavros_msgs/msg/attitude_target.hpp>
 #include <mavros_msgs/msg/extended_state.hpp>
 #include <mavros_msgs/msg/rc_in.hpp>
@@ -59,6 +60,23 @@ int main(int argc, char *argv[])
     [&fsm, &node](const nav_msgs::msg::Odometry::SharedPtr msg) {
       fsm.odom_data.feed(msg, node->now());
     });
+
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr mocap_pose_sub;
+  rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr mocap_twist_sub;
+  if (param.mocap_state.enable) {
+    mocap_pose_sub = node->create_subscription<geometry_msgs::msg::PoseStamped>(
+      param.topics.mocap_pose,
+      mavros_sensor_qos,
+      [&fsm, &node](const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+        fsm.mocap_pose_data.feed(msg, node->now());
+      });
+    mocap_twist_sub = node->create_subscription<geometry_msgs::msg::TwistStamped>(
+      param.topics.mocap_twist,
+      mavros_sensor_qos,
+      [&fsm, &node](const geometry_msgs::msg::TwistStamped::SharedPtr msg) {
+        fsm.mocap_twist_data.feed(msg, node->now());
+      });
+  }
 
   auto imu_sub = node->create_subscription<sensor_msgs::msg::Imu>(
     param.topics.imu,
@@ -128,6 +146,8 @@ int main(int argc, char *argv[])
     node->create_publisher<std_msgs::msg::Float64MultiArray>(param.topics.ude_tune_status, 10);
   fsm.ude_tune_status_text_pub =
     node->create_publisher<std_msgs::msg::String>(param.topics.ude_tune_status_text, 10);
+  fsm.mocap_state_status_pub =
+    node->create_publisher<std_msgs::msg::String>(param.topics.mocap_state_status, 10);
   fsm.expert_pose_pub =
     node->create_publisher<geometry_msgs::msg::PoseStamped>(param.topics.expert_pose, 10);
   fsm.traj_start_trigger_pub =

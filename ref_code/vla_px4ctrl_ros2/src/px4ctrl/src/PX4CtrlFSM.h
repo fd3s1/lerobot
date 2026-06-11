@@ -53,6 +53,8 @@ public:
   State_Data_t state_data;
   ExtendedState_Data_t extended_state_data;
   Odom_Data_t odom_data;
+  MocapPose_Data_t mocap_pose_data;
+  MocapTwist_Data_t mocap_twist_data;
   Imu_Data_t imu_data;
   Command_Data_t cmd_data;
   Battery_Data_t bat_data;
@@ -70,6 +72,7 @@ public:
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr simulink_ude_debug_pub;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr ude_tune_status_pub;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr ude_tune_status_text_pub;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr mocap_state_status_pub;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr gripper_cmd_pub;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr fsm_state_pub;
   rclcpp::Client<mavros_msgs::srv::SetMode>::SharedPtr set_FCU_mode_srv;
@@ -103,6 +106,20 @@ private:
   double last_gripper_target{0.0};
   rclcpp::Time last_gripper_force_open_time{0, 0, RCL_ROS_TIME};
   bool had_valid_control_feedback{false};
+  Odom_Data_t control_odom_data;
+  struct MocapControlStatus
+  {
+    std::string p_source{"odom"};
+    std::string v_source{"odom"};
+    std::string reason{"not initialized"};
+    double pose_twist_dt_s{-1.0};
+    double mocap_odom_dt_s{-1.0};
+    bool pose_stamp_from_receive_time{false};
+    bool twist_stamp_from_receive_time{false};
+    bool odom_stamp_from_receive_time{false};
+  };
+  MocapControlStatus mocap_control_status;
+  rclcpp::Time last_mocap_status_publish_time{0, 0, RCL_ROS_TIME};
   struct TdTrackerState
   {
     bool initialized{false};
@@ -123,7 +140,7 @@ private:
   void motors_idling(Desired_State_t &des);
   void land_detector(State_t state, const Desired_State_t &des, const Odom_Data_t &odom);
   void set_start_pose_for_takeoff_land(const Odom_Data_t &odom);
-  void set_hov_with_odom();
+  void set_hov_with_odom(const Odom_Data_t &odom);
   void set_hov_with_rc();
   void publish_ctrl(const Controller_Output_t &u, const rclcpp::Time &stamp);
   void publish_expert_pose(const Desired_State_t &des, const rclcpp::Time &stamp);
@@ -135,6 +152,7 @@ private:
     const rclcpp::Time &stamp);
   void publish_simulink_ude_debug(const Controller_Debug_t &debug, const rclcpp::Time &stamp);
   void publish_ude_tune_status(double seq, bool accepted, double code, const std::string &text);
+  void publish_mocap_state_status(const rclcpp::Time &stamp, bool force = false);
   void publish_trigger(const Odom_Data_t &odom, const rclcpp::Time &stamp);
   void publish_fsm_state();
   void publish_gripper_safety(const rclcpp::Time &now_time);
@@ -144,6 +162,7 @@ private:
   bool px4_mode_allows_gripper_rc() const;
   bool should_force_gripper_open(const rclcpp::Time &now_time) const;
   void change_state(State_t new_state);
+  Odom_Data_t build_control_odom(const rclcpp::Time &now_time);
   Desired_State_t apply_td_reference(
     const Desired_State_t &raw_des,
     State_t source_state,

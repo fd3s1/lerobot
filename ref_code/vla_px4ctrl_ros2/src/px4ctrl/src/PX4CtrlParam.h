@@ -15,6 +15,8 @@ public:
   struct MsgTimeout
   {
     double odom{0.5};
+    double mocap_pose{0.3};
+    double mocap_twist{0.3};
     double imu{0.5};
     double rc{0.5};
     double cmd{0.5};
@@ -42,6 +44,8 @@ public:
   {
     std::string rc{"/mavros/rc/in"};
     std::string odom{"/mavros/local_position/odom"};
+    std::string mocap_pose{"/mavros/vision_pose/pose"};
+    std::string mocap_twist{"/vla_drone1/twist"};
     std::string imu{"/mavros/imu/data"};
     std::string cmd{"/position_cmd"};
     std::string takeoff_land{"/px4ctrl/takeoff_land"};
@@ -54,6 +58,7 @@ public:
     std::string ude_tune{"/px4ctrl/ude_tune"};
     std::string ude_tune_status{"/px4ctrl/ude_tune_status"};
     std::string ude_tune_status_text{"/px4ctrl/ude_tune_status_text"};
+    std::string mocap_state_status{"/px4ctrl/mocap_state_status"};
     std::string expert_pose{"/px4ctrl/expert_pose"};
     std::string gripper_command{"/gripper/command"};
     std::string traj_start_trigger{"/traj_start_trigger"};
@@ -94,6 +99,15 @@ public:
     bool enable{false};
     double max_velocity{1.0};
     double max_acceleration{2.0};
+  };
+
+  struct MocapState
+  {
+    bool enable{true};
+    std::string twist_frame{"map"};
+    double max_pair_dt_s{0.02};
+    double max_odom_attitude_dt_s{0.03};
+    bool fallback_to_odom{true};
   };
 
   struct TrackingDifferentiator
@@ -146,6 +160,7 @@ public:
   Limits limits;
   Gripper gripper;
   CmdFeedforward cmd_feedforward;
+  MocapState mocap_state;
   TrackingDifferentiator td;
   Controller controller;
   Ude ude;

@@ -105,6 +105,10 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
 
   topics.rc = node.declare_parameter<std::string>("topics.rc", topics.rc);
   topics.odom = node.declare_parameter<std::string>("topics.odom", topics.odom);
+  topics.mocap_pose =
+    node.declare_parameter<std::string>("topics.mocap_pose", topics.mocap_pose);
+  topics.mocap_twist =
+    node.declare_parameter<std::string>("topics.mocap_twist", topics.mocap_twist);
   topics.imu = node.declare_parameter<std::string>("topics.imu", topics.imu);
   topics.cmd = node.declare_parameter<std::string>("topics.cmd", topics.cmd);
   topics.takeoff_land = node.declare_parameter<std::string>("topics.takeoff_land", topics.takeoff_land);
@@ -126,6 +130,8 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
   topics.ude_tune_status_text =
     node.declare_parameter<std::string>(
       "topics.ude_tune_status_text", topics.ude_tune_status_text);
+  topics.mocap_state_status =
+    node.declare_parameter<std::string>("topics.mocap_state_status", topics.mocap_state_status);
   topics.expert_pose = node.declare_parameter<std::string>("topics.expert_pose", topics.expert_pose);
   topics.gripper_command =
     node.declare_parameter<std::string>("topics.gripper_command", topics.gripper_command);
@@ -141,6 +147,10 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
   services.command = node.declare_parameter<std::string>("services.command", services.command);
 
   msg_timeout.odom = node.declare_parameter<double>("msg_timeout.odom", msg_timeout.odom);
+  msg_timeout.mocap_pose =
+    node.declare_parameter<double>("msg_timeout.mocap_pose", msg_timeout.mocap_pose);
+  msg_timeout.mocap_twist =
+    node.declare_parameter<double>("msg_timeout.mocap_twist", msg_timeout.mocap_twist);
   msg_timeout.imu = node.declare_parameter<double>("msg_timeout.imu", msg_timeout.imu);
   msg_timeout.rc = node.declare_parameter<double>("msg_timeout.rc", msg_timeout.rc);
   msg_timeout.cmd = node.declare_parameter<double>("msg_timeout.cmd", msg_timeout.cmd);
@@ -185,6 +195,17 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
     node.declare_parameter<double>("cmd_feedforward.max_velocity", cmd_feedforward.max_velocity);
   cmd_feedforward.max_acceleration =
     node.declare_parameter<double>("cmd_feedforward.max_acceleration", cmd_feedforward.max_acceleration);
+
+  mocap_state.enable = node.declare_parameter<bool>("mocap_state.enable", mocap_state.enable);
+  mocap_state.twist_frame =
+    node.declare_parameter<std::string>("mocap_state.twist_frame", mocap_state.twist_frame);
+  mocap_state.max_pair_dt_s =
+    node.declare_parameter<double>("mocap_state.max_pair_dt_s", mocap_state.max_pair_dt_s);
+  mocap_state.max_odom_attitude_dt_s =
+    node.declare_parameter<double>(
+      "mocap_state.max_odom_attitude_dt_s", mocap_state.max_odom_attitude_dt_s);
+  mocap_state.fallback_to_odom =
+    node.declare_parameter<bool>("mocap_state.fallback_to_odom", mocap_state.fallback_to_odom);
 
   td.enable = node.declare_parameter<bool>("td.enable", td.enable);
   const std::array<double, 3> default_td_r = td.r_diag;

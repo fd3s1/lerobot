@@ -7,6 +7,7 @@
 #include <Eigen/Geometry>
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <mavros_msgs/msg/extended_state.hpp>
 #include <mavros_msgs/msg/rc_in.hpp>
 #include <mavros_msgs/msg/state.hpp>
@@ -67,10 +68,46 @@ public:
 
   nav_msgs::msg::Odometry msg;
   rclcpp::Time rcv_stamp{0, 0, RCL_ROS_TIME};
+  rclcpp::Time msg_stamp{0, 0, RCL_ROS_TIME};
+  bool stamp_from_receive_time{false};
   bool recv_new_msg{false};
   bool received{false};
 
   void feed(const nav_msgs::msg::Odometry::SharedPtr pMsg, const rclcpp::Time &now);
+  bool is_received(const rclcpp::Time &now_time, double timeout_s) const;
+};
+
+class MocapPose_Data_t
+{
+public:
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+  Eigen::Vector3d p{Eigen::Vector3d::Zero()};
+
+  geometry_msgs::msg::PoseStamped msg;
+  rclcpp::Time rcv_stamp{0, 0, RCL_ROS_TIME};
+  rclcpp::Time msg_stamp{0, 0, RCL_ROS_TIME};
+  bool stamp_from_receive_time{false};
+  bool received{false};
+
+  void feed(const geometry_msgs::msg::PoseStamped::SharedPtr pMsg, const rclcpp::Time &now);
+  bool is_received(const rclcpp::Time &now_time, double timeout_s) const;
+};
+
+class MocapTwist_Data_t
+{
+public:
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+  Eigen::Vector3d v{Eigen::Vector3d::Zero()};
+
+  geometry_msgs::msg::TwistStamped msg;
+  rclcpp::Time rcv_stamp{0, 0, RCL_ROS_TIME};
+  rclcpp::Time msg_stamp{0, 0, RCL_ROS_TIME};
+  bool stamp_from_receive_time{false};
+  bool received{false};
+
+  void feed(const geometry_msgs::msg::TwistStamped::SharedPtr pMsg, const rclcpp::Time &now);
   bool is_received(const rclcpp::Time &now_time, double timeout_s) const;
 };
 

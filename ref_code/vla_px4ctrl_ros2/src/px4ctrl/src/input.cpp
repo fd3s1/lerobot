@@ -23,6 +23,23 @@ double switch_from_pwm(double pwm)
   return std::clamp((pwm - 1000.0) / 1000.0, -0.2, 1.2);
 }
 
+bool stamp_is_zero(const builtin_interfaces::msg::Time &stamp)
+{
+  return stamp.sec == 0 && stamp.nanosec == 0;
+}
+
+rclcpp::Time message_stamp_or_receive_time(
+  const builtin_interfaces::msg::Time &stamp,
+  const rclcpp::Time &receive_time,
+  bool &used_receive_time)
+{
+  used_receive_time = stamp_is_zero(stamp);
+  if (used_receive_time) {
+    return receive_time;
+  }
+  return rclcpp::Time(stamp, RCL_ROS_TIME);
+}
+
 }  // namespace
 
 void RC_Data_t::feed(const mavros_msgs::msg::RCIn::SharedPtr pMsg, const rclcpp::Time &now)
@@ -119,6 +136,7 @@ void Odom_Data_t::feed(
   const rclcpp::Time &now)
 {
   msg = *pMsg;
+  msg_stamp = message_stamp_or_receive_time(msg.header.stamp, now, stamp_from_receive_time);
   uav_utils::extract_odometry(msg, p, v, q, w);
   if (q.norm() > 1e-6) {
     q.normalize();
@@ -135,6 +153,44 @@ void Odom_Data_t::feed(
 }
 
 bool Odom_Data_t::is_received(const rclcpp::Time &now_time, double timeout_s) const
+{
+  return received && (now_time - rcv_stamp).seconds() < timeout_s;
+}
+
+void MocapPose_Data_t::feed(
+  const geometry_msgs::msg::PoseStamped::SharedPtr pMsg,
+  const rclcpp::Time &now)
+{
+  msg = *pMsg;
+  msg_stamp = message_stamp_or_receive_time(msg.header.stamp, now, stamp_from_receive_time);
+  p = Eigen::Vector3d(
+    msg.pose.position.x,
+    msg.pose.position.y,
+    msg.pose.position.z);
+  rcv_stamp = now;
+  received = true;
+}
+
+bool MocapPose_Data_t::is_received(const rclcpp::Time &now_time, double timeout_s) const
+{
+  return received && (now_time - rcv_stamp).seconds() < timeout_s;
+}
+
+void MocapTwist_Data_t::feed(
+  const geometry_msgs::msg::TwistStamped::SharedPtr pMsg,
+  const rclcpp::Time &now)
+{
+  msg = *pMsg;
+  msg_stamp = message_stamp_or_receive_time(msg.header.stamp, now, stamp_from_receive_time);
+  v = Eigen::Vector3d(
+    msg.twist.linear.x,
+    msg.twist.linear.y,
+    msg.twist.linear.z);
+  rcv_stamp = now;
+  received = true;
+}
+
+bool MocapTwist_Data_t::is_received(const rclcpp::Time &now_time, double timeout_s) const
 {
   return received && (now_time - rcv_stamp).seconds() < timeout_s;
 }
