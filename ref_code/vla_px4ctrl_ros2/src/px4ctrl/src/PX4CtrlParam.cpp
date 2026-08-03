@@ -111,8 +111,11 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
     node.declare_parameter<std::string>("topics.mocap_twist", topics.mocap_twist);
   topics.imu = node.declare_parameter<std::string>("topics.imu", topics.imu);
   topics.cmd = node.declare_parameter<std::string>("topics.cmd", topics.cmd);
+  topics.cmd_traj = node.declare_parameter<std::string>("topics.cmd_traj", topics.cmd_traj);
   topics.takeoff_land = node.declare_parameter<std::string>("topics.takeoff_land", topics.takeoff_land);
   topics.setpoint = node.declare_parameter<std::string>("topics.setpoint", topics.setpoint);
+  topics.physical_setpoint =
+    node.declare_parameter<std::string>("topics.physical_setpoint", topics.physical_setpoint);
   topics.simulink_setpoint =
     node.declare_parameter<std::string>("topics.simulink_setpoint", topics.simulink_setpoint);
   topics.simulink_reference =
@@ -124,6 +127,8 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
       "topics.simulink_tracking_error", topics.simulink_tracking_error);
   topics.simulink_ude_debug =
     node.declare_parameter<std::string>("topics.simulink_ude_debug", topics.simulink_ude_debug);
+  topics.simulink_yaw_debug =
+    node.declare_parameter<std::string>("topics.simulink_yaw_debug", topics.simulink_yaw_debug);
   topics.ude_tune = node.declare_parameter<std::string>("topics.ude_tune", topics.ude_tune);
   topics.ude_tune_status =
     node.declare_parameter<std::string>("topics.ude_tune_status", topics.ude_tune_status);
@@ -171,6 +176,10 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
     node.declare_parameter<double>("auto_takeoff_land.takeoff_height", takeoff_land.height);
   takeoff_land.speed =
     node.declare_parameter<double>("auto_takeoff_land.takeoff_land_speed", takeoff_land.speed);
+  takeoff_land.auto_arm_timeout_s = node.declare_parameter<double>(
+    "auto_takeoff_land.auto_arm_timeout_s", takeoff_land.auto_arm_timeout_s);
+  takeoff_land.auto_arm_throttle_max_pwm = node.declare_parameter<double>(
+    "auto_takeoff_land.auto_arm_throttle_max_pwm", takeoff_land.auto_arm_throttle_max_pwm);
 
   limits.x_min = node.declare_parameter<double>("limits.x_min", limits.x_min);
   limits.x_max = node.declare_parameter<double>("limits.x_max", limits.x_max);
@@ -195,6 +204,13 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
     node.declare_parameter<double>("cmd_feedforward.max_velocity", cmd_feedforward.max_velocity);
   cmd_feedforward.max_acceleration =
     node.declare_parameter<double>("cmd_feedforward.max_acceleration", cmd_feedforward.max_acceleration);
+  cmd_feedforward.max_jerk =
+    node.declare_parameter<double>("cmd_feedforward.max_jerk", cmd_feedforward.max_jerk);
+  cmd_feedforward.max_snap =
+    node.declare_parameter<double>("cmd_feedforward.max_snap", cmd_feedforward.max_snap);
+  cmd_feedforward.max_yaw_acceleration =
+    node.declare_parameter<double>(
+      "cmd_feedforward.max_yaw_acceleration", cmd_feedforward.max_yaw_acceleration);
 
   mocap_state.enable = node.declare_parameter<bool>("mocap_state.enable", mocap_state.enable);
   mocap_state.twist_frame =
@@ -204,6 +220,15 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
   mocap_state.max_odom_attitude_dt_s =
     node.declare_parameter<double>(
       "mocap_state.max_odom_attitude_dt_s", mocap_state.max_odom_attitude_dt_s);
+  mocap_state.max_prediction_dt_s =
+    node.declare_parameter<double>(
+      "mocap_state.max_prediction_dt_s", mocap_state.max_prediction_dt_s);
+  mocap_state.max_future_dt_s =
+    node.declare_parameter<double>(
+      "mocap_state.max_future_dt_s", mocap_state.max_future_dt_s);
+  mocap_state.prediction_blend_tau_s =
+    node.declare_parameter<double>(
+      "mocap_state.prediction_blend_tau_s", mocap_state.prediction_blend_tau_s);
   mocap_state.fallback_to_odom =
     node.declare_parameter<bool>("mocap_state.fallback_to_odom", mocap_state.fallback_to_odom);
 
@@ -231,9 +256,27 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
   declare_diag_parameter(node, "ude.Kp_diag", ude.Kp_diag);
   declare_diag_parameter(node, "ude.Kd_diag", ude.Kd_diag);
   declare_diag_parameter(node, "ude.T_diag", ude.T_diag);
+  declare_diag_parameter(node, "ude.velocity_lpf_tau_s", ude.velocity_lpf_tau_s);
   declare_diag_parameter(node, "ude.max_f_hat", ude.max_f_hat);
   declare_diag_parameter(node, "ude.max_u_acc", ude.max_u_acc);
+  attitude.feedback_mode =
+    node.declare_parameter<std::string>("attitude.feedback_mode", attitude.feedback_mode);
+  if (
+    attitude.feedback_mode != "reduced_attitude" &&
+    attitude.feedback_mode != "full_quaternion") {
+    RCLCPP_ERROR(
+      node.get_logger(),
+      "Unsupported attitude.feedback_mode='%s'; falling back to reduced_attitude.",
+      attitude.feedback_mode.c_str());
+    attitude.feedback_mode = "reduced_attitude";
+  }
   declare_diag_parameter(node, "attitude.KAng_diag", attitude.KAng_diag);
+  attitude.yaw_deadband_rad =
+    node.declare_parameter<double>("attitude.yaw_deadband_rad", attitude.yaw_deadband_rad);
+  attitude.yaw_rate_limit =
+    node.declare_parameter<double>("attitude.yaw_rate_limit", attitude.yaw_rate_limit);
+  attitude.yaw_lpf_tau_s =
+    node.declare_parameter<double>("attitude.yaw_lpf_tau_s", attitude.yaw_lpf_tau_s);
 
   thrust_model.hover_thrust =
     node.declare_parameter<double>("thrust_model.hover_thrust", thrust_model.hover_thrust);
@@ -247,6 +290,48 @@ void Parameter_t::config_from_ros_node(rclcpp::Node &node)
     node.declare_parameter<double>("thrust_model.min_thr2acc", thrust_model.min_thr2acc);
   thrust_model.max_thr2acc =
     node.declare_parameter<double>("thrust_model.max_thr2acc", thrust_model.max_thr2acc);
+
+  physical_control.enable =
+    node.declare_parameter<bool>("physical_control.enable", physical_control.enable);
+  physical_control.mass_kg =
+    node.declare_parameter<double>("physical_control.mass_kg", physical_control.mass_kg);
+  physical_control.payload_type =
+    node.declare_parameter<int>("physical_control.payload_type", physical_control.payload_type);
+  physical_control.target_system =
+    node.declare_parameter<int>("physical_control.target_system", physical_control.target_system);
+  physical_control.target_component =
+    node.declare_parameter<int>("physical_control.target_component", physical_control.target_component);
+  physical_control.max_total_thrust_n =
+    node.declare_parameter<double>(
+      "physical_control.max_total_thrust_n", physical_control.max_total_thrust_n);
+  physical_control.body_rate_feedforward_scale =
+    node.declare_parameter<double>(
+      "physical_control.body_rate_feedforward_scale",
+      physical_control.body_rate_feedforward_scale);
+  physical_control.angular_acceleration_feedforward_scale =
+    node.declare_parameter<double>(
+      "physical_control.angular_acceleration_feedforward_scale",
+      physical_control.angular_acceleration_feedforward_scale);
+
+  const bool physical_parameters_valid =
+    std::isfinite(physical_control.mass_kg) && physical_control.mass_kg > 0.0 &&
+    physical_control.payload_type == 42001 &&
+    physical_control.target_system >= 1 && physical_control.target_system <= 255 &&
+    physical_control.target_component >= 1 && physical_control.target_component <= 255 &&
+    std::isfinite(physical_control.max_total_thrust_n) &&
+    physical_control.max_total_thrust_n > 0.0 &&
+    std::isfinite(physical_control.body_rate_feedforward_scale) &&
+    physical_control.body_rate_feedforward_scale >= 0.0 &&
+    physical_control.body_rate_feedforward_scale <= 1.0 &&
+    std::isfinite(physical_control.angular_acceleration_feedforward_scale) &&
+    physical_control.angular_acceleration_feedforward_scale >= 0.0 &&
+    physical_control.angular_acceleration_feedforward_scale <= 1.0;
+  if (!physical_parameters_valid) {
+    physical_control.enable = false;
+    RCLCPP_ERROR(
+      node.get_logger(),
+      "Invalid physical_control parameters; TUNNEL physical setpoint disabled.");
+  }
 
   if (takeoff_land.enable_auto_arm && !takeoff_land.enable) {
     takeoff_land.enable_auto_arm = false;
@@ -286,6 +371,11 @@ rcl_interfaces::msg::SetParametersResult Parameter_t::apply_runtime_parameters(
       if (!vector_to_array(param, next.ude.T_diag, name.c_str(), 0.02, 10.0, true, reason)) {
         return make_param_result(false, reason);
       }
+    } else if (name == "ude.velocity_lpf_tau_s") {
+      if (!vector_to_array(
+          param, next.ude.velocity_lpf_tau_s, name.c_str(), 0.0, 2.0, true, reason)) {
+        return make_param_result(false, reason);
+      }
     } else if (name == "td.enable") {
       if (param.get_type() != rclcpp::ParameterType::PARAMETER_BOOL) {
         return make_param_result(false, "td.enable must be a bool.");
@@ -295,6 +385,48 @@ rcl_interfaces::msg::SetParametersResult Parameter_t::apply_runtime_parameters(
       if (!vector_to_array(param, next.td.r_diag, name.c_str(), 0.0, 1000.0, true, reason)) {
         return make_param_result(false, reason);
       }
+    } else if (name == "attitude.feedback_mode") {
+      if (param.get_type() != rclcpp::ParameterType::PARAMETER_STRING) {
+        return make_param_result(false, "attitude.feedback_mode must be a string.");
+      }
+      const std::string mode = param.as_string();
+      if (mode != "reduced_attitude" && mode != "full_quaternion") {
+        return make_param_result(
+          false,
+          "attitude.feedback_mode must be reduced_attitude or full_quaternion.");
+      }
+      next.attitude.feedback_mode = mode;
+    } else if (name == "attitude.KAng_diag") {
+      if (!vector_to_array(param, next.attitude.KAng_diag, name.c_str(), 0.0, 30.0, false, reason)) {
+        return make_param_result(false, reason);
+      }
+    } else if (name == "attitude.yaw_deadband_rad") {
+      if (param.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE) {
+        return make_param_result(false, "attitude.yaw_deadband_rad must be a double.");
+      }
+      const double value = param.as_double();
+      if (!std::isfinite(value) || value < 0.0 || value > 1.0) {
+        return make_param_result(false, "attitude.yaw_deadband_rad must be in [0, 1].");
+      }
+      next.attitude.yaw_deadband_rad = value;
+    } else if (name == "attitude.yaw_rate_limit") {
+      if (param.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE) {
+        return make_param_result(false, "attitude.yaw_rate_limit must be a double.");
+      }
+      const double value = param.as_double();
+      if (!std::isfinite(value) || value < 0.0 || value > 5.0) {
+        return make_param_result(false, "attitude.yaw_rate_limit must be in [0, 5].");
+      }
+      next.attitude.yaw_rate_limit = value;
+    } else if (name == "attitude.yaw_lpf_tau_s") {
+      if (param.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE) {
+        return make_param_result(false, "attitude.yaw_lpf_tau_s must be a double.");
+      }
+      const double value = param.as_double();
+      if (!std::isfinite(value) || value < 0.0 || value > 10.0) {
+        return make_param_result(false, "attitude.yaw_lpf_tau_s must be in [0, 10].");
+      }
+      next.attitude.yaw_lpf_tau_s = value;
     } else {
       return make_param_result(false, "Unsupported runtime parameter: " + name);
     }
@@ -302,5 +434,6 @@ rcl_interfaces::msg::SetParametersResult Parameter_t::apply_runtime_parameters(
 
   ude = next.ude;
   td = next.td;
+  attitude = next.attitude;
   return make_param_result(true, "runtime parameters updated");
 }

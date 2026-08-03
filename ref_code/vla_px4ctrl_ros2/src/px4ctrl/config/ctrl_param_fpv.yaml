@@ -1,7 +1,7 @@
 px4ctrl:
   ros__parameters:
     ctrl_freq_max: 100.0
-    max_manual_vel: 2.0
+    max_manual_vel: 4.0
     frame_id: map
     use_bodyrate_ctrl: false
 
@@ -19,6 +19,7 @@ px4ctrl:
       simulink_actual: /px4ctrl/simulink/actual_state
       simulink_tracking_error: /px4ctrl/simulink/tracking_error
       simulink_ude_debug: /px4ctrl/simulink/ude_debug
+      simulink_yaw_debug: /px4ctrl/simulink/yaw_debug
       ude_tune: /px4ctrl/ude_tune
       ude_tune_status: /px4ctrl/ude_tune_status
       ude_tune_status_text: /px4ctrl/ude_tune_status_text
@@ -35,7 +36,7 @@ px4ctrl:
       command: /mavros/cmd/command
 
     msg_timeout:
-      odom: 0.5
+      odom: 1.5
       mocap_pose: 0.3
       mocap_twist: 0.3
       imu: 0.5
@@ -53,14 +54,14 @@ px4ctrl:
       enable: true
       enable_auto_arm: true
       no_RC: false
-      takeoff_height: 1.0
-      takeoff_land_speed: 0.2
+      takeoff_height: 0.65
+      takeoff_land_speed: 0.25
 
     limits:
-      x_min: -7.0
-      x_max: 14.0
-      y_min: -2.5
-      y_max: 2.5
+      x_min: -2.01
+      x_max: 15.11
+      y_min: -2.11
+      y_max: 2.11
       z_min: -0.3
       z_max: 2.5
 
@@ -75,13 +76,13 @@ px4ctrl:
     cmd_feedforward:
       enable: false
       max_velocity: 4.0
-      max_acceleration: 5.0
+      max_acceleration: 15.0
 
     mocap_state:
       enable: true
       twist_frame: map
-      max_pair_dt_s: 0.08
-      max_odom_attitude_dt_s: 0.08
+      max_pair_dt_s: 0.1
+      max_odom_attitude_dt_s: 0.1
       fallback_to_odom: true
 
     td:
@@ -99,22 +100,26 @@ px4ctrl:
 
     ude:
       enable: true
-      Kp_diag: [1.5,0.8,2.5]
-      Kd_diag: [1.3,1.3,1.8]
-      T_diag: [0.25, 0.4, 0.1]
-      max_f_hat: [5.0, 5.0, 5.0]
-      max_u_acc: [5.0, 5.0, 5.0]
+      Kp_diag: [1.6,1.6,1.6]
+      Kd_diag: [2.0,2.0,2.0]
+      T_diag: [0.35, 0.35, 0.35]
+      max_f_hat: [11.0, 11.0, 11.0]
+      max_u_acc: [11.0, 11.0, 11.0]
 
     attitude:
-      KAng_diag: [6.0, 6.0, 3.0]
+      feedback_mode: full_quaternion
+      KAng_diag: [6.0, 6.0, 1.0]
+      yaw_deadband_rad: 0.03
+      yaw_rate_limit: 0.08
+      yaw_lpf_tau_s: 0.15
 
     thrust_model:
-      hover_thrust: 0.33
+      hover_thrust: 0.35
       enable_estimation: true
       print_value: false
-      rho2: 0.990
+      rho2: 0.980
       min_thr2acc: 2.0
-      max_thr2acc: 50.0
+      max_thr2acc: 80.0
 
 feetech_gripper_node:
   ros__parameters:

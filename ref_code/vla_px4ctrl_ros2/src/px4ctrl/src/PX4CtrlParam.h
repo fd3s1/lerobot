@@ -38,6 +38,8 @@ public:
     bool no_RC{false};
     double height{1.0};
     double speed{0.2};
+    double auto_arm_timeout_s{1.5};
+    double auto_arm_throttle_max_pwm{1250.0};
   };
 
   struct Topics
@@ -48,13 +50,16 @@ public:
     std::string mocap_twist{"/vla_drone1/twist"};
     std::string imu{"/mavros/imu/data"};
     std::string cmd{"/position_cmd"};
+    std::string cmd_traj{"/position_cmd_traj"};
     std::string takeoff_land{"/px4ctrl/takeoff_land"};
     std::string setpoint{"/mavros/setpoint_raw/attitude"};
+    std::string physical_setpoint{"/mavros/tunnel/in"};
     std::string simulink_setpoint{"/px4ctrl/simulink/attitude_target"};
     std::string simulink_reference{"/px4ctrl/simulink/reference_state"};
     std::string simulink_actual{"/px4ctrl/simulink/actual_state"};
     std::string simulink_tracking_error{"/px4ctrl/simulink/tracking_error"};
     std::string simulink_ude_debug{"/px4ctrl/simulink/ude_debug"};
+    std::string simulink_yaw_debug{"/px4ctrl/simulink/yaw_debug"};
     std::string ude_tune{"/px4ctrl/ude_tune"};
     std::string ude_tune_status{"/px4ctrl/ude_tune_status"};
     std::string ude_tune_status_text{"/px4ctrl/ude_tune_status_text"};
@@ -99,6 +104,9 @@ public:
     bool enable{false};
     double max_velocity{1.0};
     double max_acceleration{2.0};
+    double max_jerk{40.0};
+    double max_snap{1000.0};
+    double max_yaw_acceleration{20.0};
   };
 
   struct MocapState
@@ -107,6 +115,9 @@ public:
     std::string twist_frame{"map"};
     double max_pair_dt_s{0.02};
     double max_odom_attitude_dt_s{0.03};
+    double max_prediction_dt_s{0.06};
+    double max_future_dt_s{0.005};
+    double prediction_blend_tau_s{0.25};
     bool fallback_to_odom{true};
   };
 
@@ -133,13 +144,18 @@ public:
     std::array<double, 3> Kp_diag{1.0, 1.0, 1.0};
     std::array<double, 3> Kd_diag{2.0, 2.0, 2.0};
     std::array<double, 3> T_diag{1.0, 1.0, 1.0};
+    std::array<double, 3> velocity_lpf_tau_s{0.0, 0.0, 0.0};
     std::array<double, 3> max_f_hat{3.0, 3.0, 3.0};
     std::array<double, 3> max_u_acc{4.0, 4.0, 4.0};
   };
 
   struct Attitude
   {
+    std::string feedback_mode{"reduced_attitude"};
     std::array<double, 3> KAng_diag{8.0, 8.0, 4.0};
+    double yaw_deadband_rad{0.03};
+    double yaw_rate_limit{0.08};
+    double yaw_lpf_tau_s{0.15};
   };
 
   struct ThrustModel
@@ -150,6 +166,18 @@ public:
     double rho2{0.998};
     double min_thr2acc{5.0};
     double max_thr2acc{40.0};
+  };
+
+  struct PhysicalControl
+  {
+    bool enable{false};
+    double mass_kg{1.75};
+    int payload_type{42001};
+    int target_system{1};
+    int target_component{1};
+    double max_total_thrust_n{100.0};
+    double body_rate_feedforward_scale{1.0};
+    double angular_acceleration_feedforward_scale{0.0};
   };
 
   MsgTimeout msg_timeout;
@@ -166,6 +194,7 @@ public:
   Ude ude;
   Attitude attitude;
   ThrustModel thrust_model;
+  PhysicalControl physical_control;
 
   double ctrl_freq_max{100.0};
   double max_manual_vel{1.0};

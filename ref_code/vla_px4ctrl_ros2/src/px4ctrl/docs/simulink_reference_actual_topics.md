@@ -138,7 +138,7 @@ header.stamp                 = controller loop stamp
 header.frame_id              = px4ctrl frame_id, normally map
 child_frame_id               = field mapping note
 pose.pose.position.{x,y,z}   = e = desired position - odom position
-pose.pose.orientation.{x,y,z}= u0 = Kp*e + Kd*e_dot
+pose.pose.orientation.{x,y,z}= u0 = des.a + Kp*e + Kd*e_dot
 pose.pose.orientation.w      = normalized thrust command
 twist.twist.linear.{x,y,z}   = f_hat
 twist.twist.angular.{x,y,z}  = u_acc = u0 - f_hat

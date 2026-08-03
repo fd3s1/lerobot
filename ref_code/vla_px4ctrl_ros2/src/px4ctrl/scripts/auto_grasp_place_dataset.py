@@ -5,14 +5,16 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+import threading
 import time
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import rclpy
 from geometry_msgs.msg import PoseStamped, Vector3Stamped
 from nav_msgs.msg import Odometry
 from quadrotor_msgs.msg import GripperCommandPair, GripperFeedback, TakeoffLand
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.utilities import remove_ros_args
@@ -71,6 +73,33 @@ def quaternion_to_roll_pitch_yaw(msg: PoseStamped) -> tuple[float, float, float]
     return quaternion_msg_to_roll_pitch_yaw(msg.pose.orientation)
 
 
+def best_effort_volatile_qos(depth: int = 10) -> QoSProfile:
+    return QoSProfile(
+        reliability=ReliabilityPolicy.BEST_EFFORT,
+        durability=DurabilityPolicy.VOLATILE,
+        history=HistoryPolicy.KEEP_LAST,
+        depth=depth,
+    )
+
+
+def reliable_volatile_qos(depth: int = 10) -> QoSProfile:
+    return QoSProfile(
+        reliability=ReliabilityPolicy.RELIABLE,
+        durability=DurabilityPolicy.VOLATILE,
+        history=HistoryPolicy.KEEP_LAST,
+        depth=depth,
+    )
+
+
+def reliable_transient_qos(depth: int = 10) -> QoSProfile:
+    return QoSProfile(
+        reliability=ReliabilityPolicy.RELIABLE,
+        durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        history=HistoryPolicy.KEEP_LAST,
+        depth=depth,
+    )
+
+
 @dataclass
 class PoseSample:
     x: float
@@ -90,6 +119,7 @@ class AutoConfig:
     target_pose_topic: str
     box_pose_topic: str
     cmd_topic: str
+    trajectory_planner_enable: bool
     gripper_topic: str
     gripper_command_pair_topic: str
     gripper_feedback_topic: str
@@ -98,6 +128,10 @@ class AutoConfig:
     record_status_topic: str
     record_gate_topic: str
     record_gate_value: str
+    record_stop_topic: str
+    record_stop_value: str
+    record_stop_hold_s: float
+    post_release_hold_stop_s: float
     frame_id: str
     rate_hz: float
     max_speed: float
@@ -127,6 +161,10 @@ class AutoConfig:
     target_offset_x: float
     target_offset_y: float
     target_offset_z: float
+    target_grasp_x_bias_m: float
+    target_prehover_map_x_bias_m: float
+    target_hover_map_x_bias_m: float
+    target_grasp_map_x_bias_m: float
     target_grasp_z_bias_m: float
     box_offset_x: float
     box_offset_y: float
@@ -135,6 +173,7 @@ class AutoConfig:
     target_grasp_z_offset: float | None
     box_hover_z_offset: float | None
     box_place_z_offset: float | None
+    transfer_drone_z_m: float | None
     x_min: float
     x_max: float
     y_min: float
@@ -153,10 +192,18 @@ class AutoConfig:
     waypoint_arrival_tolerance_m: float
     waypoint_arrival_xy_tolerance_m: float
     waypoint_arrival_z_tolerance_m: float
+    target_arrival_xy_tolerance_m: float
+    target_arrival_z_tolerance_m: float
+    target_arrival_max_positive_x_error_m: float | None
+    box_arrival_xy_tolerance_m: float
+    box_arrival_z_tolerance_m: float
     pregrasp_arrival_xy_tolerance_m: float
     pregrasp_arrival_z_tolerance_m: float
     pregrasp_z_speed_mps: float
     waypoint_arrival_settle_s: float
+    target_arrival_settle_s: float
+    pregrasp_arrival_settle_s: float
+    box_arrival_settle_s: float
     waypoint_arrival_timeout_s: float
     mocap_correction_enable: bool
     mocap_correction_max_xy_m: float
@@ -168,10 +215,17 @@ class AutoConfig:
     mocap_correction_body_frame: bool
     body_frame_yaw_source: Literal["drone_control", "drone_arrival", "reference"]
     body_frame_yaw_offset_rad: float
+    target_yaw_align_enable: bool
+    target_yaw_align_offset_rad: float
+    target_yaw_align_rate_dps: float
+    target_yaw_align_tol_deg: float
+    target_yaw_align_min_distance_m: float
+    target_yaw_align_max_duration_s: float
     confirm_before_takeoff: bool
     record_duration_s: float
     record_start_hold_s: float
     grasp_mode: Literal["soft", "continuous_center"]
+    pre_grasp_hold_s: float
     gripper_open: float
     gripper_closed: float
     gripper_close_duration_s: float
@@ -196,12 +250,15 @@ class AutoConfig:
     grasp_angle_balance_diff: float
     release_retreat_up_m: float
     release_retreat_forward_m: float
+    release_retreat_frame: Literal["body_forward", "map_x"]
+    release_at_box_hover: bool
     retreat_speed: float
     landing_mode: Literal["cmd", "auto", "none"]
     cmd_land_speed: float
     cmd_land_z: float | None
     cmd_land_z_offset_m: float
     command_stop_before_land_s: float
+    auto_land_timeout_s: float
     no_land: bool
 
 
@@ -216,8 +273,10 @@ class AutoGraspPlaceDataset(Node):
         self.last_gripper_left = config.gripper_open
         self.last_gripper_right = config.gripper_open
         self.px4ctrl_state: str | None = None
+        self.px4ctrl_state_received_s: float | None = None
         self.record_status: str | None = None
         self.pose_subscriptions = []
+        self.state_subscriptions = []
         self.mocap_correction_x = 0.0
         self.mocap_correction_y = 0.0
         self.mocap_correction_z = 0.0
@@ -231,28 +290,27 @@ class AutoGraspPlaceDataset(Node):
         self.mocap_correction_z_vmax_override: float | None = None
         self.mocap_correction_update_enabled = True
         self.last_mocap_correction_update_s = time.monotonic()
+        self.background_executor_active = False
 
         self._create_pose_subscription("drone", config.drone_pose_topic)
         self._create_pose_subscription("drone_arrival", config.arrival_pose_topic)
         self._create_pose_subscription("target", config.target_pose_topic)
         self._create_pose_subscription("box", config.box_pose_topic)
-        state_qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.VOLATILE,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=1,
+        self._create_redundant_subscription(
+            String,
+            config.px4ctrl_state_topic,
+            self._state_cb,
+            transient=True,
         )
-        self.create_subscription(String, config.px4ctrl_state_topic, self._state_cb, state_qos)
         self.create_subscription(GripperFeedback, config.gripper_feedback_topic, self._gripper_feedback_cb, 10)
 
-        status_qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10,
-        )
         if config.record_status_topic:
-            self.create_subscription(String, config.record_status_topic, self._record_status_cb, status_qos)
+            self._create_redundant_subscription(
+                String,
+                config.record_status_topic,
+                self._record_status_cb,
+                transient=True,
+            )
 
         self.cmd_pub = self.create_publisher(PoseStamped, config.cmd_topic, 10)
         self.nominal_cmd_pub = self.create_publisher(PoseStamped, "/auto_hls_grasp_place/nominal_position_cmd", 10)
@@ -265,23 +323,53 @@ class AutoGraspPlaceDataset(Node):
         self.gripper_pub = self.create_publisher(Float64, config.gripper_topic, 10)
         self.gripper_pair_pub = self.create_publisher(GripperCommandPair, config.gripper_command_pair_topic, 10)
         self.takeoff_land_pub = self.create_publisher(TakeoffLand, config.takeoff_land_topic, 10)
-        self.record_gate_pub = self.create_publisher(String, config.record_gate_topic, 10)
+        self.record_gate_pub = self.create_publisher(String, config.record_gate_topic, reliable_transient_qos())
+        self.record_stop_pub = (
+            self.create_publisher(String, config.record_stop_topic, reliable_volatile_qos())
+            if config.record_stop_topic
+            else None
+        )
+
+    def pump_once(self, timeout_sec: float = 0.0) -> None:
+        timeout_sec = max(0.0, float(timeout_sec))
+        if self.background_executor_active:
+            if timeout_sec > 0.0:
+                time.sleep(timeout_sec)
+            return
+        rclpy.spin_once(self, timeout_sec=timeout_sec)
 
     def _create_pose_subscription(self, key: str, topic: str) -> None:
         # A BEST_EFFORT subscription is compatible with both VRPN BEST_EFFORT
         # publishers and MAVROS RELIABLE publishers, and avoids noisy QoS warnings.
-        best_effort_qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            durability=DurabilityPolicy.VOLATILE,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10,
-        )
+        best_effort_qos = best_effort_volatile_qos()
         if topic.rstrip("/").endswith("/odom"):
             callback = self._odom_cb(key)
             self.pose_subscriptions.append(self.create_subscription(Odometry, topic, callback, best_effort_qos))
         else:
             callback = self._pose_cb(key)
             self.pose_subscriptions.append(self.create_subscription(PoseStamped, topic, callback, best_effort_qos))
+
+    def _create_redundant_subscription(
+        self,
+        msg_type: Any,
+        topic: str,
+        callback,
+        *,
+        transient: bool = False,
+    ) -> None:
+        """Subscribe with compatible QoS variants for flight-critical state.
+
+        MAVROS, px4ctrl, recorder, and HLS nodes do not all use the same QoS.
+        A single strict subscription can silently miss a state transition while
+        the vehicle has already changed mode. These subscriptions all call the
+        same callback; duplicate messages are harmless because callbacks latch
+        the latest value and timestamp.
+        """
+        qoses = [best_effort_volatile_qos(), reliable_volatile_qos()]
+        if transient:
+            qoses.append(reliable_transient_qos())
+        for qos in qoses:
+            self.state_subscriptions.append(self.create_subscription(msg_type, topic, callback, qos))
 
     def _pose_cb(self, key: str):
         def callback(msg: PoseStamped) -> None:
@@ -317,7 +405,12 @@ class AutoGraspPlaceDataset(Node):
         return callback
 
     def _state_cb(self, msg: String) -> None:
-        self.px4ctrl_state = str(msg.data)
+        state = str(msg.data)
+        if state != self.px4ctrl_state:
+            previous = self.px4ctrl_state
+            self.get_logger().info(f"px4ctrl state topic: {previous!r} -> {state!r}")
+        self.px4ctrl_state = state
+        self.px4ctrl_state_received_s = time.monotonic()
 
     def _record_status_cb(self, msg: String) -> None:
         self.record_status = str(msg.data)
@@ -340,11 +433,28 @@ class AutoGraspPlaceDataset(Node):
     def spin_sleep(self, seconds: float) -> None:
         deadline = time.monotonic() + max(0.0, seconds)
         while rclpy.ok() and time.monotonic() < deadline:
-            rclpy.spin_once(self, timeout_sec=0.02)
+            self.pump_once(timeout_sec=0.02)
 
     def pose_fresh(self, key: str) -> bool:
         pose = self.poses.get(key)
         return pose is not None and time.monotonic() - pose.received_s <= self.config.pose_timeout_s
+
+    def px4ctrl_state_age_s(self) -> float:
+        if self.px4ctrl_state_received_s is None:
+            return float("nan")
+        return time.monotonic() - self.px4ctrl_state_received_s
+
+    def px4ctrl_state_fresh(self) -> bool:
+        return (
+            self.px4ctrl_state_received_s is not None
+            and self.px4ctrl_state_age_s() <= self.config.pose_timeout_s
+        )
+
+    def px4ctrl_state_is(self, desired: str) -> bool:
+        return self.px4ctrl_state == desired and self.px4ctrl_state_fresh()
+
+    def px4ctrl_state_summary(self) -> str:
+        return f"latest={self.px4ctrl_state!r} age={self.px4ctrl_state_age_s():.2f}s"
 
     def wait_for_record_ready(self) -> None:
         if not self.config.record_status_topic:
@@ -355,7 +465,7 @@ class AutoGraspPlaceDataset(Node):
         )
         deadline = time.monotonic() + self.config.record_ready_timeout_s
         while rclpy.ok() and time.monotonic() < deadline:
-            rclpy.spin_once(self, timeout_sec=0.05)
+            self.pump_once(timeout_sec=0.05)
             if self.record_status == "WAITING_GATE":
                 self.get_logger().info("Record is waiting at gate; automatic takeoff can start.")
                 return
@@ -368,11 +478,13 @@ class AutoGraspPlaceDataset(Node):
     def wait_for_state(self, desired: str, timeout_s: float) -> None:
         deadline = time.monotonic() + timeout_s
         while rclpy.ok() and time.monotonic() < deadline:
-            rclpy.spin_once(self, timeout_sec=0.05)
-            if self.px4ctrl_state == desired:
+            self.pump_once(timeout_sec=0.05)
+            if self.px4ctrl_state_is(desired):
                 self.get_logger().info(f"px4ctrl state reached {desired}.")
                 return
-        raise RuntimeError(f"Timed out waiting for px4ctrl state {desired}; latest={self.px4ctrl_state!r}.")
+        raise RuntimeError(
+            f"Timed out waiting for px4ctrl state {desired}; {self.px4ctrl_state_summary()}."
+        )
 
     def wait_for_fresh_poses(self) -> None:
         self.get_logger().info(
@@ -384,7 +496,7 @@ class AutoGraspPlaceDataset(Node):
         )
         last_log_s = 0.0
         while rclpy.ok():
-            rclpy.spin_once(self, timeout_sec=0.05)
+            self.pump_once(timeout_sec=0.05)
             if all(self.pose_fresh(key) for key in ("drone", "drone_arrival", "target", "box")):
                 return
             now_s = time.monotonic()
@@ -410,7 +522,7 @@ class AutoGraspPlaceDataset(Node):
         deadline = time.monotonic() + self.config.state_timeout_s
 
         while rclpy.ok() and time.monotonic() < deadline:
-            rclpy.spin_once(self, timeout_sec=0.05)
+            self.pump_once(timeout_sec=0.05)
             pose = self.poses.get(key)
             if pose is None or not self.pose_fresh(key):
                 reference = None
@@ -651,7 +763,7 @@ class AutoGraspPlaceDataset(Node):
         for _ in range(max(1, repeats)):
             self.gripper_pub.publish(msg)
             self.publish_gripper_pair(msg.data, msg.data, publish_scalar=False)
-            rclpy.spin_once(self, timeout_sec=0.0)
+            self.pump_once(timeout_sec=0.0)
             time.sleep(max(0.0, interval_s))
 
     def publish_gripper_pair(
@@ -683,7 +795,7 @@ class AutoGraspPlaceDataset(Node):
     def wait_for_gripper_feedback(self) -> GripperFeedbackState:
         deadline = time.monotonic() + self.config.state_timeout_s
         while rclpy.ok() and time.monotonic() < deadline:
-            rclpy.spin_once(self, timeout_sec=0.05)
+            self.pump_once(timeout_sec=0.05)
             if self.gripper_feedback_fresh() and self.gripper_feedback is not None:
                 return self.gripper_feedback
         raise RuntimeError(f"No fresh gripper feedback on {self.config.gripper_feedback_topic}.")
@@ -703,13 +815,13 @@ class AutoGraspPlaceDataset(Node):
             if hold_pose is not None:
                 self.publish_cmd(hold_pose)
             self.publish_gripper(start + (end - start) * alpha, repeats=1, interval_s=0.0)
-            rclpy.spin_once(self, timeout_sec=0.0)
+            self.pump_once(timeout_sec=0.0)
             next_tick += period
             time.sleep(max(0.0, next_tick - time.monotonic()))
 
-            if hold_pose is not None and self.px4ctrl_state != "CMD_CTRL":
+            if hold_pose is not None and not self.px4ctrl_state_is("CMD_CTRL"):
                 raise RuntimeError(
-                    f"px4ctrl left CMD_CTRL during gripper ramp; latest={self.px4ctrl_state!r}."
+                    f"px4ctrl left/stale CMD_CTRL during gripper ramp; {self.px4ctrl_state_summary()}."
                 )
 
     def publish_takeoff(self) -> None:
@@ -718,7 +830,7 @@ class AutoGraspPlaceDataset(Node):
         self.get_logger().info("Publishing TAKEOFF.")
         for _ in range(5):
             self.takeoff_land_pub.publish(msg)
-            rclpy.spin_once(self, timeout_sec=0.0)
+            self.pump_once(timeout_sec=0.0)
             time.sleep(0.2)
 
     def publish_land(self) -> None:
@@ -728,7 +840,7 @@ class AutoGraspPlaceDataset(Node):
         for _ in range(5):
             self.publish_gripper(self.config.gripper_open, repeats=1, interval_s=0.0)
             self.takeoff_land_pub.publish(msg)
-            rclpy.spin_once(self, timeout_sec=0.0)
+            self.pump_once(timeout_sec=0.0)
             time.sleep(0.2)
 
     def publish_record_gate(self) -> None:
@@ -739,7 +851,23 @@ class AutoGraspPlaceDataset(Node):
         )
         for _ in range(5):
             self.record_gate_pub.publish(msg)
-            rclpy.spin_once(self, timeout_sec=0.0)
+            self.pump_once(timeout_sec=0.0)
+            time.sleep(0.05)
+
+    def publish_record_stop_gate(self, reason: str) -> None:
+        if not self.config.record_stop_topic or self.record_stop_pub is None:
+            return
+        msg = String()
+        msg.data = self.config.record_stop_value
+        hold_s = max(0.05, self.config.record_stop_hold_s)
+        deadline = time.monotonic() + hold_s
+        self.get_logger().info(
+            f"Publishing record stop gate {self.config.record_stop_topic}={self.config.record_stop_value!r} "
+            f"for {hold_s:.2f}s after {reason}. Recorder should now stop this episode and start saving."
+        )
+        while rclpy.ok() and time.monotonic() < deadline:
+            self.record_stop_pub.publish(msg)
+            self.pump_once(timeout_sec=0.0)
             time.sleep(0.05)
 
     def wait_for_takeoff_confirmation(
@@ -760,7 +888,10 @@ class AutoGraspPlaceDataset(Node):
             )
 
         print("", flush=True)
-        print("[auto-grasp-place] Pre-takeoff pose snapshot is locked; ROS callbacks are paused here.", flush=True)
+        print(
+            "[auto-grasp-place] Pre-takeoff pose snapshot is locked; ROS callbacks continue in background.",
+            flush=True,
+        )
         print(
             "[auto-grasp-place] "
             f"drone control odom=({drone.x:.3f}, {drone.y:.3f}, {drone.z:.3f}), yaw={drone.yaw:.3f}",
@@ -875,6 +1006,8 @@ class AutoGraspPlaceDataset(Node):
         return gripper_z + self.config.gripper_z_offset_m + self.config.target_grasp_z_bias_m
 
     def target_hover_drone_z(self, target: PoseSample) -> float:
+        if self.config.transfer_drone_z_m is not None:
+            return self.config.transfer_drone_z_m
         if self.config.target_hover_z_offset is not None:
             return target.z + self.config.target_hover_z_offset
         return self.target_grasp_drone_z(target) + self.config.target_hover_clearance_m
@@ -887,10 +1020,17 @@ class AutoGraspPlaceDataset(Node):
         return gripper_z + self.config.gripper_z_offset_m
 
     def box_hover_drone_z(self, box: PoseSample) -> float:
+        if self.config.transfer_drone_z_m is not None:
+            return self.config.transfer_drone_z_m
         if self.config.box_hover_z_offset is not None:
             return box.z + self.config.box_hover_z_offset
         gripper_z = box.z + self.config.box_hover_gripper_clearance_m
         return gripper_z + self.config.gripper_z_offset_m
+
+    def release_retreat_pose(self, pose: PoseSample, forward_m: float, up_m: float) -> PoseSample:
+        if self.config.release_retreat_frame == "map_x":
+            return self.checked_pose(pose.x + forward_m, pose.y, pose.z + up_m, pose.yaw)
+        return self.pose_relative_forward(pose, forward_m=forward_m, up_m=up_m)
 
     def validate_box_fit(self) -> None:
         margin_x = 0.5 * (self.config.box_length_m - self.config.target_height_m)
@@ -918,11 +1058,98 @@ class AutoGraspPlaceDataset(Node):
         drone_y = obj.y - self.config.gripper_x_offset_m * forward_y - self.config.gripper_y_offset_m * left_y
         return self.checked_pose(drone_x, drone_y, drone_z, yaw)
 
+    def align_yaw_to_target_for_camera(self, hold: PoseSample) -> PoseSample:
+        if not self.config.target_yaw_align_enable:
+            self.get_logger().info(
+                f"Target yaw align disabled; using current yaw={hold.yaw:.3f}rad for subsequent planning."
+            )
+            return hold
+
+        target = self.adjusted_object_pose("target", require_fresh=True)
+        self.pump_once(timeout_sec=0.0)
+        drone = self.poses.get("drone", hold)
+        dx = target.x - drone.x
+        dy = target.y - drone.y
+        distance_xy = math.hypot(dx, dy)
+        if distance_xy < self.config.target_yaw_align_min_distance_m:
+            self.get_logger().info(
+                "Target yaw align skipped: "
+                f"target is only {distance_xy:.3f}m away in XY "
+                f"(min={self.config.target_yaw_align_min_distance_m:.3f}m). "
+                f"actual_yaw={drone.yaw:.3f}rad."
+            )
+            return self.checked_pose(hold.x, hold.y, hold.z, drone.yaw)
+
+        look_yaw = normalize_angle(math.atan2(dy, dx) + self.config.target_yaw_align_offset_rad)
+        tol_rad = math.radians(self.config.target_yaw_align_tol_deg)
+        rate_rad_s = math.radians(self.config.target_yaw_align_rate_dps)
+        period = 1.0 / self.config.rate_hz
+        deadline = time.monotonic() + self.config.target_yaw_align_max_duration_s
+        current = self.checked_pose(hold.x, hold.y, hold.z, hold.yaw)
+        aligned = False
+
+        self.get_logger().info(
+            "Target yaw align start: "
+            f"target=({target.x:.3f},{target.y:.3f}) drone=({drone.x:.3f},{drone.y:.3f}) "
+            f"distance_xy={distance_xy:.3f}m look_yaw={look_yaw:.3f}rad "
+            f"start_actual_yaw={drone.yaw:.3f}rad tol={tol_rad:.3f}rad "
+            f"rate_limit={rate_rad_s:.3f}rad/s max_duration={self.config.target_yaw_align_max_duration_s:.2f}s."
+        )
+
+        next_tick = time.monotonic()
+        while rclpy.ok() and time.monotonic() < deadline:
+            latest_drone = self.poses.get("drone", drone)
+            actual_error = normalize_angle(look_yaw - latest_drone.yaw)
+            if abs(actual_error) <= tol_rad:
+                aligned = True
+                break
+
+            command_error = normalize_angle(look_yaw - current.yaw)
+            max_step = rate_rad_s * period
+            current = self.checked_pose(
+                hold.x,
+                hold.y,
+                hold.z,
+                normalize_angle(current.yaw + clamp(command_error, -max_step, max_step)),
+            )
+            self.publish_cmd(current)
+            self.pump_once(timeout_sec=0.0)
+
+            if not self.px4ctrl_state_is("CMD_CTRL"):
+                raise RuntimeError(
+                    f"px4ctrl left/stale CMD_CTRL during target yaw align; {self.px4ctrl_state_summary()}."
+                )
+
+            next_tick += period
+            time.sleep(max(0.0, next_tick - time.monotonic()))
+
+        self.pump_once(timeout_sec=0.0)
+        final_drone = self.poses.get("drone", current)
+        final_error = normalize_angle(look_yaw - final_drone.yaw)
+        final_hold = self.checked_pose(hold.x, hold.y, hold.z, final_drone.yaw)
+        self.publish_cmd(final_hold)
+        self.get_logger().info(
+            "Target yaw align finished: "
+            f"aligned={aligned} look_yaw={look_yaw:.3f}rad actual_yaw={final_drone.yaw:.3f}rad "
+            f"yaw_error={final_error:.3f}rad; subsequent planning yaw={final_hold.yaw:.3f}rad."
+        )
+        return final_hold
+
     def pose_relative_forward(self, pose: PoseSample, forward_m: float, up_m: float = 0.0) -> PoseSample:
         return self.checked_pose(
             x=pose.x + forward_m * math.cos(pose.yaw),
             y=pose.y + forward_m * math.sin(pose.yaw),
             z=pose.z + up_m,
+            yaw=pose.yaw,
+        )
+
+    def pose_map_x_bias(self, pose: PoseSample, bias_m: float) -> PoseSample:
+        if abs(bias_m) <= 1e-9:
+            return pose
+        return self.checked_pose(
+            x=pose.x + bias_m,
+            y=pose.y,
+            z=pose.z,
             yaw=pose.yaw,
         )
 
@@ -933,6 +1160,10 @@ class AutoGraspPlaceDataset(Node):
         speed: float,
         label: str,
         keep_gripper_open: bool = False,
+        xy_tolerance_m: float | None = None,
+        z_tolerance_m: float | None = None,
+        max_positive_x_error_m: float | None = None,
+        settle_s: float | None = None,
     ) -> PoseSample:
         distance = math.dist((start.x, start.y, start.z), (end.x, end.y, end.z))
         duration_scale = 1.5 if self.config.smooth_trajectory else 1.0
@@ -942,6 +1173,18 @@ class AutoGraspPlaceDataset(Node):
         self.get_logger().info(
             f"{label}: distance={distance:.3f}m speed_limit={speed:.3f}m/s duration={duration:.2f}s."
         )
+
+        if self.config.trajectory_planner_enable:
+            self.publish_cmd(end)
+            return self.wait_for_drone_near(
+                end,
+                label,
+                keep_gripper_open=keep_gripper_open,
+                xy_tolerance_m=xy_tolerance_m,
+                z_tolerance_m=z_tolerance_m,
+                max_positive_x_error_m=max_positive_x_error_m,
+                settle_s=settle_s,
+            )
 
         next_tick = time.monotonic()
         for i in range(steps + 1):
@@ -957,12 +1200,12 @@ class AutoGraspPlaceDataset(Node):
             self.publish_cmd(pose)
             if keep_gripper_open:
                 self.publish_gripper(self.config.gripper_open, repeats=1, interval_s=0.0)
-            rclpy.spin_once(self, timeout_sec=0.0)
+            self.pump_once(timeout_sec=0.0)
             next_tick += period
             time.sleep(max(0.0, next_tick - time.monotonic()))
 
-            if self.px4ctrl_state != "CMD_CTRL":
-                raise RuntimeError(f"px4ctrl left CMD_CTRL during {label}; latest={self.px4ctrl_state!r}.")
+            if not self.px4ctrl_state_is("CMD_CTRL"):
+                raise RuntimeError(f"px4ctrl left/stale CMD_CTRL during {label}; {self.px4ctrl_state_summary()}.")
 
         return end
 
@@ -974,6 +1217,7 @@ class AutoGraspPlaceDataset(Node):
         label: str,
         arrival_tolerance_m: float = 0.04,
         settle_s: float = 0.3,
+        max_positive_x_error_m: float | None = None,
     ) -> PoseSample:
         current = start
         initial_end = waypoint_fn()
@@ -993,15 +1237,57 @@ class AutoGraspPlaceDataset(Node):
             f"speed_limit={speed:.3f}m/s, timeout={max_duration:.2f}s."
         )
 
+        if self.config.trajectory_planner_enable:
+            while rclpy.ok() and time.monotonic() < deadline:
+                self.pump_once(timeout_sec=0.0)
+                end = waypoint_fn()
+                self.publish_cmd(end)
+                arrival_drone = self.poses.get("drone_arrival")
+                distance = float("inf")
+                if arrival_drone is not None and self.pose_fresh("drone_arrival"):
+                    x_err = arrival_drone.x - end.x
+                    distance = math.dist(
+                        (arrival_drone.x, arrival_drone.y, arrival_drone.z),
+                        (end.x, end.y, end.z),
+                    )
+                    x_gate_ok = max_positive_x_error_m is None or x_err <= max_positive_x_error_m
+                    if distance <= arrival_tolerance_m and x_gate_ok:
+                        if arrived_since is None:
+                            arrived_since = time.monotonic()
+                        elif time.monotonic() - arrived_since >= settle_s:
+                            self.publish_cmd(end)
+                            return end
+                    else:
+                        arrived_since = None
+
+                now_s = time.monotonic()
+                if now_s - last_log_s >= 2.0:
+                    last_log_s = now_s
+                    self.get_logger().info(
+                        f"{label}: planner raw goal x={end.x:.3f}, y={end.y:.3f}, "
+                        f"z={end.z:.3f}, arrival_distance={distance:.3f}m, "
+                        f"x_gate_max={max_positive_x_error_m if max_positive_x_error_m is not None else '<off>'}."
+                    )
+                time.sleep(period)
+
+                if not self.px4ctrl_state_is("CMD_CTRL"):
+                    raise RuntimeError(
+                        f"px4ctrl left/stale CMD_CTRL during {label}; {self.px4ctrl_state_summary()}."
+                    )
+            raise RuntimeError(
+                f"Timed out during {label}; latest raw goal x={end.x:.3f}, y={end.y:.3f}, z={end.z:.3f}."
+            )
+
         while rclpy.ok() and time.monotonic() < deadline:
-            rclpy.spin_once(self, timeout_sec=0.0)
+            self.pump_once(timeout_sec=0.0)
             end = waypoint_fn()
             dx = end.x - current.x
             dy = end.y - current.y
             dz = end.z - current.z
             distance = math.sqrt(dx * dx + dy * dy + dz * dz)
+            x_gate_ok = max_positive_x_error_m is None or (current.x - end.x) <= max_positive_x_error_m
 
-            if distance <= arrival_tolerance_m:
+            if distance <= arrival_tolerance_m and x_gate_ok:
                 current = self.checked_pose(end.x, end.y, end.z, end.yaw)
                 if arrived_since is None:
                     arrived_since = time.monotonic()
@@ -1029,8 +1315,8 @@ class AutoGraspPlaceDataset(Node):
                 )
             time.sleep(period)
 
-            if self.px4ctrl_state != "CMD_CTRL":
-                raise RuntimeError(f"px4ctrl left CMD_CTRL during {label}; latest={self.px4ctrl_state!r}.")
+            if not self.px4ctrl_state_is("CMD_CTRL"):
+                raise RuntimeError(f"px4ctrl left/stale CMD_CTRL during {label}; {self.px4ctrl_state_summary()}.")
 
         raise RuntimeError(f"Timed out during {label}; latest command x={current.x:.3f}, y={current.y:.3f}, z={current.z:.3f}.")
 
@@ -1041,7 +1327,7 @@ class AutoGraspPlaceDataset(Node):
             self.publish_cmd(pose)
             if keep_gripper_open:
                 self.publish_gripper(self.config.gripper_open, repeats=1, interval_s=0.0)
-            rclpy.spin_once(self, timeout_sec=0.0)
+            self.pump_once(timeout_sec=0.0)
             time.sleep(period)
 
     def wait_for_drone_near(
@@ -1051,6 +1337,8 @@ class AutoGraspPlaceDataset(Node):
         keep_gripper_open: bool = False,
         xy_tolerance_m: float | None = None,
         z_tolerance_m: float | None = None,
+        max_positive_x_error_m: float | None = None,
+        settle_s: float | None = None,
     ) -> PoseSample:
         period = 1.0 / self.config.rate_hz
         deadline = time.monotonic() + self.config.waypoint_arrival_timeout_s
@@ -1068,12 +1356,13 @@ class AutoGraspPlaceDataset(Node):
             if z_tolerance_m is None
             else z_tolerance_m
         )
+        settle_duration_s = self.config.waypoint_arrival_settle_s if settle_s is None else max(0.0, settle_s)
 
         while rclpy.ok() and time.monotonic() < deadline:
             self.publish_cmd(pose)
             if keep_gripper_open:
                 self.publish_gripper(self.config.gripper_open, repeats=1, interval_s=0.0)
-            rclpy.spin_once(self, timeout_sec=0.0)
+            self.pump_once(timeout_sec=0.0)
             control_drone = self.poses.get("drone")
             if control_drone is not None and self.pose_fresh("drone"):
                 latest_control = control_drone
@@ -1082,10 +1371,26 @@ class AutoGraspPlaceDataset(Node):
                 latest_arrival = arrival_drone
                 xy_err = math.hypot(arrival_drone.x - pose.x, arrival_drone.y - pose.y)
                 z_err = abs(arrival_drone.z - pose.z)
-                if xy_err <= xy_tolerance and z_err <= z_tolerance:
+                x_err = arrival_drone.x - pose.x
+                y_err = arrival_drone.y - pose.y
+                x_gate_ok = max_positive_x_error_m is None or x_err <= max_positive_x_error_m
+                if xy_err <= xy_tolerance and z_err <= z_tolerance and x_gate_ok:
+                    if settle_duration_s <= 0.0:
+                        if latest_control is None or not self.pose_fresh("drone"):
+                            self.get_logger().warn(
+                                f"{label}: arrival pose is inside gate but control odom is not fresh; waiting."
+                            )
+                            time.sleep(period)
+                            continue
+                        self.get_logger().info(
+                            f"{label}: actual drone arrived by arrival pose, "
+                            f"xy_err={xy_err:.3f}m z_err={z_err:.3f}m "
+                            f"signed_err=(x={x_err:+.3f}, y={y_err:+.3f})m."
+                        )
+                        return self.checked_pose(pose.x, pose.y, pose.z, pose.yaw)
                     if settled_since is None:
                         settled_since = time.monotonic()
-                    elif time.monotonic() - settled_since >= self.config.waypoint_arrival_settle_s:
+                    elif time.monotonic() - settled_since >= settle_duration_s:
                         if latest_control is None or not self.pose_fresh("drone"):
                             self.get_logger().warn(
                                 f"{label}: arrival pose is settled but control odom is not fresh; waiting."
@@ -1095,7 +1400,8 @@ class AutoGraspPlaceDataset(Node):
                             continue
                         self.get_logger().info(
                             f"{label}: actual drone arrived by arrival pose, "
-                            f"xy_err={xy_err:.3f}m z_err={z_err:.3f}m."
+                            f"xy_err={xy_err:.3f}m z_err={z_err:.3f}m "
+                            f"signed_err=(x={x_err:+.3f}, y={y_err:+.3f})m."
                         )
                         return self.checked_pose(pose.x, pose.y, pose.z, pose.yaw)
                 else:
@@ -1108,6 +1414,8 @@ class AutoGraspPlaceDataset(Node):
                         f"{label}: waiting actual drone by arrival pose, "
                         f"xy_err={xy_err:.3f}/{xy_tolerance:.3f}m "
                         f"z_err={z_err:.3f}/{z_tolerance:.3f}m "
+                        f"signed_err=(x={x_err:+.3f}, y={y_err:+.3f})m "
+                        f"x_gate_max={max_positive_x_error_m if max_positive_x_error_m is not None else '<off>'} "
                         f"target=({pose.x:.3f},{pose.y:.3f},{pose.z:.3f}) "
                         f"arrival=({arrival_drone.x:.3f},{arrival_drone.y:.3f},{arrival_drone.z:.3f})."
                     )
@@ -1124,13 +1432,15 @@ class AutoGraspPlaceDataset(Node):
                             f"topic={self.config.arrival_pose_topic}."
                         )
             time.sleep(period)
-            if self.px4ctrl_state != "CMD_CTRL":
-                raise RuntimeError(f"px4ctrl left CMD_CTRL during {label}; latest={self.px4ctrl_state!r}.")
+            if not self.px4ctrl_state_is("CMD_CTRL"):
+                raise RuntimeError(f"px4ctrl left/stale CMD_CTRL during {label}; {self.px4ctrl_state_summary()}.")
 
         if latest_arrival is not None:
             age = time.monotonic() - latest_arrival.received_s
             xy_err = math.hypot(latest_arrival.x - pose.x, latest_arrival.y - pose.y)
             z_err = abs(latest_arrival.z - pose.z)
+            x_err = latest_arrival.x - pose.x
+            y_err = latest_arrival.y - pose.y
             if age > self.config.pose_timeout_s:
                 raise RuntimeError(
                     f"{label}: arrival pose stale/no fresh before timeout; "
@@ -1138,7 +1448,8 @@ class AutoGraspPlaceDataset(Node):
                 )
             raise RuntimeError(
                 f"{label}: actual drone did not arrive before timeout by arrival pose; "
-                f"final xy_err={xy_err:.3f}m, z_err={z_err:.3f}m, arrival_age={age:.2f}s."
+                f"final xy_err={xy_err:.3f}m, z_err={z_err:.3f}m, "
+                f"signed_err=(x={x_err:+.3f}, y={y_err:+.3f})m, arrival_age={age:.2f}s."
             )
         raise RuntimeError(f"{label}: no fresh arrival pose while waiting for actual arrival.")
 
@@ -1152,16 +1463,19 @@ class AutoGraspPlaceDataset(Node):
         period = 1.0 / self.config.rate_hz
         deadline = time.monotonic() + max(0.0, duration_s)
         while rclpy.ok() and time.monotonic() < deadline:
-            rclpy.spin_once(self, timeout_sec=0.0)
+            self.pump_once(timeout_sec=0.0)
             self.publish_cmd(reference)
             self.publish_gripper_pair(left_goal, right_goal)
             time.sleep(period)
-            if self.px4ctrl_state != "CMD_CTRL":
-                raise RuntimeError(f"px4ctrl left CMD_CTRL during soft grasp; latest={self.px4ctrl_state!r}.")
+            if not self.px4ctrl_state_is("CMD_CTRL"):
+                raise RuntimeError(
+                    f"px4ctrl left/stale CMD_CTRL during soft grasp; {self.px4ctrl_state_summary()}."
+                )
         return reference
 
     def soft_grasp(self, reference: PoseSample) -> PoseSample:
-        self.hold_cmd(reference, 0.3)
+        if self.config.pre_grasp_hold_s > 0.0:
+            self.hold_cmd(reference, self.config.pre_grasp_hold_s)
         latest: PoseSample = reference
 
         if self.config.grasp_mode == "continuous_center":
@@ -1218,7 +1532,7 @@ class AutoGraspPlaceDataset(Node):
         )
         next_tick = time.monotonic()
         for i in range(steps + 1):
-            rclpy.spin_once(self, timeout_sec=0.0)
+            self.pump_once(timeout_sec=0.0)
             t = i / steps
             alpha = 10.0 * t**3 - 15.0 * t**4 + 6.0 * t**5
             target = cfg.gripper_open + (cfg.gripper_closed - cfg.gripper_open) * alpha
@@ -1226,9 +1540,10 @@ class AutoGraspPlaceDataset(Node):
             self.publish_gripper_pair(target, target)
             next_tick += period
             time.sleep(max(0.0, next_tick - time.monotonic()))
-            if self.px4ctrl_state != "CMD_CTRL":
+            if not self.px4ctrl_state_is("CMD_CTRL"):
                 raise RuntimeError(
-                    f"px4ctrl left CMD_CTRL during continuous center grasp; latest={self.px4ctrl_state!r}."
+                    f"px4ctrl left/stale CMD_CTRL during continuous center grasp; "
+                    f"{self.px4ctrl_state_summary()}."
                 )
         return reference
 
@@ -1254,7 +1569,11 @@ class AutoGraspPlaceDataset(Node):
 
         elapsed_record_s = time.monotonic() - gate_s
         remaining_record_s = self.config.record_duration_s + 0.5 - elapsed_record_s
-        if remaining_record_s > 0.0:
+        if self.config.record_stop_topic:
+            self.get_logger().info(
+                "CMD_CTRL landing sequence finished; using record stop gate instead of fixed-duration hold."
+            )
+        elif remaining_record_s > 0.0:
             self.get_logger().info(
                 f"Holding CMD landing pose for {remaining_record_s:.1f}s until record episode is expected to finish."
             )
@@ -1262,6 +1581,53 @@ class AutoGraspPlaceDataset(Node):
 
         self.get_logger().warn(
             "CMD_CTRL landing sequence finished. Auto LAND/disarm was not sent; disarm or switch mode manually if needed."
+        )
+        self.publish_record_stop_gate("CMD_CTRL landing sequence finished")
+
+    def keep_alive_until_record_window_done(self, gate_s: float, context: str) -> None:
+        elapsed_record_s = time.monotonic() - gate_s
+        remaining_record_s = self.config.record_duration_s + 0.5 - elapsed_record_s
+        if remaining_record_s <= 0.0:
+            return
+
+        self.get_logger().info(
+            f"{context}: keeping automatic node and gripper feedback alive for "
+            f"{remaining_record_s:.1f}s until recorder is expected to finish."
+        )
+        deadline = time.monotonic() + remaining_record_s
+        next_open_s = 0.0
+        while rclpy.ok() and time.monotonic() < deadline:
+            now_s = time.monotonic()
+            if now_s >= next_open_s:
+                self.publish_gripper(self.config.gripper_open, repeats=1, interval_s=0.0)
+                next_open_s = now_s + 0.5
+            self.pump_once(timeout_sec=0.02)
+
+    def wait_for_auto_land_complete(self) -> None:
+        deadline = time.monotonic() + self.config.auto_land_timeout_s
+        last_log_s = 0.0
+        while rclpy.ok() and time.monotonic() < deadline:
+            self.pump_once(timeout_sec=0.05)
+            if self.px4ctrl_state_is("MANUAL_CTRL"):
+                self.get_logger().info("AUTO_LAND complete: px4ctrl reached MANUAL_CTRL.")
+                return
+            mavros_state = getattr(self, "mavros_state", None)
+            mavros_state_fresh = getattr(self, "mavros_state_fresh", None)
+            if mavros_state is not None and callable(mavros_state_fresh) and mavros_state_fresh():
+                if not bool(mavros_state.armed):
+                    self.get_logger().info(
+                        f"AUTO_LAND complete: MAVROS reports disarmed in mode={mavros_state.mode!r}."
+                    )
+                    return
+            now_s = time.monotonic()
+            if now_s - last_log_s >= 1.0:
+                self.get_logger().info(
+                    "Waiting for AUTO_LAND completion: "
+                    f"{self.px4ctrl_state_summary()} remaining={max(0.0, deadline - now_s):.1f}s"
+                )
+                last_log_s = now_s
+        raise RuntimeError(
+            f"Timed out waiting for AUTO_LAND completion; {self.px4ctrl_state_summary()}."
         )
 
     def run_sequence(self) -> None:
@@ -1302,6 +1668,18 @@ class AutoGraspPlaceDataset(Node):
             f"box_lwh=({self.config.box_length_m:.3f}, {self.config.box_width_m:.3f}, "
             f"{self.config.box_height_m:.3f})m."
         )
+        self.get_logger().info(
+            "Target grasp body-frame bias: "
+            f"x={self.config.target_grasp_x_bias_m:+.3f}m, "
+            f"z={self.config.target_grasp_z_bias_m:+.3f}m."
+        )
+        self.get_logger().info(
+            "Target map-X bias: "
+            f"prehover={self.config.target_prehover_map_x_bias_m:+.3f}m, "
+            f"hover={self.config.target_hover_map_x_bias_m:+.3f}m, "
+            f"grasp={self.config.target_grasp_map_x_bias_m:+.3f}m; "
+            f"trajectory_planner_enable={self.config.trajectory_planner_enable}."
+        )
         self.validate_box_fit()
 
         self.wait_for_takeoff_confirmation(raw_target, raw_box, target, box, drone, drone_arrival)
@@ -1324,44 +1702,100 @@ class AutoGraspPlaceDataset(Node):
         hold = self.checked_pose(current_drone.x, current_drone.y, current_drone.z, current_drone.yaw)
         self.get_logger().info("Publishing hold /position_cmd to enter CMD_CTRL.")
         hold_deadline = time.monotonic() + self.config.cmd_ctrl_timeout_s
+        last_cmd_ctrl_wait_log_s = 0.0
         while rclpy.ok() and time.monotonic() < hold_deadline:
             self.publish_cmd(hold)
-            rclpy.spin_once(self, timeout_sec=0.02)
-            if self.px4ctrl_state == "CMD_CTRL":
+            self.pump_once(timeout_sec=0.02)
+            if self.px4ctrl_state_is("CMD_CTRL"):
                 break
+            now_s = time.monotonic()
+            if now_s - last_cmd_ctrl_wait_log_s >= 1.0:
+                state_age = (
+                    now_s - self.px4ctrl_state_received_s
+                    if self.px4ctrl_state_received_s is not None
+                    else float("nan")
+                )
+                self.get_logger().info(
+                    "Waiting for CMD_CTRL after hold command: "
+                    f"latest_state={self.px4ctrl_state!r} state_age={state_age:.2f}s "
+                    f"remaining={max(0.0, hold_deadline - now_s):.1f}s"
+                )
+                last_cmd_ctrl_wait_log_s = now_s
             time.sleep(1.0 / self.config.rate_hz)
-        if self.px4ctrl_state != "CMD_CTRL":
-            raise RuntimeError(f"Failed to enter CMD_CTRL; latest px4ctrl state={self.px4ctrl_state!r}.")
+        if not self.px4ctrl_state_is("CMD_CTRL"):
+            raise RuntimeError(f"Failed to enter CMD_CTRL; {self.px4ctrl_state_summary()}.")
 
         self.publish_record_gate()
         gate_s = time.monotonic()
         self.hold_cmd(hold, self.config.record_start_hold_s)
 
-        yaw = hold.yaw
+        current = self.align_yaw_to_target_for_camera(hold)
+        yaw = current.yaw
         self.get_logger().info(
             "Object waypoints will be refreshed during approach and latched before occlusion-prone descent/grasp/place."
         )
 
         def target_hover_waypoint() -> PoseSample:
             live_target = self.latched_or_fresh_object_pose("target")
-            return self.pose_at_z(live_target, self.target_hover_drone_z(live_target), yaw)
+            hover = self.pose_at_z(live_target, self.target_hover_drone_z(live_target), yaw)
+            return self.pose_map_x_bias(hover, self.config.target_hover_map_x_bias_m)
+
+        def target_prehover_waypoint() -> PoseSample:
+            live_target = self.latched_or_fresh_object_pose("target")
+            prehover = self.pose_at_z(live_target, self.target_hover_drone_z(live_target), yaw)
+            return self.pose_map_x_bias(prehover, self.config.target_prehover_map_x_bias_m)
 
         def box_hover_waypoint() -> PoseSample:
             live_box = self.latched_or_fresh_object_pose("box")
             return self.pose_at_z(live_box, self.box_hover_drone_z(live_box), yaw)
 
-        current = hold
+        current = self.fly_to_live_waypoint(
+            current,
+            target_prehover_waypoint,
+            self.config.max_speed,
+            "Fly to target pre-hover with live target update",
+            settle_s=self.config.target_arrival_settle_s,
+            max_positive_x_error_m=self.config.target_arrival_max_positive_x_error_m,
+        )
+        if not self.config.trajectory_planner_enable:
+            current = self.wait_for_drone_near(
+                current,
+                "Target pre-hover actual settle",
+                keep_gripper_open=True,
+                xy_tolerance_m=self.config.target_arrival_xy_tolerance_m,
+                z_tolerance_m=self.config.target_arrival_z_tolerance_m,
+                max_positive_x_error_m=self.config.target_arrival_max_positive_x_error_m,
+                settle_s=self.config.target_arrival_settle_s,
+            )
+
         current = self.fly_to_live_waypoint(
             current,
             target_hover_waypoint,
-            self.config.max_speed,
+            self.config.approach_speed,
             "Fly to target hover with live target update",
+            settle_s=self.config.target_arrival_settle_s,
+            max_positive_x_error_m=self.config.target_arrival_max_positive_x_error_m,
         )
-        current = self.wait_for_drone_near(current, "Target hover actual settle", keep_gripper_open=True)
+        if not self.config.trajectory_planner_enable:
+            current = self.wait_for_drone_near(
+                current,
+                "Target hover actual settle",
+                keep_gripper_open=True,
+                xy_tolerance_m=self.config.target_arrival_xy_tolerance_m,
+                z_tolerance_m=self.config.target_arrival_z_tolerance_m,
+                max_positive_x_error_m=self.config.target_arrival_max_positive_x_error_m,
+                settle_s=self.config.target_arrival_settle_s,
+            )
 
         target = self.latched_or_fresh_object_pose("target")
+        target_prehover = self.pose_at_z(target, self.target_hover_drone_z(target), yaw)
+        target_prehover = self.pose_map_x_bias(target_prehover, self.config.target_prehover_map_x_bias_m)
         target_above = self.pose_at_z(target, self.target_hover_drone_z(target), yaw)
+        target_above = self.pose_map_x_bias(target_above, self.config.target_hover_map_x_bias_m)
         target_grasp = self.pose_at_z(target, self.target_grasp_drone_z(target), yaw)
+        target_grasp = self.pose_map_x_bias(target_grasp, self.config.target_grasp_map_x_bias_m)
+        if abs(self.config.target_grasp_x_bias_m) > 1e-6:
+            target_grasp = self.pose_relative_forward(target_grasp, self.config.target_grasp_x_bias_m)
         target_lift = self.pose_relative_forward(
             target_above,
             forward_m=self.config.payload_lift_forward_comp_m,
@@ -1386,17 +1820,36 @@ class AutoGraspPlaceDataset(Node):
             )
         self.get_logger().info(
             "Latched target drone-center waypoints: "
-            f"target_hover_z={target_above.z:.3f}, target_grasp_z={target_grasp.z:.3f}."
+            f"target_prehover=({target_prehover.x:.3f},{target_prehover.y:.3f},{target_prehover.z:.3f}), "
+            f"target_hover=({target_above.x:.3f},{target_above.y:.3f},{target_above.z:.3f}), "
+            f"target_grasp=({target_grasp.x:.3f},{target_grasp.y:.3f},{target_grasp.z:.3f}), "
+            f"adjusted_target=({target.x:.3f},{target.y:.3f},{target.z:.3f}), "
+            f"map_x_bias=(prehover={self.config.target_prehover_map_x_bias_m:+.3f}, "
+            f"hover={self.config.target_hover_map_x_bias_m:+.3f}, "
+            f"grasp={self.config.target_grasp_map_x_bias_m:+.3f})m."
         )
 
-        current = self.fly_segment(current, target_grasp, self.config.pregrasp_z_speed_mps, "Descend to grasp")
-        current = self.wait_for_drone_near(
+        current = self.fly_segment(
             current,
-            "Pre-grasp actual settle",
+            target_grasp,
+            self.config.pregrasp_z_speed_mps,
+            "Descend to grasp",
             keep_gripper_open=True,
             xy_tolerance_m=self.config.pregrasp_arrival_xy_tolerance_m,
             z_tolerance_m=self.config.pregrasp_arrival_z_tolerance_m,
+            max_positive_x_error_m=self.config.target_arrival_max_positive_x_error_m,
+            settle_s=self.config.pregrasp_arrival_settle_s,
         )
+        if not self.config.trajectory_planner_enable:
+            current = self.wait_for_drone_near(
+                current,
+                "Pre-grasp actual settle",
+                keep_gripper_open=True,
+                xy_tolerance_m=self.config.pregrasp_arrival_xy_tolerance_m,
+                z_tolerance_m=self.config.pregrasp_arrival_z_tolerance_m,
+                max_positive_x_error_m=self.config.target_arrival_max_positive_x_error_m,
+                settle_s=self.config.pregrasp_arrival_settle_s,
+            )
         current = self.soft_grasp(current)
         if self.config.post_grasp_settle_s > 0.0:
             self.get_logger().info(f"Holding after grasp for {self.config.post_grasp_settle_s:.2f}s to let payload settle.")
@@ -1410,29 +1863,68 @@ class AutoGraspPlaceDataset(Node):
             box_hover_waypoint,
             self.config.payload_transfer_speed,
             "Fly to box hover with live box update",
+            settle_s=self.config.box_arrival_settle_s,
         )
-        current = self.wait_for_drone_near(current, "Box hover actual settle")
+        if not self.config.trajectory_planner_enable:
+            current = self.wait_for_drone_near(
+                current,
+                "Box hover actual settle",
+                xy_tolerance_m=self.config.box_arrival_xy_tolerance_m,
+                z_tolerance_m=self.config.box_arrival_z_tolerance_m,
+                settle_s=self.config.box_arrival_settle_s,
+            )
 
-        box = self.latched_or_fresh_object_pose("box")
-        box_above = self.pose_at_z(box, self.box_hover_drone_z(box), yaw)
-        box_place = self.pose_at_z(box, self.box_place_drone_z(box), yaw)
-        self.get_logger().info(
-            "Latched box drone-center waypoints: "
-            f"box_hover_z={box_above.z:.3f}, box_place_z={box_place.z:.3f}."
-        )
-        current = self.fly_segment(current, box_place, self.config.approach_speed, "Descend to box")
-        current = self.wait_for_drone_near(current, "Box place actual settle")
-        self.get_logger().info("Opening gripper to release.")
-        self.publish_gripper_ramp(
-            0.5 * (self.last_gripper_left + self.last_gripper_right),
-            self.config.gripper_open,
-            self.config.gripper_open_duration_s,
-            hold_pose=current,
-        )
-        self.publish_gripper(self.config.gripper_open, repeats=5)
+        released_payload = False
+        if self.config.release_at_box_hover:
+            self.get_logger().info("release_at_box_hover=true; opening gripper at box hover without descending.")
+            self.get_logger().info("Opening gripper to release.")
+            self.publish_gripper_ramp(
+                0.5 * (self.last_gripper_left + self.last_gripper_right),
+                self.config.gripper_open,
+                self.config.gripper_open_duration_s,
+                hold_pose=current,
+            )
+            self.publish_gripper(self.config.gripper_open, repeats=5)
+            released_payload = True
+        else:
+            box = self.latched_or_fresh_object_pose("box")
+            box_above = self.pose_at_z(box, self.box_hover_drone_z(box), yaw)
+            box_place = self.pose_at_z(box, self.box_place_drone_z(box), yaw)
+            self.get_logger().info(
+                "Latched box drone-center waypoints: "
+                f"box_hover_z={box_above.z:.3f}, box_place_z={box_place.z:.3f}."
+            )
+            current = self.fly_segment(current, box_place, self.config.approach_speed, "Descend to box")
+            current = self.wait_for_drone_near(
+                current,
+                "Box place actual settle",
+                xy_tolerance_m=self.config.box_arrival_xy_tolerance_m,
+                z_tolerance_m=self.config.box_arrival_z_tolerance_m,
+                settle_s=self.config.box_arrival_settle_s,
+            )
+            self.get_logger().info("Opening gripper to release.")
+            self.publish_gripper_ramp(
+                0.5 * (self.last_gripper_left + self.last_gripper_right),
+                self.config.gripper_open,
+                self.config.gripper_open_duration_s,
+                hold_pose=current,
+            )
+            self.publish_gripper(self.config.gripper_open, repeats=5)
+            released_payload = True
 
-        release_up = self.pose_relative_forward(current, forward_m=0.0, up_m=self.config.release_retreat_up_m)
-        release_forward = self.pose_relative_forward(
+        if released_payload and self.config.post_release_hold_stop_s > 0.0:
+            self.get_logger().info(
+                f"Holding release pose for {self.config.post_release_hold_stop_s:.2f}s before ending the episode."
+            )
+            self.hold_cmd(current, self.config.post_release_hold_stop_s)
+            self.publish_record_stop_gate("post-release hold complete")
+            self.get_logger().info(
+                "Post-release episode stop gate published; stopping CMD_CTRL setpoints now."
+            )
+            return
+
+        release_up = self.release_retreat_pose(current, forward_m=0.0, up_m=self.config.release_retreat_up_m)
+        release_forward = self.release_retreat_pose(
             release_up,
             forward_m=self.config.release_retreat_forward_m,
             up_m=0.0,
@@ -1465,6 +1957,8 @@ class AutoGraspPlaceDataset(Node):
         self.spin_sleep(self.config.command_stop_before_land_s)
         self.publish_gripper(self.config.gripper_open, repeats=5)
         self.publish_land()
+        self.wait_for_auto_land_complete()
+        self.publish_record_stop_gate("AUTO_LAND complete")
 
     def emergency_open_and_land(self) -> None:
         self.get_logger().warn("Emergency cleanup: opening gripper.")
@@ -1486,6 +1980,12 @@ def parse_args() -> AutoConfig:
     parser.add_argument("--target-pose-topic", default="/strawberry_bear/pose")
     parser.add_argument("--box-pose-topic", default="/box1/pose")
     parser.add_argument("--cmd-topic", default="/position_cmd")
+    parser.add_argument(
+        "--trajectory-planner-enable",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Treat --cmd-topic as a raw stage-goal topic consumed by the external trajectory planner.",
+    )
     parser.add_argument("--gripper-topic", default="/gripper/command")
     parser.add_argument("--gripper-command-pair-topic", default="/gripper/command_pair")
     parser.add_argument("--gripper-feedback-topic", default="/gripper/feedback")
@@ -1494,13 +1994,25 @@ def parse_args() -> AutoConfig:
     parser.add_argument("--record-status-topic", default="/lerobot_record/status")
     parser.add_argument("--record-gate-topic", default="/auto_grasp_dataset/record_gate")
     parser.add_argument("--record-gate-value", default="START")
+    parser.add_argument("--record-stop-topic", default="/auto_grasp_dataset/record_stop")
+    parser.add_argument("--record-stop-value", default="STOP")
+    parser.add_argument("--record-stop-hold-s", type=float, default=3.0)
+    parser.add_argument(
+        "--post-release-hold-stop-s",
+        type=float,
+        default=0.0,
+        help=(
+            "If >0, after opening the gripper at the box, hold the current release pose for this long, "
+            "publish the record stop gate, and return without retreating or landing."
+        ),
+    )
     parser.add_argument("--frame-id", default="map")
     parser.add_argument("--rate-hz", type=float, default=20.0)
-    parser.add_argument("--max-speed", type=float, default=0.6)
-    parser.add_argument("--approach-speed", type=float, default=0.3)
-    parser.add_argument("--lift-speed", type=float, default=0.4)
+    parser.add_argument("--max-speed", type=float, default=0.30)
+    parser.add_argument("--approach-speed", type=float, default=0.07)
+    parser.add_argument("--lift-speed", type=float, default=0.10)
     parser.add_argument("--payload-lift-speed", type=float, default=0.10)
-    parser.add_argument("--payload-transfer-speed", type=float, default=0.16)
+    parser.add_argument("--payload-transfer-speed", type=float, default=0.30)
     parser.add_argument("--post-grasp-settle-s", type=float, default=1.5)
     parser.add_argument("--post-lift-settle-s", type=float, default=1.5)
     parser.add_argument("--smooth-trajectory", action=argparse.BooleanOptionalAction, default=True)
@@ -1568,6 +2080,33 @@ def parse_args() -> AutoConfig:
     parser.add_argument("--target-offset-x", type=float, default=0.0)
     parser.add_argument("--target-offset-y", type=float, default=0.0)
     parser.add_argument("--target-offset-z", type=float, default=0.0)
+    parser.add_argument(
+        "--target-grasp-x-bias-m",
+        type=float,
+        default=0.0,
+        help="Body-frame forward bias applied only to the target grasp waypoint; negative moves the drone backward.",
+    )
+    parser.add_argument(
+        "--target-prehover-map-x-bias-m",
+        type=float,
+        default=-0.15,
+        help=(
+            "Map-frame x bias for the target pre-hover waypoint. A more negative value makes the "
+            "approach stop behind the target before the final short approach."
+        ),
+    )
+    parser.add_argument(
+        "--target-hover-map-x-bias-m",
+        type=float,
+        default=0.0,
+        help="Map-frame x bias applied to the target hover waypoint; negative moves toward mocap/map -X.",
+    )
+    parser.add_argument(
+        "--target-grasp-map-x-bias-m",
+        type=float,
+        default=0.0,
+        help="Map-frame x bias applied to the target grasp waypoint; negative moves toward mocap/map -X.",
+    )
     parser.add_argument("--target-grasp-z-bias-m", type=float, default=0.0)
     parser.add_argument("--box-offset-x", type=float, default=0.0)
     parser.add_argument("--box-offset-y", type=float, default=0.0)
@@ -1576,6 +2115,12 @@ def parse_args() -> AutoConfig:
     parser.add_argument("--target-grasp-z-offset", type=float, default=None)
     parser.add_argument("--box-hover-z-offset", type=float, default=None)
     parser.add_argument("--box-place-z-offset", type=float, default=None)
+    parser.add_argument(
+        "--transfer-drone-z-m",
+        type=float,
+        default=None,
+        help="Optional absolute drone-center z used for target/box hover and payload transfer waypoints.",
+    )
     parser.add_argument("--x-min", type=float, default=-11.0)
     parser.add_argument("--x-max", type=float, default=11.0)
     parser.add_argument("--y-min", type=float, default=-4.1)
@@ -1604,12 +2149,29 @@ def parse_args() -> AutoConfig:
     parser.add_argument("--waypoint-arrival-tolerance-m", type=float, default=0.08)
     parser.add_argument("--waypoint-arrival-xy-tolerance-m", type=float, default=None)
     parser.add_argument("--waypoint-arrival-z-tolerance-m", type=float, default=None)
-    parser.add_argument("--pregrasp-arrival-xy-tolerance-m", type=float, default=0.08)
-    parser.add_argument("--pregrasp-arrival-z-tolerance-m", type=float, default=0.035)
+    parser.add_argument("--target-arrival-xy-tolerance-m", type=float, default=None)
+    parser.add_argument("--target-arrival-z-tolerance-m", type=float, default=None)
+    parser.add_argument(
+        "--target-arrival-max-positive-x-error-m",
+        type=float,
+        default=None,
+        help=(
+            "Optional target-stage signed x gate. If set, target hover/grasp arrival only accepts "
+            "arrival.x - target_setpoint.x <= this value, preventing the drone from settling ahead "
+            "of the map-X-biased target point."
+        ),
+    )
+    parser.add_argument("--box-arrival-xy-tolerance-m", type=float, default=None)
+    parser.add_argument("--box-arrival-z-tolerance-m", type=float, default=None)
+    parser.add_argument("--pregrasp-arrival-xy-tolerance-m", type=float, default=0.05)
+    parser.add_argument("--pregrasp-arrival-z-tolerance-m", type=float, default=0.04)
     parser.add_argument("--pregrasp-z-speed-mps", type=float, default=0.10)
     parser.add_argument("--waypoint-arrival-settle-s", type=float, default=0.4)
+    parser.add_argument("--target-arrival-settle-s", type=float, default=0.05)
+    parser.add_argument("--pregrasp-arrival-settle-s", type=float, default=0.05)
+    parser.add_argument("--box-arrival-settle-s", type=float, default=0.0)
     parser.add_argument("--waypoint-arrival-timeout-s", type=float, default=15.0)
-    parser.add_argument("--mocap-correction-enable", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--mocap-correction-enable", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--mocap-correction-max-xy-m", type=float, default=0.25)
     parser.add_argument("--mocap-correction-max-z-m", type=float, default=0.15)
     parser.add_argument("--mocap-correction-vxy-mps", type=float, default=0.08)
@@ -1623,6 +2185,12 @@ def parse_args() -> AutoConfig:
         default="drone_control",
     )
     parser.add_argument("--body-frame-yaw-offset-rad", type=float, default=0.0)
+    parser.add_argument("--target-yaw-align-enable", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--target-yaw-align-offset-rad", type=float, default=0.0)
+    parser.add_argument("--target-yaw-align-rate-dps", type=float, default=30.0)
+    parser.add_argument("--target-yaw-align-tol-deg", type=float, default=12.0)
+    parser.add_argument("--target-yaw-align-min-distance-m", type=float, default=0.20)
+    parser.add_argument("--target-yaw-align-max-duration-s", type=float, default=3.0)
     confirm_group = parser.add_mutually_exclusive_group()
     confirm_group.add_argument(
         "--confirm-before-takeoff",
@@ -1640,6 +2208,7 @@ def parse_args() -> AutoConfig:
     parser.add_argument("--record-duration-s", type=float, default=30.0)
     parser.add_argument("--record-start-hold-s", type=float, default=0.06)
     parser.add_argument("--grasp-mode", choices=("soft", "continuous_center"), default="continuous_center")
+    parser.add_argument("--pre-grasp-hold-s", type=float, default=0.05)
     parser.add_argument("--gripper-open", type=float, default=100.0)
     parser.add_argument("--gripper-closed", type=float, default=0.0)
     parser.add_argument("--gripper-close-duration-s", type=float, default=1.5)
@@ -1674,7 +2243,19 @@ def parse_args() -> AutoConfig:
         default=2.0,
         help="After release and climb, fly this far forward in current yaw direction before landing.",
     )
-    parser.add_argument("--retreat-speed", type=float, default=0.6)
+    parser.add_argument(
+        "--release-retreat-frame",
+        choices=("body_forward", "map_x"),
+        default="body_forward",
+        help="Frame used by release retreat forward motion.",
+    )
+    parser.add_argument(
+        "--release-at-box-hover",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Open the gripper at the box hover waypoint and skip the descent to box_place.",
+    )
+    parser.add_argument("--retreat-speed", type=float, default=0.10)
     parser.add_argument(
         "--landing-mode",
         choices=("cmd", "auto", "none"),
@@ -1690,12 +2271,13 @@ def parse_args() -> AutoConfig:
     )
     parser.add_argument("--cmd-land-z-offset-m", type=float, default=0.0)
     parser.add_argument("--command-stop-before-land-s", type=float, default=1.2)
+    parser.add_argument("--auto-land-timeout-s", type=float, default=45.0)
     parser.add_argument("--no-land", action="store_true")
 
     args = parser.parse_args(remove_ros_args(args=sys.argv)[1:])
 
-    if not 0.5 <= args.max_speed <= 1.0:
-        raise ValueError("--max-speed must be in [0.5, 1.0] m/s.")
+    if not 0.05 <= args.max_speed <= 1.0:
+        raise ValueError("--max-speed must be in [0.05, 1.0] m/s.")
     if args.approach_speed <= 0.0 or args.lift_speed <= 0.0:
         raise ValueError("--approach-speed and --lift-speed must be positive.")
     if args.payload_lift_speed <= 0.0 or args.payload_transfer_speed <= 0.0:
@@ -1712,26 +2294,50 @@ def parse_args() -> AutoConfig:
         raise ValueError("--rate-hz must be positive.")
     if args.record_duration_s <= 0.0:
         raise ValueError("--record-duration-s must be positive.")
+    if args.record_stop_hold_s < 0.0:
+        raise ValueError("--record-stop-hold-s must be non-negative.")
+    if args.post_release_hold_stop_s < 0.0:
+        raise ValueError("--post-release-hold-stop-s must be non-negative.")
     if args.gripper_z_offset_m < 0.0:
         raise ValueError("--gripper-z-offset-m must be non-negative.")
     if args.waypoint_arrival_xy_tolerance_m is None:
         args.waypoint_arrival_xy_tolerance_m = args.waypoint_arrival_tolerance_m
     if args.waypoint_arrival_z_tolerance_m is None:
         args.waypoint_arrival_z_tolerance_m = args.waypoint_arrival_tolerance_m
+    if args.target_arrival_xy_tolerance_m is None:
+        args.target_arrival_xy_tolerance_m = args.pregrasp_arrival_xy_tolerance_m
+    if args.target_arrival_z_tolerance_m is None:
+        args.target_arrival_z_tolerance_m = args.pregrasp_arrival_z_tolerance_m
+    if args.box_arrival_xy_tolerance_m is None:
+        args.box_arrival_xy_tolerance_m = args.waypoint_arrival_xy_tolerance_m
+    if args.box_arrival_z_tolerance_m is None:
+        args.box_arrival_z_tolerance_m = args.waypoint_arrival_z_tolerance_m
     if (
         args.waypoint_arrival_tolerance_m <= 0.0
         or args.waypoint_arrival_xy_tolerance_m <= 0.0
         or args.waypoint_arrival_z_tolerance_m <= 0.0
+        or args.target_arrival_xy_tolerance_m <= 0.0
+        or args.target_arrival_z_tolerance_m <= 0.0
+        or args.box_arrival_xy_tolerance_m <= 0.0
+        or args.box_arrival_z_tolerance_m <= 0.0
         or args.pregrasp_arrival_xy_tolerance_m <= 0.0
         or args.pregrasp_arrival_z_tolerance_m <= 0.0
         or args.pregrasp_z_speed_mps <= 0.0
         or args.waypoint_arrival_settle_s < 0.0
+        or args.target_arrival_settle_s < 0.0
+        or args.pregrasp_arrival_settle_s < 0.0
+        or args.box_arrival_settle_s < 0.0
         or args.waypoint_arrival_timeout_s <= 0.0
     ):
         raise ValueError(
             "Arrival tolerances, --pregrasp-z-speed-mps, and --waypoint-arrival-timeout-s must be positive; "
-            "--waypoint-arrival-settle-s must be non-negative."
+            "arrival settle values must be non-negative."
         )
+    if (
+        args.target_arrival_max_positive_x_error_m is not None
+        and args.target_arrival_max_positive_x_error_m < 0.0
+    ):
+        raise ValueError("--target-arrival-max-positive-x-error-m must be non-negative when set.")
     if (
         args.mocap_correction_max_xy_m < 0.0
         or args.mocap_correction_max_z_m < 0.0
@@ -1742,6 +2348,22 @@ def parse_args() -> AutoConfig:
         raise ValueError("Mocap correction limits and speeds must be non-negative.")
     if not math.isfinite(args.body_frame_yaw_offset_rad):
         raise ValueError("--body-frame-yaw-offset-rad must be finite.")
+    if not math.isfinite(args.target_yaw_align_offset_rad):
+        raise ValueError("--target-yaw-align-offset-rad must be finite.")
+    if args.target_yaw_align_rate_dps <= 0.0 or args.target_yaw_align_tol_deg <= 0.0:
+        raise ValueError("--target-yaw-align-rate-dps and --target-yaw-align-tol-deg must be positive.")
+    if args.target_yaw_align_min_distance_m < 0.0 or args.target_yaw_align_max_duration_s < 0.0:
+        raise ValueError(
+            "--target-yaw-align-min-distance-m and --target-yaw-align-max-duration-s must be non-negative."
+        )
+    if not math.isfinite(args.target_grasp_x_bias_m):
+        raise ValueError("--target-grasp-x-bias-m must be finite.")
+    if not math.isfinite(args.target_prehover_map_x_bias_m):
+        raise ValueError("--target-prehover-map-x-bias-m must be finite.")
+    if not math.isfinite(args.target_hover_map_x_bias_m):
+        raise ValueError("--target-hover-map-x-bias-m must be finite.")
+    if not math.isfinite(args.target_grasp_map_x_bias_m):
+        raise ValueError("--target-grasp-map-x-bias-m must be finite.")
     if args.target_height_m <= 0.0:
         raise ValueError("--target-height-m must be positive.")
     if not 0.0 < args.target_grasp_height_m <= args.target_height_m:
@@ -1750,10 +2372,16 @@ def parse_args() -> AutoConfig:
         raise ValueError("--box-length-m, --box-width-m, and --box-height-m must be positive.")
     if args.release_retreat_up_m < 0.0 or args.release_retreat_forward_m < 0.0:
         raise ValueError("--release-retreat-up-m and --release-retreat-forward-m must be non-negative.")
+    if args.transfer_drone_z_m is not None and not math.isfinite(args.transfer_drone_z_m):
+        raise ValueError("--transfer-drone-z-m must be finite when set.")
+    if args.auto_land_timeout_s <= 0.0:
+        raise ValueError("--auto-land-timeout-s must be positive.")
     if not 0.0 <= args.gripper_closed <= args.gripper_open:
         raise ValueError("--gripper-closed must be within [0, --gripper-open].")
     if args.gripper_close_duration_s <= 0.0 or args.gripper_open_duration_s <= 0.0:
         raise ValueError("--gripper-close-duration-s and --gripper-open-duration-s must be positive.")
+    if args.pre_grasp_hold_s < 0.0:
+        raise ValueError("--pre-grasp-hold-s must be non-negative.")
     if (
         args.grasp_step_size <= 0.0
         or args.grasp_step_settle_s <= 0.0
@@ -1785,6 +2413,11 @@ def main() -> None:
     config = parse_args()
     rclpy.init()
     node = AutoGraspPlaceDataset(config)
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
+    node.background_executor_active = True
+    spin_thread = threading.Thread(target=executor.spin, daemon=True)
+    spin_thread.start()
     try:
         node.run_sequence()
     except KeyboardInterrupt:
@@ -1795,6 +2428,9 @@ def main() -> None:
         node.emergency_open_and_land()
         raise
     finally:
+        node.background_executor_active = False
+        executor.shutdown()
+        spin_thread.join(timeout=1.0)
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

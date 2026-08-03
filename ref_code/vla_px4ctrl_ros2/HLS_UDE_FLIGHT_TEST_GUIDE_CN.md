@@ -15,8 +15,8 @@
 
 - 接管前、飞向目标、下降和实际到位 settle 前，夹爪会持续保持 open。
 - 只有 `Pre-grasp actual settle` 完成后，脚本才允许 HLS close。
-- 飞机控制位姿仍使用 `DRONE_POSE_TOPIC=/mavros/local_position/odom`；`ARRIVAL_POSE_TOPIC=/mavros/vision_pose/pose` 只用于到位判定和慢速 mocap 修正，不直接替换控制输入。
-- 抓取前 mocap 修正同时修 body-X/body-Y 和 Z；HLS 任意一侧接触后，Z 修正会冻结，mocap 修正只保留低速 body-X，body-Y 主要交给 HLS `center_error_m`。
+- 飞机控制由 `px4ctrl` 内部反馈完成；当前控制器实际位置/速度反馈已使用动捕同步状态，因此自动脚本默认不再把 `ARRIVAL_POSE_TOPIC` 误差叠加到 `/position_cmd`。
+- `ARRIVAL_POSE_TOPIC=/mavros/vision_pose/pose` 默认只用于到位判定；如需临时恢复旧外层修正，可显式设置 `MOCAP_CORRECTION_ENABLE=true`。
 - CH10 低位、离开 `CMD_CTRL`、FCU disarm/MAVROS disconnected、HLS 状态失效或 HLS fault 都会停止 close 并发布 open。`/mavros/rc/in` 超时默认只告警，避免把 ROS 话题回调间隔误判为遥控器丢失。
 - 释放到 box 后，撤离和命令降落阶段会持续保持 open。
 - 默认降落是 `CMD_CTRL` 位置命令下降到 `CMD_LAND_Z=-0.3`，不是 PX4 autoland；结束后仍需人工确认安全和必要时 disarm。
@@ -226,13 +226,13 @@ cd /home/user/vla_drone/lerobot/ref_code/vla_px4ctrl_ros2
 TARGET_OFFSET_X=0.00 \
 TARGET_OFFSET_Y=0.00 \
 TARGET_OFFSET_Z=0.00 \
-TARGET_GRASP_Z_BIAS_M=-0.06 \
+TARGET_GRASP_Z_BIAS_M=-0.03 \
 TARGET_GRASP_Z_OFFSET=-0.02 \
 TARGET_HOVER_Z_OFFSET=0.45 \
 BOX_OFFSET_X=0.00 \
 BOX_OFFSET_Y=0.00 \
 BOX_OFFSET_Z=0.00 \
-BOX_PLACE_Z_OFFSET=0.20 \
+BOX_PLACE_BOTTOM_CLEARANCE_M=0.24 \
 BOX_HOVER_Z_OFFSET=0.70 \
 bash shflies/auto_hls_ude_grasp_place_test.sh
 ```
@@ -341,7 +341,7 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 | --- | --- | --- | --- |
 | `TARGET_HOVER_Z_OFFSET` | 空 | 目标上方悬停高度覆盖。 | 设置后 `target_hover_drone_z = target.z + offset`。 |
 | `TARGET_GRASP_Z_OFFSET` | 空 | 抓取高度覆盖。 | 设置后 `target_grasp_drone_z = target.z + offset`。 |
-| `TARGET_GRASP_Z_BIAS_M` | `-0.06` | 在几何公式或 `TARGET_GRASP_Z_OFFSET` 基础上额外下调抓取无人机中心高度。 | HLS-UDE 一键飞测默认下调 6cm，用来抵消上一版抓取点偏高；如果夹爪明显压低目标，可往 `0.0` 调。 |
+| `TARGET_GRASP_Z_BIAS_M` | `-0.03` | 在几何公式或 `TARGET_GRASP_Z_OFFSET` 基础上额外修正抓取无人机中心高度；正值升高，负值降低。 | 当前测试成功后略微升高抓取高度，默认由 `-0.05m` 调到 `-0.03m`；如果夹爪仍够不到目标，继续减小；如果明显压低目标或过低，再增大。 |
 | `BOX_HOVER_Z_OFFSET` | 空 | box 上方悬停高度覆盖。 | 设置后 `box_hover_drone_z = box.z + offset`。 |
 | `BOX_PLACE_Z_OFFSET` | 空 | box 放置高度覆盖。 | 设置后 `box_place_drone_z = box.z + offset`。 |
 
@@ -360,7 +360,7 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 | `BOX_WIDTH_M` | `0.41` | box 宽度。 | 用于检查目标是否能放进 box。 |
 | `BOX_HEIGHT_M` | `0.14` | box 高度。 | 用于自动计算放置高度。 |
 | `BOX_HOVER_GRIPPER_CLEARANCE_M` | `0.55` | 夹爪相对 box 顶部/中心的悬停余量。 | 未设置 `BOX_HOVER_Z_OFFSET` 时使用。 |
-| `BOX_PLACE_BOTTOM_CLEARANCE_M` | `0.03` | 放置时目标底部离 box 底部的余量。 | 控制释放高度。 |
+| `BOX_PLACE_BOTTOM_CLEARANCE_M` | `0.24` | 放置时目标底部离 box 底部的余量。 | 控制未设置 `BOX_PLACE_Z_OFFSET` 时的释放高度；当前比上一版 `0.33m` 降低 9cm。 |
 
 ### 飞行速度和轨迹参数
 
@@ -368,13 +368,13 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 | --- | --- | --- | --- |
 | `--rate-hz` | `20.0` | 自动节点发布 `/position_cmd` 的频率。 | 通常不改。 |
 | `--max-speed` | `0.6` | 飞到目标上方的最大速度。 | 首次飞行可降低。 |
-| `--approach-speed` | `0.3` | 下降到抓取点、下降到 box 的速度。 | 目标附近建议保守。 |
+| `--approach-speed` | `0.15` | 下降到抓取点、下降到 box 的速度。 | 目标附近建议保守。 |
 | `PREGRASP_Z_SPEED_MPS` / `--pregrasp-z-speed-mps` | `0.10` | 最后一段下降到抓取高度的 Z 收敛速度。 | 抓取前高度过冲或不稳时降低；流程太慢时小幅升高。 |
 | `--lift-speed` | `0.4` | 释放后向上撤离速度。 | 过快会带来摆动。 |
-| `--payload-lift-speed` | `0.10` | 抓住物体后起吊速度。 | 携带阶段建议慢。 |
-| `--payload-transfer-speed` | `0.16` | 携带物体飞到 box 的速度。 | 太快会摆动。 |
-| `--post-grasp-settle-s` | `1.5` | HLS 报 safe 后、起吊前的等待。 | 让夹爪和目标进入稳态。 |
-| `--post-lift-settle-s` | `1.5` | 起吊后转运前的等待。 | 抑制摆动。 |
+| `--payload-lift-speed` | `0.15` | 抓住物体后起吊速度。 | 当前只保守加快，避免带载垂直起吊时电机过饱和。 |
+| `--payload-transfer-speed` | `0.15` | 携带物体飞到 box 的速度。 | 当前为更保守的带载转运速度，优先保证姿态余量和目标不滑脱。 |
+| `--post-grasp-settle-s` | `0.3` | HLS 报 safe 后、起吊前的等待。 | 当前测试成功后缩短等待；如果刚夹住时还会滑动再增大。 |
+| `--post-lift-settle-s` | `1.0` | 起吊后转运前的等待。 | 抑制摆动。 |
 | `--smooth-trajectory` / `--no-smooth-trajectory` | `true` | 是否使用平滑五次曲线。 | 真机建议保持开启。 |
 
 脚本环境变量目前没有显式包装所有速度参数；如果要改这些基础自动节点参数，可以直接在 `auto_hls_grasp_place.sh` 中补充，或直接运行 Python 节点传入对应 `--xxx` 参数。常规测试优先只改一键脚本已暴露的偏置、HLS 力控和安全参数。
@@ -390,11 +390,11 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 
 | 参数 | 默认值 | 作用 | 调参建议 |
 | --- | --- | --- | --- |
-| `WAYPOINT_ARRIVAL_TOLERANCE_M` | `0.12` | 旧的统一容差兼容参数。 | 如果没有设置新的分轴参数，Python 节点会用它作为 XY/Z fallback；新飞测优先改下面的分轴参数。 |
-| `WAYPOINT_ARRIVAL_XY_TOLERANCE_M` | `0.12` | 普通 waypoint 的水平到位容差。 | 飞到目标上方和 box 上方用这个，首飞不建议太小。 |
-| `WAYPOINT_ARRIVAL_Z_TOLERANCE_M` | `0.08` | 普通 waypoint 的高度到位容差。 | 比 XY 更严格，防止高度明显没到位仍继续流程。 |
-| `PREGRASP_ARRIVAL_XY_TOLERANCE_M` | `0.08` | 抓取前 `Pre-grasp actual settle` 的水平容差。 | 抓取前比普通 waypoint 更严格。 |
-| `PREGRASP_ARRIVAL_Z_TOLERANCE_M` | `0.035` | 抓取前 `Pre-grasp actual settle` 的高度容差。 | 这是防止“高十几厘米仍放行”的关键参数；太小可能等不到，太大容易夹空。 |
+| `WAYPOINT_ARRIVAL_TOLERANCE_M` | `0.06` | 旧的统一容差兼容参数。 | 如果没有设置新的分轴参数，Python 节点会用它作为 XY/Z fallback；新飞测优先改下面的分轴参数。 |
+| `WAYPOINT_ARRIVAL_XY_TOLERANCE_M` | `0.06` | 普通 waypoint 的水平到位容差。 | 飞到目标上方和 box 上方用这个；当前 Pixhawk6C 平台已收紧到 6cm。 |
+| `WAYPOINT_ARRIVAL_Z_TOLERANCE_M` | `0.04` | 普通 waypoint 的高度到位容差。 | 防止高度明显没到位仍继续流程。 |
+| `PREGRASP_ARRIVAL_XY_TOLERANCE_M` | `0.06` | 抓取前 `Pre-grasp actual settle` 的水平容差。 | 抓取前使用同样的 6cm 水平阈值。 |
+| `PREGRASP_ARRIVAL_Z_TOLERANCE_M` | `0.04` | 抓取前 `Pre-grasp actual settle` 的高度容差。 | 这是防止“高十几厘米仍放行”的关键参数；太小可能等不到，太大容易夹空。 |
 | `WAYPOINT_ARRIVAL_SETTLE_S` | `0.4` | 误差进入容差后必须持续稳定的时间。 | 越大越稳但流程变慢。 |
 | `WAYPOINT_ARRIVAL_TIMEOUT_S` | `30.0` | 等待实际到位的最长时间。 | 控制响应慢时可加大；超时会触发 open 并执行安全下降。 |
 | `ARRIVAL_POSE_TOPIC` / `--arrival-pose-topic` | `/mavros/vision_pose/pose` | 到位判定使用的无人机实际位置。 | 控制仍使用 `DRONE_POSE_TOPIC=/mavros/local_position/odom`；不要把控制位姿改成 vision pose。 |
@@ -402,19 +402,27 @@ bash shflies/auto_hls_ude_grasp_place_test.sh
 | `STABLE_DURATION_S` / `--stable-duration-s` | `0.5` | 起飞前等待目标/box/drone 姿态稳定时间。 | 目标抖动大时增大。 |
 | `STABLE_POS_TOLERANCE_M` / `--stable-pos-tolerance-m` | `0.03` | 稳定判定的位置波动容许值。 | mocap 噪声大时适当放宽。 |
 
-### odom 控制和 mocap 修正参数
+### 位置命令和可选 mocap 修正参数
 
-自动节点发布 `/position_cmd` 时，名义目标仍由 odom 控制链生成；如果启用 mocap 修正，则根据 `ARRIVAL_POSE_TOPIC` 看到的实际误差，限速、限幅叠加一个慢速修正量：
+自动节点发布 `/position_cmd` 时，默认只发布由目标/box mocap 位置计算出来的名义航点；px4ctrl 内部再用当前控制反馈闭环跟踪。当前控制器反馈已经使用动捕同步位置/速度，所以默认不再在自动脚本层叠加 `mocap_correction`，避免形成第二层慢速外环。
+
+默认关系是：
 
 ```text
-corrected_cmd = nominal_odom_cmd + mocap_correction + hls_body_y_offset_map
+position_cmd = nominal_cmd + hls_body_y_offset_map
 ```
 
-其中 `mocap_correction` 默认在 body-frame 中积分，再按 yaw 转回 map-frame 叠加到命令上。接触前它可以修 body-X/body-Y/Z；HLS 任意接触后，Z 冻结，body-Y 不再由 mocap correction 更新，主要由 HLS `center_error_m` 负责。`hls_body_y_offset_map` 是夹持期 HLS 局部 body-Y 居中辅助，和 mocap correction 独立限幅。
+如果显式启用 `MOCAP_CORRECTION_ENABLE=true`，才会恢复旧的外层修正：
+
+```text
+position_cmd = nominal_cmd + mocap_correction + hls_body_y_offset_map
+```
+
+`hls_body_y_offset_map` 是夹持期 HLS 局部 body-Y 居中辅助；夹取前不会启用。`ARRIVAL_POSE_TOPIC` 仍然用于判断飞机是否实际到位，不用于默认命令修正。
 
 | 参数 | 默认值 | 作用 | 调参建议 |
 | --- | --- | --- | --- |
-| `MOCAP_CORRECTION_ENABLE` | `true` | 是否启用基于 vision/mocap 实际误差的慢速修正。 | 如果怀疑修正方向或坐标系不一致，先设 `false` 做对比。 |
+| `MOCAP_CORRECTION_ENABLE` | `false` | 是否启用基于 vision/mocap 实际误差的慢速外层命令修正。 | 当前 px4ctrl 已直接使用动捕位置/速度反馈，默认关闭；只有需要对比旧逻辑时才设 `true`。 |
 | `MOCAP_CORRECTION_MAX_XY_M` | `0.25` | XY 修正总幅度上限。 | 防止 odom 和 mocap 偏差过大时命令大跳。 |
 | `MOCAP_CORRECTION_MAX_Z_M` | `0.15` | Z 修正总幅度上限。 | 抓取高度偏差大时可增大，但不建议超过实际机械余量。 |
 | `MOCAP_CORRECTION_VXY_MPS` | `0.08` | 接触前 XY 修正限速。 | 太大可能让轨迹不平滑；太小收敛慢。 |
@@ -428,9 +436,9 @@ corrected_cmd = nominal_odom_cmd + mocap_correction + hls_body_y_offset_map
 诊断话题：
 
 - `/auto_hls_grasp_place/nominal_position_cmd`：未叠加修正的名义命令。
-- `/auto_hls_grasp_place/corrected_position_cmd`：实际发到 `/position_cmd` 的修正命令。
+- `/auto_hls_grasp_place/corrected_position_cmd`：实际发到 `/position_cmd` 的命令；默认与 nominal 基本一致，夹持期可能叠加 HLS body-Y offset。
 - `/auto_hls_grasp_place/arrival_error`：arrival pose 相对名义命令的误差。
-- `/auto_hls_grasp_place/mocap_correction`：当前叠加到 map-frame 的 mocap 修正量。
+- `/auto_hls_grasp_place/mocap_correction`：当前叠加到 map-frame 的 mocap 修正量；默认应接近 0。
 - `/auto_hls_grasp_place/body_correction`：当前 body-frame mocap 修正量，x 是机体系前后，y 是机体系左右。
 - `/auto_hls_grasp_place/hls_body_y_offset`：当前 HLS body-Y 辅助偏移。
 - `/auto_hls_grasp_place/grasp_attempt`：当前抓取尝试编号，从 1 开始。
@@ -461,7 +469,7 @@ corrected_cmd = nominal_odom_cmd + mocap_correction + hls_body_y_offset_map
 | `GRIPPER_MANAGER_PORT` | `/dev/ttyACM1` | HLS 舵机串口。 | 串口变化时修改。 |
 | `HLS_SDK_ROOT` | 空 | FTServo Python SDK 路径。 | 默认候选路径找不到 SDK 时再指定。 |
 | `HLS_DRY_RUN` | `false` | 干跑模式，不实际写舵机。 | 软件验证可设 `true`；真机必须 `false`。 |
-| `HLS_GRAVITY_COMP_PATH` | `src/hls_gripper/config/gravity_compensation.json` | 重力补偿、限位、接触阈值和运动 profile 文件。 | 推荐保持当前标定文件。 |
+| `HLS_GRAVITY_COMP_PATH` | `install/hls_gripper/share/hls_gripper/config/gravity_compensation.json` | 重力补偿、限位、接触阈值和运动 profile 文件。 | 默认使用安装目录中的当前标定文件。 |
 | `HLS_LEFT_OPEN/CLEAR/CLOSE` | 空 | 左夹爪 open/clear/close 原始舵机位置覆盖。 | 通常由补偿 JSON 提供，不手动填。 |
 | `HLS_RIGHT_OPEN/CLEAR/CLOSE` | 空 | 右夹爪 open/clear/close 原始舵机位置覆盖。 | 同上。 |
 | `HLS_LEFT_CURRENT_INWARD_SIGN` | `1` | 左侧电流正方向是否表示向内夹。 | 当前实测为 `1`。方向错会导致接触/力控异常。 |
@@ -473,9 +481,9 @@ corrected_cmd = nominal_odom_cmd + mocap_correction + hls_body_y_offset_map
 | --- | --- | --- | --- |
 | `HLS_MOTION_PROFILE` | `p3` | 从补偿 JSON 选择运动 profile。 | 决定默认搜索速度、加速度、力矩。 |
 | `HLS_MOTION_PROFILE_INDEX` | 空 | 用 profile index 选择运动 profile。 | 与 `HLS_MOTION_PROFILE` 二选一，通常不用。 |
-| `HLS_SEARCH_SPEED` | `10` | `SEARCH_OBJECT` 和未接触侧继续闭合的速度。 | 第一次下夹速度主要看它；太大冲击，太小初始夹持慢。 |
+| `HLS_SEARCH_SPEED` | `7` | `SEARCH_OBJECT` 和未接触侧继续闭合的速度。 | 第一次下夹速度主要看它；当前继续降低搜索速度，太小初始夹持慢。 |
 | `HLS_SEARCH_ACC` | `4` | 搜索闭合加速度。 | 控制第一次下夹柔和程度。 |
-| `HLS_SEARCH_TORQUE_LIMIT` | `145` | 搜索闭合位置控制力矩上限。 | 太大搜索阶段冲击大；太小可能碰不到或闭合无力。 |
+| `HLS_SEARCH_TORQUE_LIMIT` | `100` | 搜索闭合位置控制力矩上限。 | 当前继续降低搜索冲击；太大搜索阶段冲击大，太小可能碰不到或闭合无力。 |
 
 ### 开爪参数
 
@@ -483,7 +491,7 @@ corrected_cmd = nominal_odom_cmd + mocap_correction + hls_body_y_offset_map
 | --- | --- | --- | --- |
 | `HLS_OPEN_SPEED` | `24` | open 位置控制速度。 | 影响释放速度。 |
 | `HLS_OPEN_ACC` | `6` | open 位置控制加速度。 | 太大开爪动作硬。 |
-| `HLS_OPEN_TORQUE_LIMIT` | `120` | open 位置控制力矩上限。 | 只用于释放，不建议过大。 |
+| `HLS_OPEN_TORQUE_LIMIT` | `160` | open 位置控制力矩上限。 | 只用于释放；当前加大用于保证释放可靠，不影响夹持阶段持续力。 |
 | `OPEN_COMMAND` | `100.0` | 自动节点发给 HLS 的 open 标量命令。 | 标量命令中 100 表示全开。 |
 | `CLOSE_COMMAND` | `0.0` | 自动节点发给 HLS 的 close 标量命令。 | 标量命令中 0 表示进入抓取/闭合。 |
 
@@ -492,11 +500,13 @@ corrected_cmd = nominal_odom_cmd + mocap_correction + hls_body_y_offset_map
 | 参数 | 当前一键默认 | 作用 | 调参影响 |
 | --- | --- | --- | --- |
 | `HLS_LOW_CURRENT` | `28` | 基础低保持电流。 | 越大越稳但更压物体；越小更轻但容易松。 |
-| `HLS_CENTER_HOLD_CURRENT` | `28` | 居中阶段非推力侧保持电流。 | 通常接近 `LOW_CURRENT`。 |
-| `HLS_CENTER_PUSH_CURRENT` | `66` | 居中/推力侧电流。 | 影响夹爪自己修正偏差和被推开后的基础补偿力度。 |
-| `HLS_GRIP_CHASE_MIN_CURRENT` | `66` | 追夹阶段电流地板。 | 影响保持夹持和被推开补偿。 |
-| `HLS_LIFT_CURRENT` | `76` | `LIFT_READY` 阶段保持电流。 | 影响起吊可靠性；太低可能提起时滑落。 |
-| ROS 参数 `final_grip_ramp_s` | 节点默认 `1.2` | 从低电流爬升到 lift 电流的时间。 | 一键脚本目前未显式暴露，必要时可在 wrapper 中补。 |
+| `HLS_CENTER_HOLD_CURRENT` | `24` | 居中阶段非推力侧保持电流。 | 比低保持更轻，减少非推力侧持续压迫。 |
+| `HLS_CENTER_PUSH_CURRENT` | `115` | 居中/推力侧电流。 | 当前进一步增强夹爪主动回中推力；太大可能冲击，太小补偿弱。 |
+| `HLS_GRIP_CHASE_MIN_CURRENT` | `36` | 追夹阶段电流地板。 | 当前继续降低追夹持续电流，让被推开后的补偿更轻。 |
+| `HLS_LIFT_CURRENT` | `900` | `LIFT_READY` 阶段保持电流。 | 当前用于防止起吊时被拔出，力度很大；注意温度、电流保护和压物体风险。 |
+| `HLS_CENTER_TIMEOUT_S` / ROS 参数 `center_timeout_s` | `5.0` | HLS 在 `CENTERING` 中等待真正居中的最长时间。 | 如果夹爪已经差不多居中但迟迟不起吊，优先缩短这个值。 |
+| `HLS_CENTER_STABLE_TIME_S` / ROS 参数 `center_stable_time_s` | `0.25` | 中心误差进入 deadband 后需要连续稳定的时间。 | 太大容易因接触抖动反复重置；太小可能过早进入最终夹持。 |
+| `HLS_FINAL_GRIP_RAMP_S` / ROS 参数 `final_grip_ramp_s` | `0.8` | 从低电流爬升到 lift 电流的时间。 | 当前 lift 电流很大，不建议再明显缩短。 |
 
 ### 位置脉冲追夹参数
 
@@ -535,7 +545,7 @@ corrected_cmd = nominal_odom_cmd + mocap_correction + hls_body_y_offset_map
 | ROS 参数 `contact_exit_threshold` | 节点默认 `-1` | 接触退出阈值覆盖。 | 通常不改。 |
 | ROS 参数 `contact_strong_threshold` | 节点默认 `-1` | 强接触阈值覆盖。 | 通常不改。 |
 | ROS 参数 `contact_confirm_cycles` | 节点默认 `3` | 接触确认所需连续周期。 | 越大越抗噪，越慢。 |
-| ROS 参数 `max_current` | 节点默认 `600` | 最大电流保护。 | 通常不改。 |
+| `HLS_MAX_CURRENT` / ROS 参数 `max_current` | `1100` | 最大反馈电流保护阈值。 | 因 `HLS_LIFT_CURRENT=900` 已超过节点默认 `600`，这里同步抬高，避免起吊阶段误触发 current limit fault。 |
 | ROS 参数 `feedback_timeout_s` | 节点默认 `0.5` | 舵机反馈超时。 | 超时会保护。 |
 | ROS 参数 `attitude_timeout_s` | 节点默认 `0.5` | IMU 姿态超时。 | 影响重力补偿。 |
 | `HLS_DRY_RUN_CONTACT_PATTERN` | `both` | dry-run 中模拟接触模式。 | 只用于软件测试。 |
@@ -549,10 +559,10 @@ corrected_cmd = nominal_odom_cmd + mocap_correction + hls_body_y_offset_map
 | `HLS_GRASP_TIMEOUT_S` | `12.0` | HLS 抓取从 close 到 `safe_to_lift` 的最长时间。 | 目标难抓时可增大。 |
 | `HLS_GRASP_MAX_RETRIES` | `2` | 首次抓取失败后最多再尝试的次数。 | 调试高度和落点时可设 `0`，确认首夹行为；正式测试可用默认 `2`。 |
 | `HLS_STATUS_TIMEOUT_S` | `0.8` | HLS 状态 snapshot 新鲜度阈值。 | 自动节点优先使用 `/hls_gripper/status_snapshot`，避免多个分散 topic 混用不同周期的数据。 |
-| `CENTER_DEADBAND_M` | `0.005` | body-Y 居中死区。 | 小误差不移动，避免抖动。 |
-| `CENTER_KP` | `0.8` | body-Y 偏移伺服比例增益。 | 越大越快，太大可能来回抢控制。 |
-| `CENTER_VMAX_MPS` | `0.015` | 双侧接触后居中的最大 body-Y 速度。 | 应低于夹爪追夹响应；现在默认更慢，避免无人机硬推固定目标。 |
-| `CENTER_OFFSET_MAX_M` | `0.025` | 双侧居中最大 body-Y 偏移。 | 防止大幅横移；固定目标测试建议保持小幅。 |
+| `CENTER_DEADBAND_M` | `0.04` | body-Y 居中死区。 | 比上一版 5cm 略严格，兼顾精度和抖动。 |
+| `CENTER_KP` | `1.0` | body-Y 偏移伺服比例增益。 | 当前小幅加快回中；太大可能来回抢控制。 |
+| `CENTER_VMAX_MPS` | `0.04` | 双侧接触后居中的最大 body-Y 速度。 | 比上一版略慢，降低回中时对重物和夹爪的扰动。 |
+| `CENTER_OFFSET_MAX_M` | `0.30` | 双侧居中最大 body-Y 偏移。 | 允许飞机配合夹爪做较大让位/居中。 |
 | `CENTER_COMMAND_SIGN` | `1.0` | 双侧居中方向符号。 | 方向反了才改成 `-1.0`。 |
 | `HLS_STATUS_CENTER_MISMATCH_TOL_M` | `0.015` | 双侧接触时 `center_error_m` 与 `centering_offset_m` 的一致性容差。 | 如果 snapshot 中两者不同号或差值过大，本周期 body-Y 居中会被拒绝并报警。 |
 | `SINGLE_CONTACT_VMAX_MPS` | `0.015` | 单侧接触让位最大 body-Y 速度。 | 比双侧居中更慢，避免硬压物体。 |
@@ -567,7 +577,7 @@ corrected_cmd = nominal_odom_cmd + mocap_correction + hls_body_y_offset_map
 | --- | --- | --- |
 | `SEARCH_OBJECT` | 不移动，保持抓取点 | 双指搜索闭合 |
 | `LEFT_CONTACT` / `RIGHT_CONTACT` | 只有 `single_contact_need_motion=true` 才按 `single_contact_direction` 低速移动 | 已接触侧追夹，未接触侧继续搜索 |
-| `BOTH_CONTACT` / `CENTERING` / `CENTERED` / `FINAL_GRIP` | 以 snapshot 中的 `center_error_m` 为主做小幅 body-Y 居中；mocap correction 只继续低速 body-X | 持续 close、差动电流居中、追夹、最终夹持 |
+| `BOTH_CONTACT` / `CENTERING` / `CENTERED` / `FINAL_GRIP` | 以 snapshot 中的 `center_error_m` 为主做小幅 body-Y 居中；默认不再叠加 mocap correction | 持续 close、差动电流居中、追夹、最终夹持 |
 | `LIFT_READY` | 停止抓取循环，冻结最后偏移并进入起吊 | 进入可起吊保持 |
 
 ### 抓取失败和重试逻辑
@@ -593,11 +603,11 @@ corrected_cmd = nominal_odom_cmd + mocap_correction + hls_body_y_offset_map
 
 1. 立即停止 close，发布 open。
 2. 未起吊前上升 `ABORT_RISE_M`。
-3. 使用当前 mocap correction；如果上一次 HLS body-Y 辅助到达极限，则下一次预抓取点保留这个 body-Y 方向偏置。
+3. 如果显式启用了 mocap correction，则沿用当前 correction；如果上一次 HLS body-Y 辅助到达极限，则下一次预抓取点保留这个 body-Y 方向偏置。
 4. 再次执行严格 `Pre-grasp actual settle`。
 5. 再次 close。
 
-重试不会额外固定降低 Z。高度主要由 `TARGET_GRASP_Z_BIAS_M=-0.06`、接触前 Z mocap correction、以及 `PREGRASP_ARRIVAL_Z_TOLERANCE_M=0.035` 保证；HLS 接触后 Z 修正冻结。
+重试不会额外固定调整 Z。高度主要由 `TARGET_GRASP_Z_BIAS_M=-0.03`、px4ctrl 内部动捕位置/速度反馈、以及 `PREGRASP_ARRIVAL_Z_TOLERANCE_M=0.04` 保证。默认不再叠加自动脚本层的 Z mocap correction。
 
 ## 常用调参方向
 
@@ -645,13 +655,13 @@ corrected_cmd = nominal_odom_cmd + mocap_correction + hls_body_y_offset_map
 
 检查：
 
-- `PREGRASP_ARRIVAL_Z_TOLERANCE_M` 是否过大；抓取前高度建议先用默认 `0.035`。
+- `PREGRASP_ARRIVAL_Z_TOLERANCE_M` 是否过大；抓取前高度建议先用默认 `0.04`。
 - `PREGRASP_ARRIVAL_XY_TOLERANCE_M` 是否过大。
 - `WAYPOINT_ARRIVAL_SETTLE_S` 是否过小。
 - `DRONE_POSE_TOPIC` 是否仍是 `/mavros/local_position/odom`，保证控制链没有被改成 vision pose。
 - `ARRIVAL_POSE_TOPIC` 是否是 `/mavros/vision_pose/pose` 且数据新鲜，保证到位判定用的是动捕/vision 位姿。
 - 日志中是否出现 `Pre-grasp actual settle: actual drone arrived by arrival pose`。
-- 观察 `/auto_hls_grasp_place/arrival_error` 和 `/auto_hls_grasp_place/mocap_correction`，确认 Z 误差在放行前已经收敛。
+- 观察 `/auto_hls_grasp_place/arrival_error`，确认 Z 误差在放行前已经收敛；默认 `/auto_hls_grasp_place/mocap_correction` 应接近 0。
 
 ### 到目标上方后自动 open 并下降
 
@@ -667,7 +677,7 @@ Emergency CMD_CTRL descent with gripper open
 处理顺序：
 
 - 看 `final xy_err=...m, z_err=...m`。如果只差几厘米且仍在收敛，优先增大 `WAYPOINT_ARRIVAL_TIMEOUT_S`。
-- 如果普通悬停长期稳定在 8cm 以上，可小幅放宽 `WAYPOINT_ARRIVAL_XY_TOLERANCE_M` 或 `WAYPOINT_ARRIVAL_Z_TOLERANCE_M`；但不要放宽 `PREGRASP_ARRIVAL_Z_TOLERANCE_M` 到会夹空。
+- 如果普通悬停长期稳定在 4cm 以上，可小幅放宽 `WAYPOINT_ARRIVAL_XY_TOLERANCE_M` 或 `WAYPOINT_ARRIVAL_Z_TOLERANCE_M`；但不要放宽 `PREGRASP_ARRIVAL_Z_TOLERANCE_M` 到会夹空。
 - 确认 `ARRIVAL_POSE_TOPIC=/mavros/vision_pose/pose` 有新鲜数据；`DRONE_POSE_TOPIC=/mavros/local_position/odom` 只负责控制。
 - 确认目标和 box 没有被遮挡导致长时间使用 latched pose。
 

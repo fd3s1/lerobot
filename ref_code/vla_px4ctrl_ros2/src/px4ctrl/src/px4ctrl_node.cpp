@@ -7,10 +7,12 @@
 #include <mavros_msgs/msg/extended_state.hpp>
 #include <mavros_msgs/msg/rc_in.hpp>
 #include <mavros_msgs/msg/state.hpp>
+#include <mavros_msgs/msg/tunnel.hpp>
 #include <mavros_msgs/srv/command_bool.hpp>
 #include <mavros_msgs/srv/command_long.hpp>
 #include <mavros_msgs/srv/set_mode.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <quadrotor_msgs/msg/position_command.hpp>
 #include <quadrotor_msgs/msg/takeoff_land.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/battery_state.hpp>
@@ -35,6 +37,18 @@ int main(int argc, char *argv[])
     node->get_logger(),
     "[PX4CTRL] FCU setpoint mode: %s",
     param.use_bodyrate_ctrl ? "BODYRATE" : "ATTITUDE");
+  RCLCPP_INFO(
+    node->get_logger(),
+    "[PX4CTRL] physical TUNNEL: %s topic=%s payload_type=%d mass=%.3fkg "
+    "body_rate_ff_scale=%.3f angular_accel_ff_scale=%.3f target=%d/%d",
+    param.physical_control.enable ? "ENABLED" : "DISABLED",
+    param.topics.physical_setpoint.c_str(),
+    param.physical_control.payload_type,
+    param.physical_control.mass_kg,
+    param.physical_control.body_rate_feedforward_scale,
+    param.physical_control.angular_acceleration_feedforward_scale,
+    param.physical_control.target_system,
+    param.physical_control.target_component);
 
   LinearControl controller(param);
   PX4CtrlFSM fsm(param, controller, node.get());
@@ -92,6 +106,13 @@ int main(int argc, char *argv[])
       fsm.cmd_data.feed(msg, node->now());
     });
 
+  auto cmd_traj_sub = node->create_subscription<quadrotor_msgs::msg::PositionCommand>(
+    param.topics.cmd_traj,
+    100,
+    [&fsm, &node](const quadrotor_msgs::msg::PositionCommand::SharedPtr msg) {
+      fsm.cmd_data.feed(msg, node->now());
+    });
+
   rclcpp::Subscription<mavros_msgs::msg::RCIn>::SharedPtr rc_sub;
   if (!param.takeoff_land.no_RC) {
     rc_sub = node->create_subscription<mavros_msgs::msg::RCIn>(
@@ -132,6 +153,8 @@ int main(int argc, char *argv[])
 
   fsm.ctrl_FCU_pub =
     node->create_publisher<mavros_msgs::msg::AttitudeTarget>(param.topics.setpoint, 10);
+  fsm.physical_setpoint_pub =
+    node->create_publisher<mavros_msgs::msg::Tunnel>(param.topics.physical_setpoint, 10);
   fsm.simulink_setpoint_pub =
     node->create_publisher<nav_msgs::msg::Odometry>(param.topics.simulink_setpoint, 10);
   fsm.simulink_reference_pub =
@@ -142,6 +165,8 @@ int main(int argc, char *argv[])
     node->create_publisher<nav_msgs::msg::Odometry>(param.topics.simulink_tracking_error, 10);
   fsm.simulink_ude_debug_pub =
     node->create_publisher<nav_msgs::msg::Odometry>(param.topics.simulink_ude_debug, 10);
+  fsm.simulink_yaw_debug_pub =
+    node->create_publisher<nav_msgs::msg::Odometry>(param.topics.simulink_yaw_debug, 10);
   fsm.ude_tune_status_pub =
     node->create_publisher<std_msgs::msg::Float64MultiArray>(param.topics.ude_tune_status, 10);
   fsm.ude_tune_status_text_pub =

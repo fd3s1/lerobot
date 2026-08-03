@@ -1,6 +1,7 @@
 #ifndef PX4CTRL_FSM_H
 #define PX4CTRL_FSM_H
 
+#include <cstdint>
 #include <utility>
 #include <vector>
 
@@ -8,6 +9,7 @@
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <mavros_msgs/msg/attitude_target.hpp>
+#include <mavros_msgs/msg/tunnel.hpp>
 #include <mavros_msgs/srv/command_bool.hpp>
 #include <mavros_msgs/srv/command_long.hpp>
 #include <mavros_msgs/srv/set_mode.hpp>
@@ -65,11 +67,13 @@ public:
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr traj_start_trigger_pub;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr expert_pose_pub;
   rclcpp::Publisher<mavros_msgs::msg::AttitudeTarget>::SharedPtr ctrl_FCU_pub;
+  rclcpp::Publisher<mavros_msgs::msg::Tunnel>::SharedPtr physical_setpoint_pub;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr simulink_setpoint_pub;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr simulink_reference_pub;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr simulink_actual_pub;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr simulink_tracking_error_pub;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr simulink_ude_debug_pub;
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr simulink_yaw_debug_pub;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr ude_tune_status_pub;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr ude_tune_status_text_pub;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr mocap_state_status_pub;
@@ -106,6 +110,7 @@ private:
   double last_gripper_target{0.0};
   rclcpp::Time last_gripper_force_open_time{0, 0, RCL_ROS_TIME};
   bool had_valid_control_feedback{false};
+  std::uint32_t physical_setpoint_sequence{0};
   Odom_Data_t control_odom_data;
   struct MocapControlStatus
   {
@@ -114,11 +119,32 @@ private:
     std::string reason{"not initialized"};
     double pose_twist_dt_s{-1.0};
     double mocap_odom_dt_s{-1.0};
+    double pose_to_odom_dt_s{0.0};
+    double twist_to_odom_dt_s{0.0};
+    double prediction_dt_s{0.0};
+    double prediction_weight{0.0};
+    Eigen::Vector3d position_correction{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d velocity_correction{Eigen::Vector3d::Zero()};
+    bool prediction_valid{false};
+    bool source_transition_active{false};
     bool pose_stamp_from_receive_time{false};
     bool twist_stamp_from_receive_time{false};
     bool odom_stamp_from_receive_time{false};
   };
   MocapControlStatus mocap_control_status;
+  struct StateAlignmentState
+  {
+    bool initialized{false};
+    std::string source_key;
+    rclcpp::Time last_update_time{0, 0, RCL_ROS_TIME};
+    Eigen::Vector3d prediction_correction{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d source_position_offset{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d source_velocity_offset{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d last_position{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d last_velocity{Eigen::Vector3d::Zero()};
+    double prediction_weight{0.0};
+  };
+  StateAlignmentState state_alignment;
   rclcpp::Time last_mocap_status_publish_time{0, 0, RCL_ROS_TIME};
   struct TdTrackerState
   {
@@ -143,12 +169,20 @@ private:
   void set_hov_with_odom(const Odom_Data_t &odom);
   void set_hov_with_rc();
   void publish_ctrl(const Controller_Output_t &u, const rclcpp::Time &stamp);
+  void publish_physical_setpoint(const Controller_Output_t &u, const rclcpp::Time &stamp);
   void publish_expert_pose(const Desired_State_t &des, const rclcpp::Time &stamp);
   void publish_simulink_reference(const Desired_State_t &des, const rclcpp::Time &stamp);
   void publish_simulink_actual(const Odom_Data_t &odom, const rclcpp::Time &stamp);
   void publish_simulink_tracking_error(
     const Desired_State_t &des,
     const Odom_Data_t &odom,
+    const rclcpp::Time &stamp);
+  void publish_simulink_yaw_debug(
+    const Desired_State_t &des,
+    const Odom_Data_t &odom,
+    const Imu_Data_t &imu,
+    const Controller_Output_t &u,
+    const Controller_Debug_t *debug,
     const rclcpp::Time &stamp);
   void publish_simulink_ude_debug(const Controller_Debug_t &debug, const rclcpp::Time &stamp);
   void publish_ude_tune_status(double seq, bool accepted, double code, const std::string &text);

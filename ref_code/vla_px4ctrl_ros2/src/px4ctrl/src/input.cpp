@@ -114,6 +114,15 @@ bool RC_Data_t::check_centered() const
          std::abs(ch[2]) < 1e-5 && std::abs(ch[3]) < 1e-5;
 }
 
+bool RC_Data_t::check_takeoff_sticks(double throttle_max_pwm) const
+{
+  const bool attitude_sticks_centered =
+    std::abs(ch[0]) < 1e-5 && std::abs(ch[1]) < 1e-5 && std::abs(ch[3]) < 1e-5;
+  const bool throttle_check_disabled = throttle_max_pwm <= 0.0;
+  const bool throttle_low = throttle_check_disabled || channel_pwm(3) <= throttle_max_pwm;
+  return attitude_sticks_centered && throttle_low;
+}
+
 bool RC_Data_t::is_received(const rclcpp::Time &now_time, double timeout_s) const
 {
   return received && (now_time - rcv_stamp).seconds() < timeout_s;
@@ -250,6 +259,10 @@ void Command_Data_t::feed(
   msg = *pMsg;
   uav_utils::extract_odometry(msg, p, q);
   yaw = uav_utils::normalize_angle(uav_utils::get_yaw_from_quaternion(q));
+  yaw_rate = 0.0;
+  yaw_acceleration = 0.0;
+  j.setZero();
+  snap.setZero();
 
   if (had_previous) {
     const double dt = (now - previous_stamp).seconds();
@@ -266,6 +279,54 @@ void Command_Data_t::feed(
   }
   last_p = previous_p;
   last_v = previous_v;
+  rcv_stamp = now;
+  received = true;
+}
+
+void Command_Data_t::feed(
+  const quadrotor_msgs::msg::PositionCommand::SharedPtr pMsg,
+  const rclcpp::Time &now)
+{
+  const Eigen::Vector3d previous_p = p;
+  const Eigen::Vector3d previous_v = v;
+
+  traj_msg = *pMsg;
+  p = Eigen::Vector3d(
+    pMsg->position.x,
+    pMsg->position.y,
+    pMsg->position.z);
+  v = Eigen::Vector3d(
+    pMsg->velocity.x,
+    pMsg->velocity.y,
+    pMsg->velocity.z);
+  a = Eigen::Vector3d(
+    pMsg->acceleration.x,
+    pMsg->acceleration.y,
+    pMsg->acceleration.z);
+  j = Eigen::Vector3d(
+    pMsg->jerk.x,
+    pMsg->jerk.y,
+    pMsg->jerk.z);
+  snap = Eigen::Vector3d(
+    pMsg->snap.x,
+    pMsg->snap.y,
+    pMsg->snap.z);
+  yaw = uav_utils::normalize_angle(pMsg->yaw);
+  yaw_rate = pMsg->yaw_dot;
+  yaw_acceleration = pMsg->yaw_ddot;
+  q = Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ());
+  last_p = previous_p;
+  last_v = previous_v;
+
+  msg.header = pMsg->header;
+  msg.pose.position.x = p.x();
+  msg.pose.position.y = p.y();
+  msg.pose.position.z = p.z();
+  msg.pose.orientation.x = q.x();
+  msg.pose.orientation.y = q.y();
+  msg.pose.orientation.z = q.z();
+  msg.pose.orientation.w = q.w();
+
   rcv_stamp = now;
   received = true;
 }

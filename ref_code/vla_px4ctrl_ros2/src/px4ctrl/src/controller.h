@@ -18,9 +18,11 @@ struct Desired_State_t
   Eigen::Vector3d v{Eigen::Vector3d::Zero()};
   Eigen::Vector3d a{Eigen::Vector3d::Zero()};
   Eigen::Vector3d j{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d snap{Eigen::Vector3d::Zero()};
   Eigen::Quaterniond q{Eigen::Quaterniond::Identity()};
   double yaw{0.0};
   double yaw_rate{0.0};
+  double yaw_acceleration{0.0};
 
   Desired_State_t() = default;
   explicit Desired_State_t(const Odom_Data_t &odom)
@@ -29,9 +31,11 @@ struct Desired_State_t
     v.setZero();
     a.setZero();
     j.setZero();
+    snap.setZero();
     q = odom.q;
     yaw = uav_utils::normalize_angle(uav_utils::get_yaw_from_quaternion(odom.q));
     yaw_rate = 0.0;
+    yaw_acceleration = 0.0;
   }
 };
 
@@ -41,7 +45,12 @@ struct Controller_Output_t
 
   Eigen::Quaterniond q{Eigen::Quaterniond::Identity()};
   Eigen::Vector3d bodyrates{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d bodyrates_ff{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d bodyrates_dot_ff{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d thrust_acc{Eigen::Vector3d::Zero()};
   double thrust{0.0};
+  double total_thrust_n{0.0};
+  bool physical_setpoint_valid{false};
 };
 
 struct Controller_Debug_t
@@ -60,12 +69,15 @@ struct Controller_Debug_t
   Eigen::Vector3d u_acc{Eigen::Vector3d::Zero()};
   Eigen::Vector3d thrust_acc_limited{Eigen::Vector3d::Zero()};
   Eigen::Vector3d bodyrates_ff{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d bodyrates_dot_ff{Eigen::Vector3d::Zero()};
   Eigen::Vector3d bodyrates_fb{Eigen::Vector3d::Zero()};
   Eigen::Vector3d bodyrates_cmd{Eigen::Vector3d::Zero()};
   double thrust{0.0};
   double yaw_des{0.0};
   double yaw_odom{0.0};
   double yaw_error{0.0};
+  double yaw_error_deadbanded{0.0};
+  double yaw_rate_cmd_raw{0.0};
   double dt{0.0};
 };
 
@@ -86,10 +98,14 @@ public:
 private:
   Parameter_t &param_;
   Eigen::Vector3d integral_u0_{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d filtered_velocity_{Eigen::Vector3d::Zero()};
   rclcpp::Time last_control_time_{0, 0, RCL_ROS_TIME};
   bool control_initialized_{false};
+  bool velocity_filter_initialized_{false};
   double thr2acc_{0.0};
   double P_{1e6};
+  double yaw_rate_lpf_{0.0};
+  bool yaw_rate_lpf_initialized_{false};
   std::queue<std::pair<rclcpp::Time, double>> timed_thrust_;
 
   static constexpr double kAlmostZeroValueThreshold = 1e-3;
@@ -105,6 +121,13 @@ private:
     const Eigen::Vector3d &xd,
     Eigen::Vector3d &x_normalized,
     Eigen::Vector3d &x_normalized_dot) const;
+  bool normalizeWithSecondGrad(
+    const Eigen::Vector3d &x,
+    const Eigen::Vector3d &xd,
+    const Eigen::Vector3d &xdd,
+    Eigen::Vector3d &x_normalized,
+    Eigen::Vector3d &x_normalized_dot,
+    Eigen::Vector3d &x_normalized_ddot) const;
   bool computeFlatInput(
     const Eigen::Vector3d &thrust_acc,
     const Eigen::Vector3d &jerk,
@@ -113,9 +136,29 @@ private:
     const Eigen::Quaterniond &att_est,
     Eigen::Quaterniond &att,
     Eigen::Vector3d &bodyrates_ff) const;
+  bool computeFlatInputSecondOrder(
+    const Eigen::Vector3d &thrust_acc,
+    const Eigen::Vector3d &jerk,
+    const Eigen::Vector3d &snap,
+    double yaw,
+    double yaw_rate,
+    double yaw_acceleration,
+    const Eigen::Quaterniond &att_est,
+    Eigen::Quaterniond &att,
+    Eigen::Vector3d &bodyrates_ff,
+    Eigen::Vector3d &bodyrates_dot_ff) const;
   Eigen::Vector3d computeFeedBackControlBodyrates(
     const Eigen::Quaterniond &des_q,
     const Eigen::Quaterniond &est_q) const;
+  Eigen::Vector3d computeReducedAttitudeFeedbackBodyrates(
+    const Eigen::Vector3d &thrust_acc,
+    const Eigen::Quaterniond &est_q) const;
+  double computeIndependentYawRate(
+    double yaw_error,
+    double yaw_rate,
+    double dt,
+    double &yaw_error_deadbanded,
+    double &yaw_rate_cmd_raw);
   double computeDesiredCollectiveThrustSignal(
     const Eigen::Vector3d &thrust_acc,
     const Odom_Data_t &odom) const;

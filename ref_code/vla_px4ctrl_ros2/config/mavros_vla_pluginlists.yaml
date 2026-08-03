@@ -9,6 +9,7 @@
     #   command:    /mavros/cmd/arming, /mavros/cmd/command
     #   rc_io:      /mavros/rc/in
     #   setpoint_raw: /mavros/setpoint_raw/local
+    #   tunnel:       /mavros/tunnel/in physical atomic setpoint -> MAVLink TUNNEL
     #   vision_pose: /mavros/vision_pose/pose -> PX4 EV input
     #   sys_time:   MAVLink time/timesync support
     #
@@ -21,6 +22,7 @@
       - command
       - rc_io
       - setpoint_raw
+      - tunnel
       - vision_pose
       - local_position
       - imu

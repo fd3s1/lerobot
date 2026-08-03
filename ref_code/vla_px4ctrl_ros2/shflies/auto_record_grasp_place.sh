@@ -16,6 +16,8 @@ BOX_POSE_TOPIC="${BOX_POSE_TOPIC:-/box1/pose}"
 DRONE_POSE_TOPIC="${DRONE_POSE_TOPIC:-/mavros/local_position/odom}"
 ARRIVAL_POSE_TOPIC="${ARRIVAL_POSE_TOPIC:-/mavros/vision_pose/pose}"
 CMD_TOPIC="${CMD_TOPIC:-/position_cmd}"
+TRAJ_PLANNER_ENABLE="${TRAJ_PLANNER_ENABLE:-false}"
+TRAJ_PLANNER_INPUT_TOPIC="${TRAJ_PLANNER_INPUT_TOPIC:-/position_cmd_raw}"
 GRIPPER_TOPIC="${GRIPPER_TOPIC:-/gripper/command}"
 GRIPPER_COMMAND_PAIR_TOPIC="${GRIPPER_COMMAND_PAIR_TOPIC:-/gripper/command_pair}"
 GRIPPER_FEEDBACK_TOPIC="${GRIPPER_FEEDBACK_TOPIC:-/gripper/feedback}"
@@ -64,6 +66,12 @@ BOX_PLACE_BOTTOM_CLEARANCE_M="${BOX_PLACE_BOTTOM_CLEARANCE_M:-0.03}"
 TARGET_OFFSET_X="${TARGET_OFFSET_X:-0.0}"
 TARGET_OFFSET_Y="${TARGET_OFFSET_Y:-0.0}"
 TARGET_OFFSET_Z="${TARGET_OFFSET_Z:-0.0}"
+TARGET_GRASP_X_BIAS_WAS_SET="${TARGET_GRASP_X_BIAS_M+x}"
+TARGET_GRASP_X_BIAS_M="${TARGET_GRASP_X_BIAS_M:--0.02}"
+TARGET_HOVER_MAP_X_BIAS_WAS_SET="${TARGET_HOVER_MAP_X_BIAS_M+x}"
+TARGET_HOVER_MAP_X_BIAS_M="${TARGET_HOVER_MAP_X_BIAS_M:-0.0}"
+TARGET_GRASP_MAP_X_BIAS_WAS_SET="${TARGET_GRASP_MAP_X_BIAS_M+x}"
+TARGET_GRASP_MAP_X_BIAS_M="${TARGET_GRASP_MAP_X_BIAS_M:-0.0}"
 BOX_OFFSET_X="${BOX_OFFSET_X:-0.0}"
 BOX_OFFSET_Y="${BOX_OFFSET_Y:-0.0}"
 BOX_OFFSET_Z="${BOX_OFFSET_Z:-0.0}"
@@ -81,6 +89,12 @@ GRIPPER_Y_OFFSET_M="${GRIPPER_Y_OFFSET_M:-0.0}"
 WAYPOINT_ARRIVAL_TOLERANCE_M="${WAYPOINT_ARRIVAL_TOLERANCE_M:-0.08}"
 WAYPOINT_ARRIVAL_SETTLE_S="${WAYPOINT_ARRIVAL_SETTLE_S:-0.4}"
 WAYPOINT_ARRIVAL_TIMEOUT_S="${WAYPOINT_ARRIVAL_TIMEOUT_S:-15.0}"
+TARGET_YAW_ALIGN_ENABLE="${TARGET_YAW_ALIGN_ENABLE:-true}"
+TARGET_YAW_ALIGN_OFFSET_RAD="${TARGET_YAW_ALIGN_OFFSET_RAD:-0.0}"
+TARGET_YAW_ALIGN_RATE_DPS="${TARGET_YAW_ALIGN_RATE_DPS:-30.0}"
+TARGET_YAW_ALIGN_TOL_DEG="${TARGET_YAW_ALIGN_TOL_DEG:-12.0}"
+TARGET_YAW_ALIGN_MIN_DISTANCE_M="${TARGET_YAW_ALIGN_MIN_DISTANCE_M:-0.20}"
+TARGET_YAW_ALIGN_MAX_DURATION_S="${TARGET_YAW_ALIGN_MAX_DURATION_S:-3.0}"
 GRIPPER_OPEN_DURATION_S="${GRIPPER_OPEN_DURATION_S:-0.4}"
 GRASP_STEP_SIZE="${GRASP_STEP_SIZE:-3.0}"
 GRASP_STEP_SETTLE_S="${GRASP_STEP_SETTLE_S:-0.10}"
@@ -108,6 +122,21 @@ bool_is_true() {
     *) return 1 ;;
   esac
 }
+
+if bool_is_true "${TRAJ_PLANNER_ENABLE}"; then
+  if [[ "${CMD_TOPIC}" == "/position_cmd" ]]; then
+    CMD_TOPIC="${TRAJ_PLANNER_INPUT_TOPIC}"
+  fi
+  if [[ -z "${TARGET_GRASP_X_BIAS_WAS_SET}" ]]; then
+    TARGET_GRASP_X_BIAS_M="0.0"
+  fi
+  if [[ -z "${TARGET_HOVER_MAP_X_BIAS_WAS_SET}" ]]; then
+    TARGET_HOVER_MAP_X_BIAS_M="-0.02"
+  fi
+  if [[ -z "${TARGET_GRASP_MAP_X_BIAS_WAS_SET}" ]]; then
+    TARGET_GRASP_MAP_X_BIAS_M="-0.02"
+  fi
+fi
 
 check_pose_topic_once() {
   local label="$1"
@@ -198,7 +227,10 @@ echo "[auto-record-grasp-place] record gate: ${RECORD_GATE_TOPIC}=${RECORD_GATE_
 echo "[auto-record-grasp-place] record status topic: ${RECORD_STATUS_TOPIC}"
 echo "[auto-record-grasp-place] episode time: ${EPISODE_TIME_S}s"
 echo "[auto-record-grasp-place] speeds: max=${MAX_SPEED} approach=${APPROACH_SPEED} lift=${LIFT_SPEED} retreat=${RETREAT_SPEED}"
+echo "[auto-record-grasp-place] trajectory planner: enable=${TRAJ_PLANNER_ENABLE} cmd_topic=${CMD_TOPIC} raw_topic=${TRAJ_PLANNER_INPUT_TOPIC}"
+echo "[auto-record-grasp-place] target bias: body_grasp_x=${TARGET_GRASP_X_BIAS_M} map_hover_x=${TARGET_HOVER_MAP_X_BIAS_M} map_grasp_x=${TARGET_GRASP_MAP_X_BIAS_M}"
 echo "[auto-record-grasp-place] payload damping: lift_speed=${PAYLOAD_LIFT_SPEED} transfer_speed=${PAYLOAD_TRANSFER_SPEED} post_grasp_settle=${POST_GRASP_SETTLE_S}s post_lift_settle=${POST_LIFT_SETTLE_S}s smooth=${SMOOTH_TRAJECTORY}"
+echo "[auto-record-grasp-place] target yaw align: enable=${TARGET_YAW_ALIGN_ENABLE} offset=${TARGET_YAW_ALIGN_OFFSET_RAD}rad rate=${TARGET_YAW_ALIGN_RATE_DPS}deg/s tol=${TARGET_YAW_ALIGN_TOL_DEG}deg min_distance=${TARGET_YAW_ALIGN_MIN_DISTANCE_M}m max_duration=${TARGET_YAW_ALIGN_MAX_DURATION_S}s"
 echo "[auto-record-grasp-place] payload lift compensation: forward=${PAYLOAD_LIFT_FORWARD_COMP_M}m map=(${PAYLOAD_LIFT_COMP_X}, ${PAYLOAD_LIFT_COMP_Y}, ${PAYLOAD_LIFT_COMP_Z})m"
 echo "[auto-record-grasp-place] geometry: gripper_z_offset=${GRIPPER_Z_OFFSET_M}m target_h=${TARGET_HEIGHT_M}m target_grasp_h=${TARGET_GRASP_HEIGHT_M}m target_z_ref=${TARGET_POSE_Z_REFERENCE}"
 echo "[auto-record-grasp-place] box: l=${BOX_LENGTH_M}m w=${BOX_WIDTH_M}m h=${BOX_HEIGHT_M}m hover_clearance=${BOX_HOVER_GRIPPER_CLEARANCE_M}m place_bottom_clearance=${BOX_PLACE_BOTTOM_CLEARANCE_M}m"
@@ -264,7 +296,7 @@ GRIPPER_COMMAND_PAIR_TOPIC="${GRIPPER_COMMAND_PAIR_TOPIC}" \
 GRIPPER_FEEDBACK_TOPIC="${GRIPPER_FEEDBACK_TOPIC}" \
 GRIPPER_FEEDBACK_TIMEOUT_S="${GRIPPER_FEEDBACK_TIMEOUT_S}" \
 EPISODE_TIME_S="${EPISODE_TIME_S}" \
-TASK="${TASK:-Auto grasp target and place into box}" \
+TASK="${TASK:-Pick up the yellow paper roll from the black platform and place it into the white box}" \
 setsid bash "${SCRIPT_DIR}/record_vla_dataset.sh" &
 record_pid="$!"
 record_uses_setsid=true
@@ -312,6 +344,9 @@ auto_args=(
   --target-offset-x "${TARGET_OFFSET_X}"
   --target-offset-y "${TARGET_OFFSET_Y}"
   --target-offset-z "${TARGET_OFFSET_Z}"
+  --target-grasp-x-bias-m "${TARGET_GRASP_X_BIAS_M}"
+  --target-hover-map-x-bias-m "${TARGET_HOVER_MAP_X_BIAS_M}"
+  --target-grasp-map-x-bias-m "${TARGET_GRASP_MAP_X_BIAS_M}"
   --box-offset-x "${BOX_OFFSET_X}"
   --box-offset-y "${BOX_OFFSET_Y}"
   --box-offset-z "${BOX_OFFSET_Z}"
@@ -323,6 +358,11 @@ auto_args=(
   --waypoint-arrival-tolerance-m "${WAYPOINT_ARRIVAL_TOLERANCE_M}"
   --waypoint-arrival-settle-s "${WAYPOINT_ARRIVAL_SETTLE_S}"
   --waypoint-arrival-timeout-s "${WAYPOINT_ARRIVAL_TIMEOUT_S}"
+  --target-yaw-align-offset-rad "${TARGET_YAW_ALIGN_OFFSET_RAD}"
+  --target-yaw-align-rate-dps "${TARGET_YAW_ALIGN_RATE_DPS}"
+  --target-yaw-align-tol-deg "${TARGET_YAW_ALIGN_TOL_DEG}"
+  --target-yaw-align-min-distance-m "${TARGET_YAW_ALIGN_MIN_DISTANCE_M}"
+  --target-yaw-align-max-duration-s "${TARGET_YAW_ALIGN_MAX_DURATION_S}"
   --record-duration-s "${EPISODE_TIME_S}"
   --grasp-mode "${GRASP_MODE}"
   --gripper-closed "${GRIPPER_CLOSED}"
@@ -356,6 +396,18 @@ if bool_is_true "${SMOOTH_TRAJECTORY}"; then
   auto_args+=(--smooth-trajectory)
 else
   auto_args+=(--no-smooth-trajectory)
+fi
+
+if bool_is_true "${TRAJ_PLANNER_ENABLE}"; then
+  auto_args+=(--trajectory-planner-enable)
+else
+  auto_args+=(--no-trajectory-planner-enable)
+fi
+
+if bool_is_true "${TARGET_YAW_ALIGN_ENABLE}"; then
+  auto_args+=(--target-yaw-align-enable)
+else
+  auto_args+=(--no-target-yaw-align-enable)
 fi
 
 if bool_is_true "${NO_LAND}"; then

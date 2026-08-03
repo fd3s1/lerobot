@@ -11,16 +11,16 @@
 
 当前效果最好的调参方向是：
 
-- 第一次下夹速度略快：`HLS_SEARCH_SPEED=10`。
+- 第一次下夹速度继续降低：`HLS_SEARCH_SPEED=7`。
 - 搜索加速度保持柔和：`HLS_SEARCH_ACC=4`。
-- 搜索力矩略低于之前强力版本：`HLS_SEARCH_TORQUE_LIMIT=145`。
-- 夹持电流轻一些但仍能保持：`HLS_CENTER_PUSH_CURRENT=66`、`HLS_GRIP_CHASE_MIN_CURRENT=66`、`HLS_LIFT_CURRENT=76`。
+- 搜索力矩继续降低：`HLS_SEARCH_TORQUE_LIMIT=100`。
+- 回中夹爪主动推力增强、追夹电流更轻、起吊阶段使用很高保持力：`HLS_CENTER_HOLD_CURRENT=24`、`HLS_CENTER_PUSH_CURRENT=115`、`HLS_GRIP_CHASE_MIN_CURRENT=36`、`HLS_LIFT_CURRENT=1000`、`HLS_MAX_CURRENT=1500`。
 - 追夹位置脉冲保持原来效果好的速度：`HLS_GRIP_CHASE_POSITION_SPEED=16`、`HLS_GRIP_CHASE_POSITION_ACC=6`。
 - 追夹位置脉冲力矩只小幅下降：`HLS_GRIP_CHASE_POSITION_TORQUE_LIMIT=145`。
 - CH10 开爪使用稳定判定，不追求零延迟：`OPEN_MODE_STABLE_S=0.8`。
 - RC 短时丢包保持原状态：`RC_STALE_MODE=hold`。
 
-注意：脚本内默认 `HLS_SEARCH_SPEED` 可能不是最终实测推荐值，测试时以命令行显式传入的环境变量为准。当前推荐命令显式使用 `HLS_SEARCH_SPEED=10`。
+上述参数已经写入脚本默认值。常规测试时可以直接运行脚本；只有临时覆盖参数时才需要在命令行显式传入环境变量。
 
 ## 推荐手持测试命令
 
@@ -35,37 +35,6 @@ source install/setup.bash
 推荐测试命令：
 
 ```bash
-HLS_GRAVITY_COMP_PATH=src/hls_gripper/config/gravity_compensation.json \
-HLS_MOTION_PROFILE=p3 \
-HLS_SEARCH_SPEED=10 \
-HLS_SEARCH_ACC=4 \
-HLS_SEARCH_TORQUE_LIMIT=145 \
-GRIPPER_MANAGER_PORT=/dev/ttyACM1 \
-HLS_LEFT_CURRENT_INWARD_SIGN=1 \
-HLS_RIGHT_CURRENT_INWARD_SIGN=1 \
-HLS_LOW_CURRENT=28 \
-HLS_CENTER_HOLD_CURRENT=28 \
-HLS_CENTER_PUSH_CURRENT=66 \
-HLS_GRIP_CHASE_MIN_CURRENT=66 \
-HLS_GRIP_CHASE_POSITION_ENABLE=true \
-HLS_GRIP_CHASE_POSITION_SPEED=16 \
-HLS_GRIP_CHASE_POSITION_ACC=6 \
-HLS_GRIP_CHASE_POSITION_TORQUE_LIMIT=145 \
-HLS_GRIP_CHASE_SLIP_RATIO=0.03 \
-HLS_GRIP_CHASE_POSITION_PERIOD_S=0.05 \
-HLS_GRIP_CHASE_POSITION_PULSE_S=0.80 \
-HLS_LIFT_CURRENT=76 \
-HLS_CENTER_ERROR_GAIN=2.0 \
-HLS_SINGLE_CONTACT_OFFSET_LIMIT_M=0.12 \
-HLS_TEMP_WARN_THRESHOLD=75.0 \
-HLS_MAX_TEMP=85.0 \
-HLS_CENTER_TIMEOUT_ACTION=final_grip \
-RC_STALE_MODE=hold \
-HOLD_MODE_TIMEOUT_S=1.0 \
-GRASP_MODE_STABLE_S=0.3 \
-OPEN_MODE_STABLE_S=0.8 \
-STATUS_TIMEOUT_S=2.0 \
-PUBLISH_PERIOD_S=0.5 \
 bash shflies/handheld_hls_grasp_test.sh
 ```
 
@@ -139,7 +108,7 @@ bash shflies/handheld_hls_grasp_test.sh
 - 接触判定需要多帧确认。
 - `FINAL_GRIP -> LIFT_READY` 的电流爬升刚完成时，残差电流和物体姿态仍在进入稳态。
 
-在这一步中没有改变追夹逻辑，只把第一次下夹搜索速度从 `8` 增到 `10`，让初始夹持更快坐实。
+后续为了进一步降低第一次下夹冲击，当前默认搜索速度回到 `8`；追夹逻辑不变。
 
 ### 6. 单侧先接触时的追夹修正
 
@@ -209,7 +178,7 @@ bash shflies/handheld_hls_grasp_test.sh
 | --- | --- | --- | --- |
 | `START_GRIPPER_MANAGER` | `true` | 是否由脚本启动 `hls_gripper_node.py`。 | 单独手持测试用 `true`；若已有节点运行，用 `false`。 |
 | `GRIPPER_MANAGER_PORT` | `/dev/ttyACM1` | HLS 舵机串口。 | 若设备枚举变化，改成实际端口。 |
-| `HLS_GRAVITY_COMP_PATH` | 空 | 重力补偿和限位 JSON 路径。 | 推荐显式设为 `src/hls_gripper/config/gravity_compensation.json`。 |
+| `HLS_GRAVITY_COMP_PATH` | `${WORKSPACE_DIR}/install/hls_gripper/share/hls_gripper/config/gravity_compensation.json` | 重力补偿和限位 JSON 路径。 | 默认使用安装目录中的当前标定文件。 |
 | `HLS_SDK_ROOT` | 空 | FTServo Python SDK 路径。 | SDK 在默认候选路径时可空；找不到 SDK 时再指定。 |
 | `HLS_DRY_RUN` | `false` | 是否干跑，不实际写舵机。 | 调软件逻辑可设 `true`；真机必须 `false`。 |
 
@@ -219,17 +188,18 @@ bash shflies/handheld_hls_grasp_test.sh
 | --- | --- | --- | --- |
 | `HLS_OPEN_SPEED` | `24` | 开爪位置控制速度。 | 太小开爪慢；太大可能冲击。当前值较安全。 |
 | `HLS_OPEN_ACC` | `6` | 开爪位置控制加速度。 | 控制开爪柔和程度。 |
-| `HLS_OPEN_TORQUE_LIMIT` | `120` | 开爪位置控制力矩上限。 | 只负责释放，不建议过大。 |
+| `HLS_OPEN_TORQUE_LIMIT` | `160` | 开爪位置控制力矩上限。 | 只负责释放；当前加大用于保证释放可靠，不影响夹持阶段持续力。 |
 
 ### 夹持电流参数
 
 | 参数 | 默认值 | 含义 | 调参建议 |
 | --- | --- | --- | --- |
 | `HLS_LOW_CURRENT` | `28` | 低保持电流，居中前后轻力保持的基础值。 | 越大越稳但越容易压物体；越小越容易松。 |
-| `HLS_LIFT_CURRENT` | `76` | `LIFT_READY` 阶段的最终保持电流。 | 直接影响提起时夹持力；当前是轻力但可靠的折中。 |
-| `HLS_CENTER_HOLD_CURRENT` | `28` | 居中阶段非推力侧电流。 | 通常接近 `HLS_LOW_CURRENT`。 |
-| `HLS_CENTER_PUSH_CURRENT` | `66` | 居中和追夹时推力侧电流。 | 太大居中有冲击，太小被推开后补偿弱。 |
-| `HLS_GRIP_CHASE_MIN_CURRENT` | `66` | 追夹时两侧最低电流地板。 | 控制被推开后的基础补偿力度。 |
+| `HLS_LIFT_CURRENT` | `1000` | `LIFT_READY` 阶段的最终保持电流。 | 直接影响提起时夹持力；当前用于防止起吊时被拔出，力度很大，必须注意温度、电流保护和压物体风险。 |
+| `HLS_MAX_CURRENT` | `1500` | HLS 节点反馈电流故障阈值，对应 ROS 参数 `max_current`。 | 因 `HLS_LIFT_CURRENT` 已明显超过节点默认 `600`，这里同步抬高，避免起吊阶段误触发 current limit fault。 |
+| `HLS_CENTER_HOLD_CURRENT` | `24` | 居中阶段非推力侧电流。 | 比低保持更轻，减少非推力侧持续压迫。 |
+| `HLS_CENTER_PUSH_CURRENT` | `115` | 居中和追夹时推力侧电流。 | 当前进一步增强夹爪主动回中推力；太大居中有冲击，太小补偿弱。 |
+| `HLS_GRIP_CHASE_MIN_CURRENT` | `36` | 追夹时两侧最低电流地板。 | 当前继续降低追夹持续电流，让被推开后的补偿更轻。 |
 
 ### 追夹位置脉冲参数
 
@@ -248,6 +218,9 @@ bash shflies/handheld_hls_grasp_test.sh
 | 参数 | 默认值 | 含义 | 调参建议 |
 | --- | --- | --- | --- |
 | `HLS_CENTER_TIMEOUT_ACTION` | `final_grip` | 居中超时后的动作。`final_grip` 表示继续最终夹持，`fault` 表示故障释放。 | 当前推荐 `final_grip`，避免轻微未居中导致任务失败。 |
+| `HLS_CENTER_TIMEOUT_S` | `5.0` | HLS 在 `CENTERING` 中等待真正居中的最长时间。 | 如果夹爪已经差不多居中但迟迟不起吊，优先缩短这个值。 |
+| `HLS_CENTER_STABLE_TIME_S` | `0.25` | 中心误差进入 deadband 后需要连续稳定的时间。 | 太大容易因接触抖动反复重置；太小可能过早进入最终夹持。 |
+| `HLS_FINAL_GRIP_RAMP_S` | `0.8` | `FINAL_GRIP` 中从低电流爬升到 `HLS_LIFT_CURRENT` 的时间。 | 当前 lift 电流很大，不建议再明显缩短。 |
 | `HLS_MAX_TEMP` | `85.0` | 舵机温度故障阈值，单位摄氏度。 | 达到后进入故障保护。 |
 | `HLS_TEMP_WARN_THRESHOLD` | `75.0` | 舵机温度警告阈值。 | 高温时应暂停测试散热。 |
 
@@ -255,8 +228,8 @@ bash shflies/handheld_hls_grasp_test.sh
 
 | 参数 | 默认值 | 含义 | 调参建议 |
 | --- | --- | --- | --- |
-| `HLS_LEFT_CURRENT_INWARD_SIGN` | 空 | 左侧向内夹持电流符号。 | 当前实测用 `1`。方向错会越夹越松或接触判断异常。 |
-| `HLS_RIGHT_CURRENT_INWARD_SIGN` | 空 | 右侧向内夹持电流符号。 | 当前实测用 `1`。 |
+| `HLS_LEFT_CURRENT_INWARD_SIGN` | `1` | 左侧向内夹持电流符号。 | 当前实测用 `1`。方向错会越夹越松或接触判断异常。 |
+| `HLS_RIGHT_CURRENT_INWARD_SIGN` | `1` | 右侧向内夹持电流符号。 | 当前实测用 `1`。 |
 | `HLS_LEFT_OPEN` | 空 | 左舵机全开位置，覆盖补偿文件中的标定。 | 只有重新标定或补偿文件缺失时才填。 |
 | `HLS_LEFT_CLEAR` | 空 | 左舵机安全清空/过渡位置。 | 通常来自补偿文件。 |
 | `HLS_LEFT_CLOSE` | 空 | 左舵机全闭位置。 | 不建议手动覆盖，避免撞限位。 |
@@ -268,11 +241,11 @@ bash shflies/handheld_hls_grasp_test.sh
 
 | 参数 | 默认值 | 含义 | 调参建议 |
 | --- | --- | --- | --- |
-| `HLS_MOTION_PROFILE` | 空 | 使用补偿 JSON 中的命名 motion profile，例如 `p3`。 | 推荐设为 `p3`。 |
+| `HLS_MOTION_PROFILE` | `p3` | 使用补偿 JSON 中的命名 motion profile，例如 `p3`。 | 默认使用当前实测 profile。 |
 | `HLS_MOTION_PROFILE_INDEX` | 空 | 按索引选择 motion profile。 | 一般不用；优先用名称。 |
-| `HLS_SEARCH_SPEED` | `9` | 第一次下夹搜索物体的闭合速度。 | 当前实测推荐覆盖为 `10`。只影响初始搜索，不等同于追夹速度。 |
-| `HLS_SEARCH_ACC` | 空 | 第一次下夹搜索物体的加速度。 | 当前推荐显式设为 `4`，保持柔和。 |
-| `HLS_SEARCH_TORQUE_LIMIT` | `145` | 第一次下夹搜索物体的力矩上限。 | 太小接触不稳定，太大初夹冲击大。 |
+| `HLS_SEARCH_SPEED` | `7` | 第一次下夹搜索物体的闭合速度。 | 当前继续降低搜索速度；只影响初始搜索，不等同于追夹速度。 |
+| `HLS_SEARCH_ACC` | `4` | 第一次下夹搜索物体的加速度。 | 当前保持柔和。 |
+| `HLS_SEARCH_TORQUE_LIMIT` | `100` | 第一次下夹搜索物体的力矩上限。 | 当前继续降低搜索冲击；太小接触不稳定，太大初夹冲击大。 |
 
 ### 居中和单侧接触参数
 
@@ -360,11 +333,11 @@ bash shflies/handheld_hls_grasp_test.sh
 | --- | --- | --- |
 | `RATE_HZ` | `20` | 自动流程控制循环频率。 |
 | `MAX_SPEED` | `0.6` | 全局最大移动速度，单位 m/s。 |
-| `APPROACH_SPEED` | `0.3` | 接近目标速度。 |
+| `APPROACH_SPEED` | `0.15` | 接近目标速度。 |
 | `LIFT_SPEED` | `0.4` | 空载提升速度。 |
-| `PAYLOAD_LIFT_SPEED` | `0.08` | 夹住物体后的提升速度。 |
-| `PAYLOAD_TRANSFER_SPEED` | `0.14` | 带载转移速度。 |
-| `POST_GRASP_SETTLE_S` | `0.8` | 抓取完成后的等待时间。 |
+| `PAYLOAD_LIFT_SPEED` | `0.15` | 夹住物体后的提升速度。 |
+| `PAYLOAD_TRANSFER_SPEED` | `0.15` | 带载转移速度。 |
+| `POST_GRASP_SETTLE_S` | `0.3` | 抓取完成后的等待时间。 |
 | `POST_LIFT_SETTLE_S` | `1.0` | 提升后的等待时间。 |
 | `SMOOTH_TRAJECTORY` | `true` | 是否使用平滑轨迹。 |
 
@@ -400,7 +373,7 @@ bash shflies/handheld_hls_grasp_test.sh
 | `BOX_WIDTH_M` | `0.41` | 盒子宽度。 |
 | `BOX_HEIGHT_M` | `0.14` | 盒子高度。 |
 | `BOX_HOVER_GRIPPER_CLEARANCE_M` | `0.55` | 盒子上方悬停时夹爪净空。 |
-| `BOX_PLACE_BOTTOM_CLEARANCE_M` | `0.03` | 放置时物体底部相对盒底净空。 |
+| `BOX_PLACE_BOTTOM_CLEARANCE_M` | `0.24` | 放置时物体底部相对盒底净空。 |
 | `BOX_OFFSET_X` | `0.0` | 放置点 X 修正。 |
 | `BOX_OFFSET_Y` | `0.0` | 放置点 Y 修正。 |
 | `BOX_OFFSET_Z` | `0.0` | 放置点 Z 修正。 |
@@ -424,10 +397,10 @@ bash shflies/handheld_hls_grasp_test.sh
 | --- | --- | --- |
 | `HLS_GRASP_TIMEOUT_S` | `12.0` | 等待 HLS 抓取完成的最长时间。 |
 | `HLS_STATUS_TIMEOUT_S` | `0.8` | 自动流程认为 HLS 状态新鲜的超时时间。 |
-| `CENTER_DEADBAND_M` | `0.005` | 自动居中死区。 |
-| `CENTER_KP` | `0.8` | 自动居中比例控制增益。 |
-| `CENTER_VMAX_MPS` | `0.015` | 双侧接触后根据 HLS `center_error_m` 居中时的最大 body-Y 速度。 |
-| `CENTER_OFFSET_MAX_M` | `0.025` | 双侧接触后自动居中允许的最大 body-Y 偏移量。默认更小，避免无人机硬推固定目标。 |
+| `CENTER_DEADBAND_M` | `0.04` | 自动居中死区。 |
+| `CENTER_KP` | `1.0` | 自动居中比例控制增益。 |
+| `CENTER_VMAX_MPS` | `0.04` | 双侧接触后根据 HLS `center_error_m` 居中时的最大 body-Y 速度。 |
+| `CENTER_OFFSET_MAX_M` | `0.30` | 双侧接触后自动居中允许的最大 body-Y 偏移量。 |
 | `HLS_STATUS_CENTER_MISMATCH_TOL_M` | `0.015` | 双侧接触时 `center_error_m` 与 `centering_offset_m` 的一致性容差。不同号或差值过大时，本周期 body-Y 居中会被拒绝。 |
 | `CENTER_COMMAND_SIGN` | `1.0` | 双侧居中指令方向符号。若飞机越修越偏，优先检查这个符号。 |
 | `SINGLE_CONTACT_VMAX_MPS` | `0.015` | 单侧接触且 HLS 请求 `single_contact_need_motion` 时，飞机让位的最大 body-Y 速度。该值应小于或等于 `CENTER_VMAX_MPS`。 |
@@ -455,7 +428,7 @@ bash shflies/handheld_hls_grasp_test.sh
 
 优先调：
 
-1. `HLS_SEARCH_SPEED`：从 `8` 到 `10` 是当前已验证方向。
+1. `HLS_SEARCH_SPEED`：当前回到 `8`，优先降低第一次下夹冲击。
 2. `HLS_SEARCH_ACC`：若仍慢，可从 `4` 小幅增加到 `5`，但要观察冲击。
 3. `HLS_SEARCH_TORQUE_LIMIT`：只有明显夹不住或闭合受阻时才增加。
 

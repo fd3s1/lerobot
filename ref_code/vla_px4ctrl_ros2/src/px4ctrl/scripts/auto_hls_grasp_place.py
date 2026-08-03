@@ -6,11 +6,13 @@ import argparse
 import json
 import math
 import sys
+import threading
 import time
 from dataclasses import dataclass, replace
 
 from mavros_msgs.msg import RCIn, State
 import rclpy
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.utilities import remove_ros_args
 from std_msgs.msg import Bool, Float64, String
@@ -20,7 +22,6 @@ from auto_grasp_place_dataset import AutoConfig, AutoGraspPlaceDataset, PoseSamp
 
 HLS_SINGLE_CONTACT_STATES = {"LEFT_CONTACT", "RIGHT_CONTACT"}
 HLS_BODY_Y_CENTERING_STATES = {"BOTH_CONTACT", "CENTERING", "CENTERED", "FINAL_GRIP"}
-HLS_OFFSET_LIMIT_GRACE_S = 0.8
 
 
 def clamp(value: float, min_value: float, max_value: float) -> float:
@@ -35,6 +36,13 @@ def sign_nonzero(value: float) -> float:
     return 0.0
 
 
+def optional_float(value: str) -> float | None:
+    text = str(value).strip().lower()
+    if text in {"", "none", "off", "disable", "disabled", "false"}:
+        return None
+    return float(value)
+
+
 @dataclass(frozen=True)
 class HlsTaskConfig:
     hls_status_topic: str
@@ -47,13 +55,15 @@ class HlsTaskConfig:
     ch10_index: int
     ch10_open_pwm: int
     ch10_close_pwm: int
-    force_open_below_z: float
+    force_open_below_z: float | None
+    force_open_below_z_grace_s: float
     open_command: float
     close_command: float
     center_deadband_m: float
     center_kp: float
     center_vmax_mps: float
     center_offset_max_m: float
+    offset_limit_grace_s: float
     center_command_sign: float
     hls_status_center_mismatch_tol_m: float
     single_contact_vmax_mps: float
@@ -107,6 +117,24 @@ def status_prefix_from_topic(topic: str) -> str:
     return topic
 
 
+def realtime_qos() -> QoSProfile:
+    return QoSProfile(
+        reliability=ReliabilityPolicy.BEST_EFFORT,
+        durability=DurabilityPolicy.VOLATILE,
+        history=HistoryPolicy.KEEP_LAST,
+        depth=10,
+    )
+
+
+def latched_status_qos() -> QoSProfile:
+    return QoSProfile(
+        reliability=ReliabilityPolicy.RELIABLE,
+        durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        history=HistoryPolicy.KEEP_LAST,
+        depth=10,
+    )
+
+
 class AutoHlsGraspPlace(AutoGraspPlaceDataset):
     def __init__(self, config: AutoConfig, hls_config: HlsTaskConfig) -> None:
         super().__init__(config)
@@ -129,22 +157,48 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
         self.last_rc_stale_warn_s = 0.0
         self.last_hls_snapshot_warn_s = 0.0
         self.last_hls_center_mismatch_warn_s = 0.0
-        self.create_subscription(String, f"{self.status_prefix}/status_snapshot", self._hls_snapshot_cb, 10)
-        self.create_subscription(String, f"{self.status_prefix}/state", self._string_cb("state"), 10)
-        self.create_subscription(String, f"{self.status_prefix}/fault_reason", self._string_cb("fault_reason"), 10)
-        self.create_subscription(Float64, f"{self.status_prefix}/center_error_m", self._float_cb("center_error_m"), 10)
-        self.create_subscription(Float64, f"{self.status_prefix}/centering_offset_m", self._float_cb("centering_offset_m"), 10)
-        self.create_subscription(
+        self.force_open_below_z_since_s: float | None = None
+        self._create_redundant_subscription(
+            String,
+            f"{self.status_prefix}/status_snapshot",
+            self._hls_snapshot_cb,
+            transient=True,
+        )
+        self._create_redundant_subscription(
+            String,
+            f"{self.status_prefix}/state",
+            self._string_cb("state"),
+            transient=True,
+        )
+        self._create_redundant_subscription(
+            String,
+            f"{self.status_prefix}/fault_reason",
+            self._string_cb("fault_reason"),
+            transient=True,
+        )
+        self._create_redundant_subscription(
+            Float64,
+            f"{self.status_prefix}/center_error_m",
+            self._float_cb("center_error_m"),
+            transient=True,
+        )
+        self._create_redundant_subscription(
+            Float64,
+            f"{self.status_prefix}/centering_offset_m",
+            self._float_cb("centering_offset_m"),
+            transient=True,
+        )
+        self._create_redundant_subscription(
             Float64,
             f"{self.status_prefix}/single_contact_offset_m",
             self._float_cb("single_contact_offset_m"),
-            10,
+            transient=True,
         )
-        self.create_subscription(
+        self._create_redundant_subscription(
             Float64,
             f"{self.status_prefix}/single_contact_direction",
             self._float_cb("single_contact_direction"),
-            10,
+            transient=True,
         )
         for name in (
             "safe_to_lift",
@@ -155,17 +209,22 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
             "left_at_close_limit",
             "right_at_close_limit",
         ):
-            self.create_subscription(Bool, f"{self.status_prefix}/{name}", self._bool_cb(name), 10)
-        rc_qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            durability=DurabilityPolicy.VOLATILE,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10,
+            self._create_redundant_subscription(
+                Bool,
+                f"{self.status_prefix}/{name}",
+                self._bool_cb(name),
+                transient=True,
+            )
+        self._create_redundant_subscription(RCIn, hls_config.rc_topic, self._rc_cb)
+        self._create_redundant_subscription(State, hls_config.mavros_state_topic, self._mavros_state_cb)
+        record_mode = (
+            f"recording enabled status_topic={config.record_status_topic} "
+            f"gate_topic={config.record_gate_topic}"
+            if config.record_status_topic
+            else "without dataset recording"
         )
-        self.create_subscription(RCIn, hls_config.rc_topic, self._rc_cb, rc_qos)
-        self.create_subscription(State, hls_config.mavros_state_topic, self._mavros_state_cb, 10)
         self.get_logger().info(
-            "Auto HLS grasp/place started without dataset recording. "
+            f"Auto HLS grasp/place started {record_mode}. "
             f"status_prefix={self.status_prefix} rc_topic={hls_config.rc_topic} "
             f"mavros_state_topic={hls_config.mavros_state_topic} ch10_index={hls_config.ch10_index}"
         )
@@ -264,11 +323,26 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
         self.mavros_state = msg
         self.mavros_state_received_s = time.monotonic()
 
+    def mavros_state_age_s(self) -> float:
+        if self.mavros_state_received_s is None:
+            return float("nan")
+        return time.monotonic() - self.mavros_state_received_s
+
+    def mavros_state_fresh(self) -> bool:
+        return (
+            self.mavros_state_received_s is not None
+            and self.mavros_state_age_s() <= max(2.0, 2.0 * self.hls_config.rc_timeout_s)
+        )
+
     def wait_for_record_ready(self) -> None:
-        return
+        if not self.config.record_status_topic:
+            return
+        super().wait_for_record_ready()
 
     def publish_record_gate(self) -> None:
-        return
+        if not self.config.record_gate_topic:
+            return
+        super().publish_record_gate()
 
     def hls_status_fresh(self) -> bool:
         now = time.monotonic()
@@ -300,7 +374,7 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
     def wait_for_hls_status(self) -> StandardHlsStatus:
         deadline = time.monotonic() + max(0.5, self.config.state_timeout_s)
         while rclpy.ok() and time.monotonic() < deadline:
-            rclpy.spin_once(self, timeout_sec=0.05)
+            self.pump_once(timeout_sec=0.05)
             if self.hls_status_fresh():
                 return self.hls_status
         raise RuntimeError(f"Timed out waiting for HLS gripper standard status under {self.status_prefix}.")
@@ -318,7 +392,7 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
     def wait_for_rc_safety_ready(self) -> None:
         deadline = time.monotonic() + max(1.0, self.config.state_timeout_s)
         while rclpy.ok() and time.monotonic() < deadline:
-            rclpy.spin_once(self, timeout_sec=0.05)
+            self.pump_once(timeout_sec=0.05)
             if self.rc_fresh():
                 if self.ch10_open_requested():
                     raise AutoHlsSafetyAbort(
@@ -360,31 +434,40 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
             self.force_open_for_safety(reason)
             raise AutoHlsSafetyAbort(reason)
         if self.hls_close_allowed or self.hls_payload_attached:
-            if self.px4ctrl_state != "CMD_CTRL":
-                reason = f"px4ctrl left CMD_CTRL during {phase}; latest={self.px4ctrl_state!r}"
+            if not self.px4ctrl_state_is("CMD_CTRL"):
+                reason = f"px4ctrl left/stale CMD_CTRL during {phase}; {self.px4ctrl_state_summary()}"
                 self.force_open_for_safety(reason)
                 raise AutoHlsSafetyAbort(reason)
-            if self.mavros_state is not None:
-                if not bool(self.mavros_state.connected):
-                    reason = f"MAVROS disconnected during {phase}"
-                    self.force_open_for_safety(reason)
-                    raise AutoHlsSafetyAbort(reason)
-                if not bool(self.mavros_state.armed):
-                    reason = f"FCU disarmed during {phase}; mode={self.mavros_state.mode!r}"
-                    self.force_open_for_safety(reason)
-                    raise AutoHlsSafetyAbort(reason)
+            if not self.mavros_state_fresh():
+                reason = f"MAVROS state stale during {phase}; age={self.mavros_state_age_s():.2f}s"
+                self.force_open_for_safety(reason)
+                raise AutoHlsSafetyAbort(reason)
+            if not bool(self.mavros_state.connected):
+                reason = f"MAVROS disconnected during {phase}"
+                self.force_open_for_safety(reason)
+                raise AutoHlsSafetyAbort(reason)
+            if not bool(self.mavros_state.armed):
+                reason = f"FCU disarmed during {phase}; mode={self.mavros_state.mode!r}"
+                self.force_open_for_safety(reason)
+                raise AutoHlsSafetyAbort(reason)
             drone = self.poses.get("drone")
-            if (
-                drone is not None
-                and self.pose_fresh("drone")
-                and drone.z <= self.hls_config.force_open_below_z
-            ):
-                reason = (
-                    f"drone below gripper safety height during {phase}: "
-                    f"z={drone.z:.3f} <= {self.hls_config.force_open_below_z:.3f}"
-                )
-                self.force_open_for_safety(reason)
-                raise AutoHlsSafetyAbort(reason)
+            if self.hls_config.force_open_below_z is not None:
+                drone = self.poses.get("drone")
+                if drone is not None and self.pose_fresh("drone"):
+                    if drone.z <= self.hls_config.force_open_below_z:
+                        now = time.monotonic()
+                        if self.force_open_below_z_since_s is None:
+                            self.force_open_below_z_since_s = now
+                        elif now - self.force_open_below_z_since_s >= self.hls_config.force_open_below_z_grace_s:
+                            reason = (
+                                f"drone below gripper safety height during {phase}: "
+                                f"z={drone.z:.3f} <= {self.hls_config.force_open_below_z:.3f} "
+                                f"for {now - self.force_open_below_z_since_s:.2f}s"
+                            )
+                            self.force_open_for_safety(reason)
+                            raise AutoHlsSafetyAbort(reason)
+                    else:
+                        self.force_open_below_z_since_s = None
 
     def keep_open_before_close_if_needed(self) -> None:
         if self.safety_abort_active or self.hls_close_allowed or self.hls_payload_attached:
@@ -517,14 +600,21 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
                     self.config.pregrasp_z_speed_mps,
                     f"HLS retry {attempt_number} return to pre-grasp",
                     keep_gripper_open=True,
-                )
-                current = self.wait_for_drone_near(
-                    current,
-                    f"HLS retry {attempt_number} pre-grasp settle",
-                    keep_gripper_open=True,
                     xy_tolerance_m=self.config.pregrasp_arrival_xy_tolerance_m,
                     z_tolerance_m=self.config.pregrasp_arrival_z_tolerance_m,
+                    max_positive_x_error_m=self.config.target_arrival_max_positive_x_error_m,
+                    settle_s=self.config.pregrasp_arrival_settle_s,
                 )
+                if not self.config.trajectory_planner_enable:
+                    current = self.wait_for_drone_near(
+                        current,
+                        f"HLS retry {attempt_number} pre-grasp settle",
+                        keep_gripper_open=True,
+                        xy_tolerance_m=self.config.pregrasp_arrival_xy_tolerance_m,
+                        z_tolerance_m=self.config.pregrasp_arrival_z_tolerance_m,
+                        max_positive_x_error_m=self.config.target_arrival_max_positive_x_error_m,
+                        settle_s=self.config.pregrasp_arrival_settle_s,
+                    )
             try:
                 return self._run_hls_grasp_attempt(attempt_reference, attempt_number)
             except RecoverableHlsGraspFailure as exc:
@@ -544,7 +634,8 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
 
     def _run_hls_grasp_attempt(self, reference: PoseSample, attempt_number: int) -> PoseSample:
         self.wait_for_hls_status()
-        self.hold_cmd(reference, 0.3)
+        if self.config.pre_grasp_hold_s > 0.0:
+            self.hold_cmd(reference, self.config.pre_grasp_hold_s)
         self.raise_if_safety_abort("pre-HLS grasp")
         self.hls_close_allowed = True
         self.hls_payload_attached = False
@@ -569,10 +660,10 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
             now = time.monotonic()
             dt = max(1e-3, now - last_t)
             last_t = now
-            rclpy.spin_once(self, timeout_sec=0.0)
+            self.pump_once(timeout_sec=0.0)
 
-            if self.px4ctrl_state != "CMD_CTRL":
-                reason = f"px4ctrl left CMD_CTRL during HLS grasp; latest={self.px4ctrl_state!r}"
+            if not self.px4ctrl_state_is("CMD_CTRL"):
+                reason = f"px4ctrl left/stale CMD_CTRL during HLS grasp; {self.px4ctrl_state_summary()}"
                 self.force_open_for_safety(reason)
                 raise AutoHlsSafetyAbort(reason)
             try:
@@ -642,9 +733,9 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
                     offset_limit_hit_since_s = now
                     self.get_logger().warn(
                         f"HLS body-y assist reached {phase} offset limit; holding close command for "
-                        f"{HLS_OFFSET_LIMIT_GRACE_S:.1f}s before abort if not safe_to_lift."
+                        f"{self.hls_config.offset_limit_grace_s:.1f}s before abort if not safe_to_lift."
                     )
-                elif now - offset_limit_hit_since_s >= HLS_OFFSET_LIMIT_GRACE_S:
+                elif now - offset_limit_hit_since_s >= self.hls_config.offset_limit_grace_s:
                     latest = self.pose_with_body_y_offset(reference, body_y_offset_m)
                     latest = self.abort_before_lift(latest, reference, "HLS body-y assist offset limit")
                     retry_reference = self.pose_with_body_y_offset(reference, body_y_offset_m)
@@ -698,11 +789,11 @@ class AutoHlsGraspPlace(AutoGraspPlaceDataset):
             return
         refresh_deadline = time.monotonic() + 0.5
         while rclpy.ok() and time.monotonic() < refresh_deadline and not self.pose_fresh("drone"):
-            rclpy.spin_once(self, timeout_sec=0.05)
-        if self.px4ctrl_state != "CMD_CTRL" or not self.pose_fresh("drone"):
+            self.pump_once(timeout_sec=0.05)
+        if not self.px4ctrl_state_is("CMD_CTRL") or not self.pose_fresh("drone"):
             self.get_logger().warn(
                 "Emergency cleanup will not command-land because CMD_CTRL or fresh drone pose is unavailable. "
-                f"px4ctrl_state={self.px4ctrl_state!r} pose_fresh={self.pose_fresh('drone')}."
+                f"{self.px4ctrl_state_summary()} pose_fresh={self.pose_fresh('drone')}."
             )
             return
         drone = self.poses["drone"]
@@ -731,8 +822,9 @@ def parse_configs() -> tuple[AutoConfig, HlsTaskConfig]:
     hls_parser = argparse.ArgumentParser(add_help=False)
     hls_parser.add_argument("--hls-status-topic", default="/hls_gripper/status")
     hls_parser.add_argument("--hls-status-timeout-s", type=float, default=0.8)
-    hls_parser.add_argument("--hls-grasp-timeout-s", type=float, default=12.0)
+    hls_parser.add_argument("--hls-grasp-timeout-s", type=float, default=25.0)
     hls_parser.add_argument("--hls-grasp-max-retries", type=int, default=2)
+    hls_parser.add_argument("--enable-record", action=argparse.BooleanOptionalAction, default=False)
     hls_parser.add_argument("--mavros-state-topic", default="/mavros/state")
     hls_parser.add_argument("--rc-topic", default="/mavros/rc/in")
     hls_parser.add_argument("--rc-timeout-s", type=float, default=0.5)
@@ -740,13 +832,15 @@ def parse_configs() -> tuple[AutoConfig, HlsTaskConfig]:
     hls_parser.add_argument("--ch10-index", type=int, default=9)
     hls_parser.add_argument("--ch10-open-pwm", type=int, default=1300)
     hls_parser.add_argument("--ch10-close-pwm", type=int, default=1700)
-    hls_parser.add_argument("--force-open-below-z", type=float, default=0.20)
+    hls_parser.add_argument("--force-open-below-z", type=optional_float, default=None)
+    hls_parser.add_argument("--force-open-below-z-grace-s", type=float, default=2.0)
     hls_parser.add_argument("--open-command", type=float, default=100.0)
     hls_parser.add_argument("--close-command", type=float, default=0.0)
-    hls_parser.add_argument("--center-deadband-m", type=float, default=0.005)
+    hls_parser.add_argument("--center-deadband-m", type=float, default=0.05)
     hls_parser.add_argument("--center-kp", type=float, default=0.8)
     hls_parser.add_argument("--center-vmax-mps", type=float, default=0.03)
-    hls_parser.add_argument("--center-offset-max-m", type=float, default=0.08)
+    hls_parser.add_argument("--center-offset-max-m", type=float, default=0.30)
+    hls_parser.add_argument("--offset-limit-grace-s", type=float, default=5.0)
     hls_parser.add_argument("--center-command-sign", type=float, default=1.0)
     hls_parser.add_argument("--hls-status-center-mismatch-tol-m", type=float, default=0.015)
     hls_parser.add_argument("--single-contact-vmax-mps", type=float, default=0.015)
@@ -763,14 +857,17 @@ def parse_configs() -> tuple[AutoConfig, HlsTaskConfig]:
     finally:
         sys.argv = old_argv
 
-    auto_config = replace(
-        auto_config,
-        record_status_topic="",
-        record_gate_topic="/auto_hls_grasp_place/unused_record_gate",
-        record_duration_s=0.1,
-        record_start_hold_s=0.0,
-    )
-    hls_config = HlsTaskConfig(**vars(hls_args))
+    hls_values = vars(hls_args)
+    enable_record = bool(hls_values.pop("enable_record"))
+    if not enable_record:
+        auto_config = replace(
+            auto_config,
+            record_status_topic="",
+            record_gate_topic="/auto_hls_grasp_place/unused_record_gate",
+            record_duration_s=0.1,
+            record_start_hold_s=0.0,
+        )
+    hls_config = HlsTaskConfig(**hls_values)
     if hls_config.hls_status_timeout_s <= 0.0:
         raise ValueError("--hls-status-timeout-s must be positive.")
     if hls_config.hls_grasp_timeout_s <= 0.0:
@@ -783,10 +880,17 @@ def parse_configs() -> tuple[AutoConfig, HlsTaskConfig]:
         raise ValueError("--ch10-index must be non-negative.")
     if hls_config.ch10_open_pwm >= hls_config.ch10_close_pwm:
         raise ValueError("--ch10-open-pwm must be less than --ch10-close-pwm.")
-    if hls_config.force_open_below_z < auto_config.z_min or hls_config.force_open_below_z > auto_config.z_max:
+    if hls_config.force_open_below_z is not None and (
+        hls_config.force_open_below_z < auto_config.z_min
+        or hls_config.force_open_below_z > auto_config.z_max
+    ):
         raise ValueError("--force-open-below-z must be inside configured flight z limits.")
+    if hls_config.force_open_below_z_grace_s < 0.0:
+        raise ValueError("--force-open-below-z-grace-s must be non-negative.")
     if hls_config.center_kp < 0.0 or hls_config.center_vmax_mps <= 0.0 or hls_config.center_offset_max_m <= 0.0:
         raise ValueError("--center-kp must be non-negative; center speed/offset limits must be positive.")
+    if hls_config.offset_limit_grace_s <= 0.0:
+        raise ValueError("--offset-limit-grace-s must be positive.")
     if hls_config.hls_status_center_mismatch_tol_m < 0.0:
         raise ValueError("--hls-status-center-mismatch-tol-m must be non-negative.")
     if hls_config.single_contact_vmax_mps <= 0.0 or hls_config.single_contact_offset_max_m <= 0.0:
@@ -802,6 +906,11 @@ def main() -> None:
     auto_config, hls_config = parse_configs()
     rclpy.init()
     node = AutoHlsGraspPlace(auto_config, hls_config)
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
+    node.background_executor_active = True
+    spin_thread = threading.Thread(target=executor.spin, daemon=True)
+    spin_thread.start()
     exit_code = 0
     try:
         node.run_sequence()
@@ -819,6 +928,9 @@ def main() -> None:
             node.get_logger().error(f"Emergency cleanup failed after automatic sequence error: {cleanup_exc}")
         exit_code = 1
     finally:
+        node.background_executor_active = False
+        executor.shutdown()
+        spin_thread.join(timeout=1.0)
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

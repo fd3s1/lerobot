@@ -113,6 +113,24 @@ def status_prefix_from_topic(topic: str) -> str:
     return topic
 
 
+def realtime_qos() -> QoSProfile:
+    return QoSProfile(
+        reliability=ReliabilityPolicy.BEST_EFFORT,
+        durability=DurabilityPolicy.VOLATILE,
+        history=HistoryPolicy.KEEP_LAST,
+        depth=10,
+    )
+
+
+def latched_status_qos() -> QoSProfile:
+    return QoSProfile(
+        reliability=ReliabilityPolicy.RELIABLE,
+        durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        history=HistoryPolicy.KEEP_LAST,
+        depth=10,
+    )
+
+
 class HandheldHlsGraspTest(Node):
     def __init__(self, config: HandheldHlsConfig) -> None:
         super().__init__("handheld_hls_grasp_test")
@@ -135,19 +153,14 @@ class HandheldHlsGraspTest(Node):
         self.csv_file = None
         self.csv_writer = None
 
-        qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            durability=DurabilityPolicy.VOLATILE,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10,
-        )
-        self.create_subscription(RCIn, config.rc_topic, self._rc_cb, qos)
-        self.create_subscription(String, f"{self.status_prefix}/state", self._string_cb("state"), 10)
-        self.create_subscription(String, f"{self.status_prefix}/fault_reason", self._string_cb("fault_reason"), 10)
+        status_qos = latched_status_qos()
+        self.create_subscription(RCIn, config.rc_topic, self._rc_cb, realtime_qos())
+        self.create_subscription(String, f"{self.status_prefix}/state", self._string_cb("state"), status_qos)
+        self.create_subscription(String, f"{self.status_prefix}/fault_reason", self._string_cb("fault_reason"), status_qos)
         for name in FLOAT_STATUS_FIELDS:
-            self.create_subscription(Float64, f"{self.status_prefix}/{name}", self._float_cb(name), 10)
+            self.create_subscription(Float64, f"{self.status_prefix}/{name}", self._float_cb(name), status_qos)
         for name in BOOL_STATUS_FIELDS:
-            self.create_subscription(Bool, f"{self.status_prefix}/{name}", self._bool_cb(name), 10)
+            self.create_subscription(Bool, f"{self.status_prefix}/{name}", self._bool_cb(name), status_qos)
         self.command_pub = self.create_publisher(Float64, config.command_topic, 10)
 
         if config.csv_path:

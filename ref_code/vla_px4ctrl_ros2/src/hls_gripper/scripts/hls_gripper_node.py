@@ -556,6 +556,16 @@ class HlsGripperNode(Node):
         self.contact_current_threshold = float(self.declare_parameter("contact_current_threshold", -1.0).value)
         self.contact_exit_threshold = float(self.declare_parameter("contact_exit_threshold", -1.0).value)
         self.contact_strong_threshold = float(self.declare_parameter("contact_strong_threshold", -1.0).value)
+        self.search_contact_current_threshold = float(
+            self.declare_parameter("search_contact_current_threshold", -1.0).value
+        )
+        self.search_contact_strong_threshold = float(
+            self.declare_parameter("search_contact_strong_threshold", -1.0).value
+        )
+        self.search_contact_confirm_cycles = int(self.declare_parameter("search_contact_confirm_cycles", 0).value)
+        self.search_contact_min_close_ratio = float(
+            self.declare_parameter("search_contact_min_close_ratio", 0.0).value
+        )
         self.left_contact_metric_sign_param = int(self.declare_parameter("left_contact_metric_sign", 0).value)
         self.right_contact_metric_sign_param = int(self.declare_parameter("right_contact_metric_sign", 0).value)
         self.contact_confirm_cycles = int(self.declare_parameter("contact_confirm_cycles", 3).value)
@@ -620,6 +630,7 @@ class HlsGripperNode(Node):
             else max(self.center_push_current + 40, min(self.motion_profile.torque_limit, self.center_push_current + 100))
         )
         self.contact_detection = self._build_contact_detection()
+        self.search_contact_detection = self._build_search_contact_detection()
         self.current_inward_sign = self._build_current_inward_sign()
         self.center_gain_m_per_ratio = self._compute_center_gain()
 
@@ -665,15 +676,21 @@ class HlsGripperNode(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=10,
         )
+        status_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
         self.create_subscription(Imu, self.attitude_topic, self._imu_cb, imu_qos)
         self.feedback_pub = self.create_publisher(GripperFeedback, self.feedback_topic, 10)
-        self.state_pub = self.create_publisher(String, f"{self.status_prefix}/state", 10)
-        self.fault_reason_pub = self.create_publisher(String, f"{self.status_prefix}/fault_reason", 10)
-        self.motion_profile_pub = self.create_publisher(String, f"{self.status_prefix}/motion_profile", 10)
-        self.status_snapshot_pub = self.create_publisher(String, f"{self.status_prefix}/status_snapshot", 10)
+        self.state_pub = self.create_publisher(String, f"{self.status_prefix}/state", status_qos)
+        self.fault_reason_pub = self.create_publisher(String, f"{self.status_prefix}/fault_reason", status_qos)
+        self.motion_profile_pub = self.create_publisher(String, f"{self.status_prefix}/motion_profile", status_qos)
+        self.status_snapshot_pub = self.create_publisher(String, f"{self.status_prefix}/status_snapshot", status_qos)
         self.status_snapshot_seq = 0
         self.float_status_pubs = {
-            name: self.create_publisher(Float64, f"{self.status_prefix}/{name}", 10)
+            name: self.create_publisher(Float64, f"{self.status_prefix}/{name}", status_qos)
             for name in (
                 "left_close_ratio",
                 "right_close_ratio",
@@ -703,7 +720,7 @@ class HlsGripperNode(Node):
             )
         }
         self.bool_status_pubs = {
-            name: self.create_publisher(Bool, f"{self.status_prefix}/{name}", 10)
+            name: self.create_publisher(Bool, f"{self.status_prefix}/{name}", status_qos)
             for name in (
                 "left_contact",
                 "right_contact",
@@ -735,6 +752,12 @@ class HlsGripperNode(Node):
             f"{self.grip_chase_position_torque_limit}) "
             f"contact_enter=({self.contact_detection[SIDE_LEFT]['enter_threshold']:.1f},"
             f"{self.contact_detection[SIDE_RIGHT]['enter_threshold']:.1f}) "
+            f"search_contact_enter=({self.search_contact_detection[SIDE_LEFT]['enter_threshold']:.1f},"
+            f"{self.search_contact_detection[SIDE_RIGHT]['enter_threshold']:.1f}) "
+            f"search_contact_strong=({self.search_contact_detection[SIDE_LEFT]['strong_threshold']:.1f},"
+            f"{self.search_contact_detection[SIDE_RIGHT]['strong_threshold']:.1f}) "
+            f"search_contact_confirm={self.search_contact_detection[SIDE_LEFT]['confirm_cycles']} "
+            f"search_min_close_ratio={self.search_contact_min_close_ratio:.2f} "
             f"status_prefix={self.status_prefix}"
         )
         self._enter_state(STATE_OPEN)
@@ -861,6 +884,37 @@ class HlsGripperNode(Node):
                 "enter_threshold": enter,
                 "exit_threshold": exit_threshold,
                 "strong_threshold": strong,
+            }
+        return result
+
+    def _build_search_contact_detection(self) -> dict[str, dict[str, float]]:
+        result: dict[str, dict[str, float]] = {}
+        confirm_cycles = (
+            self.search_contact_confirm_cycles
+            if self.search_contact_confirm_cycles > 0
+            else self.contact_confirm_cycles
+        )
+        confirm_cycles = max(1, int(confirm_cycles))
+        min_close_ratio = clamp(self.search_contact_min_close_ratio, 0.0, 1.0)
+        self.search_contact_min_close_ratio = min_close_ratio
+        for side in (SIDE_LEFT, SIDE_RIGHT):
+            base = self.contact_detection[side]
+            enter = (
+                self.search_contact_current_threshold
+                if self.search_contact_current_threshold > 0.0
+                else base["enter_threshold"]
+            )
+            strong = (
+                self.search_contact_strong_threshold
+                if self.search_contact_strong_threshold > 0.0
+                else base["strong_threshold"]
+            )
+            enter = max(float(enter), 1.0)
+            strong = max(float(strong), enter)
+            result[side] = {
+                "enter_threshold": enter,
+                "strong_threshold": strong,
+                "confirm_cycles": float(confirm_cycles),
             }
         return result
 
@@ -1117,7 +1171,7 @@ class HlsGripperNode(Node):
             self._write_open_if_due(now)
             return
         if self.state == STATE_SEARCH_OBJECT:
-            if now - self.state_started_s > self.search_timeout_s:
+            if self.search_timeout_s > 0.0 and now - self.state_started_s > self.search_timeout_s:
                 self._set_fault("search timeout")
                 return
             self._update_contacts()
@@ -1432,9 +1486,21 @@ class HlsGripperNode(Node):
             else:
                 cycles = max(cycles, confirm_cycles)
             return cycles, cycles > 0
-        if metric >= thresholds["strong_threshold"]:
+
+        if self.state == STATE_SEARCH_OBJECT:
+            search_thresholds = self.search_contact_detection[side]
+            confirm_cycles = int(max(1.0, search_thresholds["confirm_cycles"]))
+            if self.feedback[side].close_ratio < self.search_contact_min_close_ratio:
+                return 0, False
+            enter_threshold = search_thresholds["enter_threshold"]
+            strong_threshold = search_thresholds["strong_threshold"]
+        else:
+            enter_threshold = thresholds["enter_threshold"]
+            strong_threshold = thresholds["strong_threshold"]
+
+        if metric >= strong_threshold:
             cycles = confirm_cycles
-        elif metric >= thresholds["enter_threshold"]:
+        elif metric >= enter_threshold:
             cycles += 1
         else:
             cycles = 0

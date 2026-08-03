@@ -94,8 +94,12 @@ flowchart TD
   CALC --> TIME["Timing block<br/>dt = now - last_control_time_<br/>reset if dt invalid or too large"]
   TIME --> UDE["UDE outer loop<br/>position and velocity feedback"]
   UDE --> LIMIT_ACC["computeLimitedTotalAcc()<br/>limit thrust direction tilt"]
-  LIMIT_ACC --> FLAT["computeFlatInput()<br/>thrust_acc + yaw -> desired_attitude + feedforward_bodyrates"]
-  FLAT --> ATT_FB["computeFeedBackControlBodyrates()<br/>desired_attitude vs odom.q"]
+  LIMIT_ACC --> ATT["computeDesiredAttitude()<br/>feedback/UDE thrust_acc + yaw -> desired_attitude"]
+  DES --> FLAT["computeFlatInput()<br/>gravity + des.a/j/snap + yaw derivatives<br/>-> pure trajectory feedforward"]
+  FLAT --> ROTATE["rotate trajectory feedforward<br/>into desired_attitude body frame"]
+  ATT --> ROTATE
+  ATT --> ATT_FB["computeFeedBackControlBodyrates()<br/>desired_attitude vs odom.q"]
+  ROTATE --> BODYRATE_SUM
   ATT_FB --> BODYRATE_SUM["bodyrates = feedforward + feedback<br/>axis clamp"]
   LIMIT_ACC --> THRUST["computeDesiredCollectiveThrustSignal()<br/>current attitude projection"]
 
@@ -112,11 +116,13 @@ This replaces the old `computePIDErrorAcc()` path.
 flowchart TD
   P_DES["des.p"] --> E["e = des.p - odom.p"]
   P_ODOM["odom.p"] --> E
-  V_ODOM["odom.v"] --> EDOT["e_dot = -odom.v"]
+  V_DES["des.v"] --> EDOT["e_dot = des.v - filtered_velocity"]
+  V_ODOM["filtered odom.v"] --> EDOT
+  A_DES["u_d = des.a"] --> U0
 
   KP["Kp = diag(param.ude.Kp_diag)"] --> U0
   KD["Kd = diag(param.ude.Kd_diag)"] --> U0
-  E --> U0["u0 = Kp*e + Kd*e_dot"]
+  E --> U0["u0 = u_d + Kp*e + Kd*e_dot"]
   EDOT --> U0
 
   DT["dt"] --> INT["integral_u0_ += u0 * dt<br/>only when dt > 0 and u0 is finite"]
@@ -144,7 +150,8 @@ old:
   total_acc = pid_error_acc + des.a + gravity
 
 current:
-  u0 = Kp*e + Kd*e_dot
+  u_d = des.a
+  u0 = u_d + Kp*e + Kd*e_dot
   f_hat = T^-1 * (odom.v - integral_u0)
   u_acc = u0 - f_hat
   thrust_acc = u_acc + gravity
@@ -167,54 +174,66 @@ flowchart TD
 `computeLimitedTotalAcc()` limits the direction of the requested thrust vector.
 It does not use the old roll/pitch small-angle equations.
 
-## Flat Input To Desired Attitude
+## Desired Attitude And Trajectory Feedforward
 
-`computeFlatInput()` is where `desired_attitude` is computed.
+The attitude reference and trajectory feedforward are intentionally computed
+from different acceleration vectors.
+
+`computeDesiredAttitude()` uses the feedback/UDE-corrected vector:
+
+```text
+commanded_thrust_acc = gravity + des.a + Kp*e + Kd*e_dot - f_hat
+desired_attitude = attitude(commanded_thrust_acc, des.yaw)
+```
+
+`computeFlatInput()` uses only the analytic trajectory:
+
+```text
+nominal_thrust_acc = gravity + des.a
+d(nominal_thrust_acc)/dt = des.j
+d2(nominal_thrust_acc)/dt2 = des.snap
+```
 
 ```mermaid
 flowchart TD
-  A["thrust_acc"] --> NZB["normalizeWithGrad(thrust_acc, jerk)"]
+  CMD_A["feedback/UDE commanded_thrust_acc"] --> CMD_ATT["computeDesiredAttitude()<br/>desired_attitude"]
+
+  A["nominal_thrust_acc = gravity + des.a"] --> NZB["normalizeWithSecondGrad(nominal_thrust_acc, jerk, snap)"]
   J["des.j"] --> NZB
-  NZB --> ZB["zb = desired body z axis<br/>zbd = derivative of zb"]
+  S["des.snap"] --> NZB
+  NZB --> ZB["zb, zbd, zbdd for nominal trajectory"]
 
   YAW["des.yaw"] --> XC["xc = [cos(yaw), sin(yaw), 0]"]
   YAWR["des.yaw_rate"] --> XCD["xcd = d(xc)/dt"]
+  YAWA["des.yaw_acceleration"] --> XCDD["xcdd = d2(xc)/dt2"]
 
   ZB --> YC["yc = zb cross xc"]
   XC --> YC
-  ZB --> YCD["ycd = zbd cross xc + zb cross xcd"]
-  XC --> YCD
-  XCD --> YCD
+  ZB --> TRAJ_ROT["trajectory_attitude and its first/second derivatives"]
+  XC --> TRAJ_ROT
+  XCD --> TRAJ_ROT
+  XCDD --> TRAJ_ROT
+  TRAJ_ROT --> FF["trajectory bodyrates_ff and bodyrates_dot_ff"]
 
-  YC --> NYB["normalizeWithGrad(yc, ycd)"]
-  YCD --> NYB
-  NYB --> YB["yb = desired body y axis<br/>ybd = derivative of yb"]
+  CMD_ATT --> FRAME["rotate feedforward from trajectory body frame<br/>to desired_attitude body frame"]
+  FF --> FRAME
 
-  YB --> XB["xb = yb cross zb"]
-  ZB --> XB
-  YB --> XBD["xbd = ybd cross zb + yb cross zbd"]
-  ZB --> XBD
-
-  XB --> ROT["rot = [xb yb zb]"]
-  YB --> ROT
-  ZB --> ROT
-  ROT --> ATT["desired_attitude = Quaternion(rot)"]
-
-  ZB --> FF["feedforward_bodyrates from xb/yb/zb derivatives"]
-  YB --> FF
-  XB --> FF
-
-  NZB -- "fail" --> FALLBACK["desired_attitude = odom.q<br/>feedforward_bodyrates = 0"]
-  NYB -- "fail" --> FALLBACK
+  NZB -- "fail" --> FF_ZERO["feedforward = 0<br/>desired_attitude remains valid"]
 ```
 
 Important notes:
 
-- `desired_attitude` is initialized to `odom.q` before calling
-  `computeFlatInput()`.
-- On success, `computeFlatInput()` overwrites it with `Quaternion(rot)`.
-- On failure, the controller keeps `desired_attitude = odom.q` and sets
-  feedforward bodyrates to zero.
+- Position/velocity error and UDE affect `desired_attitude`, but are not
+  differentiated to create trajectory feedforward.
+- Invalid jerk/snap disables only the feedforward. It does not replace a valid
+  feedback/UDE attitude reference.
+- If the nominal trajectory acceleration is clipped by the controller tilt or
+  minimum-thrust limit, jerk/snap are no longer its derivatives, so both
+  trajectory feedforward terms are set to zero.
+- TUNNEL requires the rate and angular-acceleration vectors to be expressed in
+  the body frame associated with its `q_d`. The pure trajectory vectors are
+  therefore rotated from the nominal trajectory body frame into the corrected
+  desired-attitude body frame before packing.
 
 ## Bodyrate Feedback
 

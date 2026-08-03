@@ -12,6 +12,7 @@
 #include <mavros_msgs/msg/rc_in.hpp>
 #include <mavros_msgs/msg/state.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <quadrotor_msgs/msg/position_command.hpp>
 #include <quadrotor_msgs/msg/takeoff_land.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/battery_state.hpp>
@@ -51,6 +52,7 @@ public:
 
   void check_validity() const;
   bool check_centered() const;
+  bool check_takeoff_sticks(double throttle_max_pwm) const;
   void feed(const mavros_msgs::msg::RCIn::SharedPtr pMsg, const rclcpp::Time &now);
   bool is_received(const rclcpp::Time &now_time, double timeout_s) const;
   double channel_pwm(std::size_t one_based_channel, double default_value = 1500.0) const;
@@ -153,16 +155,22 @@ public:
   Eigen::Vector3d p{Eigen::Vector3d::Zero()};
   Eigen::Vector3d v{Eigen::Vector3d::Zero()};
   Eigen::Vector3d a{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d j{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d snap{Eigen::Vector3d::Zero()};
   Eigen::Vector3d last_p{Eigen::Vector3d::Zero()};
   Eigen::Vector3d last_v{Eigen::Vector3d::Zero()};
   Eigen::Quaterniond q{Eigen::Quaterniond::Identity()};
   double yaw{0.0};
+  double yaw_rate{0.0};
+  double yaw_acceleration{0.0};
 
   geometry_msgs::msg::PoseStamped msg;
+  quadrotor_msgs::msg::PositionCommand traj_msg;
   rclcpp::Time rcv_stamp{0, 0, RCL_ROS_TIME};
   bool received{false};
 
   void feed(const geometry_msgs::msg::PoseStamped::SharedPtr pMsg, const rclcpp::Time &now);
+  void feed(const quadrotor_msgs::msg::PositionCommand::SharedPtr pMsg, const rclcpp::Time &now);
   bool is_received(const rclcpp::Time &now_time, double timeout_s) const;
 };
 
